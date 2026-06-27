@@ -1,0 +1,46 @@
+name: frontend
+description: "2026 한이음 - AI 손글씨 교정 플랫폼 (Flutter 프론트엔드)"
+publish_to: "none"
+version: 0.1.0
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # 상태관리
+  flutter_riverpod: ^2.5.1
+
+  # 라우팅
+  go_router: ^14.2.0
+
+  # 네트워킹
+  http: ^1.2.1
+
+  # 카메라 (이미지 모드)
+  camera: ^0.10.5+9
+
+  # 고유 ID 생성 (stroke_id, session_id 등)
+  uuid: ^4.4.0
+
+  # 아이콘
+  cupertino_icons: ^1.0.6
+
+  # ---- Firebase / 소셜 로그인 (실제 연동 시 주석 해제) ----
+  # firebase_core: ^3.0.0
+  # firebase_auth: ^5.0.0
+  # google_sign_in: ^6.2.0
+  # kakao_flutter_sdk_user: ^1.9.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+
+  # assets:
+  #   - assets/images/
