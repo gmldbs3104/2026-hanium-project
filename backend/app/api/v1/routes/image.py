@@ -47,7 +47,7 @@ async def preprocess(file: UploadFile = File(...)):
 
     image_session_id = str(uuid4())
     # numpy 배열은 tolist()로 직렬화해서 캐시 저장
-    set_session(image_session_id, {
+    await set_session(image_session_id, {
         "binary_image": binary_image.tolist(),
         "width": width,
         "height": height,
@@ -66,7 +66,7 @@ async def detect(image_session_id: str):
     SFR-004I: 문자 영역 Bounding Box 탐지.
     현재는 OpenCV contour 기반 placeholder — 추후 CRAFT 모델로 교체 예정.
     """
-    session_data = get_session(image_session_id)
+    session_data = await get_session(image_session_id)
     if session_data is None:
         raise HTTPException(status_code=404, detail="유효하지 않거나 만료된 session_id 입니다.")
 
@@ -75,7 +75,7 @@ async def detect(image_session_id: str):
     detected = detect_char_bboxes(binary_image)
 
     session_data["detected_chars"] = detected
-    set_session(image_session_id, session_data)
+    await set_session(image_session_id, session_data)
 
     return ImageDetectResponse(
         image_session_id=image_session_id,
@@ -96,7 +96,7 @@ async def analyze(
     """
     SFR-005I: 크기 균일성 / 기울기 / 줄 정렬 분석 후 DB 저장.
     """
-    session_data = get_session(image_session_id)
+    session_data = await get_session(image_session_id)
     if session_data is None:
         raise HTTPException(status_code=404, detail="유효하지 않거나 만료된 session_id 입니다.")
 
@@ -143,7 +143,7 @@ async def analyze(
         "overall_score": overall_score,
         "char_analyses": [c.model_dump() for c in char_analyses],
     }
-    set_session(image_session_id, session_data)
+    await set_session(image_session_id, session_data)
 
     return ImageAnalysisResponse(
         image_session_id=image_session_id,
@@ -161,7 +161,7 @@ async def feedback(image_session_id: str):
     """
     SFR-007 (이미지 모드): 분석 결과 기반 한국어 피드백 생성.
     """
-    session_data = get_session(image_session_id)
+    session_data = await get_session(image_session_id)
     if session_data is None:
         raise HTTPException(status_code=404, detail="유효하지 않거나 만료된 session_id 입니다.")
 

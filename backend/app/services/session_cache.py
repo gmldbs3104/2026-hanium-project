@@ -1,26 +1,37 @@
-import time
+import json
+import redis.asyncio as aioredis
 from typing import Any, Optional
+from app.core.config import settings
 
-# 임시 인메모리 캐시: {key: (value, expire_at)}
-_cache: dict[str, tuple[Any, float]] = {}
+TTL_SECONDS = 600  # 10분 (REQ-003C)
 
-TTL_SECONDS = 600  # 10분 (REQ-003C 관련 명시 사항)
-
-
-def set_session(key: str, value: Any, ttl: int = TTL_SECONDS) -> None:
-    _cache[key] = (value, time.time() + ttl)
+_redis: Optional[aioredis.Redis] = None
 
 
-def get_session(key: str) -> Optional[Any]:
-    item = _cache.get(key)
-    if item is None:
+def get_redis() -> aioredis.Redis:
+    global _redis
+    if _redis is None:
+        _redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+    return _redis
+
+
+async def close_redis() -> None:
+    global _redis
+    if _redis is not None:
+        await _redis.aclose()
+        _redis = None
+
+
+async def set_session(key: str, value: Any, ttl: int = TTL_SECONDS) -> None:
+    await get_redis().set(key, json.dumps(value, default=str), ex=ttl)
+
+
+async def get_session(key: str) -> Optional[Any]:
+    data = await get_redis().get(key)
+    if data is None:
         return None
-    value, expire_at = item
-    if time.time() > expire_at:
-        _cache.pop(key, None)
-        return None
-    return value
+    return json.loads(data)
 
 
-def delete_session(key: str) -> None:
-    _cache.pop(key, None)
+async def delete_session(key: str) -> None:
+    await get_redis().delete(key)

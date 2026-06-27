@@ -34,7 +34,7 @@ async def analyze_canvas(payload: CanvasAnalyzeRequest):
     """
     canvas_session_id = str(uuid4())
 
-    set_session(canvas_session_id, {
+    await set_session(canvas_session_id, {
         "strokes": [stroke.model_dump() for stroke in payload.strokes],
         "metadata": payload.metadata.model_dump(),
     })
@@ -49,7 +49,7 @@ async def group_canvas_strokes(canvas_session_id: str):
     """
     SFR-004C: 획 그룹핑 및 문자 단위 분할
     """
-    session_data = get_session(canvas_session_id)
+    session_data = await get_session(canvas_session_id)
     if session_data is None:
         raise HTTPException(status_code=404, detail="유효하지 않거나 만료된 session_id 입니다.")
 
@@ -59,7 +59,7 @@ async def group_canvas_strokes(canvas_session_id: str):
 
     # SFR-005C에서 사용할 수 있도록 같은 세션에 결과 갱신 저장
     session_data["char_groups"] = char_groups
-    set_session(canvas_session_id, session_data)
+    await set_session(canvas_session_id, session_data)
 
     low_confidence_count = sum(1 for g in char_groups if g["low_confidence"])
 
@@ -78,7 +78,7 @@ async def analyze_canvas_detail(
     """
     SFR-005C: 획순 / 자간 / 크기 분석
     """
-    session_data = get_session(canvas_session_id)
+    session_data = await get_session(canvas_session_id)
     if session_data is None:
         raise HTTPException(status_code=404, detail="유효하지 않거나 만료된 session_id 입니다.")
 
@@ -126,7 +126,7 @@ async def analyze_canvas_detail(
     
     # SFR-007에서 재사용할 수 있도록 캐시에도 저장
     session_data["analysis_results"] = [r.model_dump() for r in results]
-    set_session(canvas_session_id, session_data)
+    await set_session(canvas_session_id, session_data)
 
     return CanvasAnalysisResponse(canvas_session_id=canvas_session_id, results=results)
 
@@ -135,7 +135,7 @@ async def get_canvas_feedback(canvas_session_id: str):
     """
     SFR-007: 교정 피드백 생성 및 UI 표시 (캔버스 모드)
     """
-    session_data = get_session(canvas_session_id)
+    session_data = await get_session(canvas_session_id)
     if session_data is None:
         raise HTTPException(status_code=404, detail="유효하지 않거나 만료된 session_id 입니다.")
 
