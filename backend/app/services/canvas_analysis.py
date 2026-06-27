@@ -2,6 +2,7 @@ from typing import List, Dict, Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.models.stroke_standard import StrokeStandard
+from app.services.ai_adapters import lstm_analyze_stroke_order
 
 DEFAULT_STANDARD = {"standard_height": 100, "standard_width": 100, "standard_spacing": 20}
 
@@ -25,21 +26,11 @@ async def get_standard(db: AsyncSession, char: Optional[str]) -> Dict[str, Any]:
 
 
 def analyze_stroke_order(char_group: Dict[str, Any], standard: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    REQ-005C-3: 획순 분석 (LSTM 모델 도입 전 임시 로직)
-    TODO: 실제로는 방향 벡터 시퀀스를 LSTM에 입력해서 비교해야 함.
-    지금은 stroke 개수만 비교하는 단순 placeholder.
-    """
-    expected_sequence = standard.get("expected_sequence", [])
-    actual_sequence = [f"stroke_{i}" for i in range(char_group["stroke_count"])]
-
-    error_count = abs(len(expected_sequence) - len(actual_sequence)) if expected_sequence else 0
-
-    return {
-        "expected_sequence": expected_sequence,
-        "actual_sequence": actual_sequence,
-        "error_count": error_count,
-    }
+    """REQ-005C-3: 획순 분석 — ai_adapters.lstm_analyze_stroke_order 를 통해 실행"""
+    return lstm_analyze_stroke_order(
+        strokes=char_group.get("strokes", []),
+        expected_sequence=standard.get("expected_sequence", []),
+    )
 
 
 def analyze_spacing(prev_box: Optional[Dict[str, float]], curr_box: Dict[str, float], standard_spacing: float) -> float:
