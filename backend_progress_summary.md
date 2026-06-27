@@ -25,7 +25,7 @@
   ```bash
   docker run --name hanium-postgres -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=password -e POSTGRES_DB=hanium_db -p 5432:5432 -d postgres:16
   ```
-- [x] **Async 방식으로 전체 아키�처 결정** (sync → async 전환 완료)
+- [x] **Async 방식으로 전체 아키텍처 결정** (sync → async 전환 완료)
   - `DATABASE_URL=postgresql+asyncpg://...`
   - `db/session.py`: `create_async_engine`, `AsyncSession`, `async_sessionmaker`
   - 모든 라우트 함수 `async def`, `db.query()` → `await db.execute(select(...))`
@@ -36,7 +36,7 @@
 |---|---|
 | `users` | SFR-001, Firebase 사용자 정보 |
 | `canvas_analysis_results` | SFR-005C 캔버스 분석 결과 |
-| `image_analysis_results` | SFR-005I 이미지 분석 결과 (테이블만 존재, 로직 미구현) |
+| `image_analysis_results` | SFR-005I 이미지 분석 결과 |
 | `stroke_standards` | SFR-005C 표준 획순 DB (테스트용 1글자만 시드, 11,172자 미완성) |
 
 ### 2-3. SFR-001 — 사용자 인증
@@ -51,21 +51,47 @@
 
 ### 2-5. SFR-004C — 획 그룹핑 및 문자 단위 분할
 - [x] `POST /api/v1/canvas/{session_id}/group`
-- [x] **규칙 기반 1차 그룹핑만 구현** (거리·시간 임계값) — *LSTM 2차 분류는 미구현 (placeholder)*
+- [x] **규칙 기반 1차 그룹핑 구현** (거리·시간 임계값)
+- [x] `ai_adapters.lstm_refine_grouping` 어댑터 연결 완료 — *LSTM 2차 보정은 AI팀 구현 대기*
 - [x] 신뢰도 점수 산출 및 저신뢰 플래그 마킹
 
 ### 2-6. SFR-005C — 획순/자간/크기 분석
 - [x] `POST /api/v1/canvas/{session_id}/analyze-detail` (인증 필요)
-- [x] 획순/자간/크기 분석 로직 — **모두 임시 placeholder 로직** (실제 LSTM 모델 없음, stroke 개수 비교 등 단순 휴리스틱)
+- [x] `ai_adapters.lstm_analyze_stroke_order` 어댑터 연결 완료 — *실제 LSTM 분석은 AI팀 구현 대기*
+- [x] 자간/크기 분석 로직 구현
 - [x] 종합 점수 산출 후 `canvas_analysis_results` 테이블에 저장 완료
 
-### 2-7. SFR-007 — 교정 피드백 생성 (캔버스 모드만)
-- [x] `GET /api/v1/canvas/{session_id}/feedback`
-- [x] 한국어 피드백 메시지 + severity(good/warning/error) + 성취 메시지 생성
-- [x] *i18n 구조는 미적용 (지금은 한국어 하드코딩, 추후 다국어 확장 시 구조 분리 필요)*
+### 2-7. SFR-003I — 이미지 입력 및 OpenCV 전처리
+- [x] `POST /api/v1/image/preprocess` — 이미지 업로드 → 그레이스케일 이진화 → `image_session_id` 발급
+- [x] Grayscale → GaussianBlur → Otsu 이진화 (opencv-python)
 
-### 2-8. 테스트 도구
-- [x] `test_canvas_pipeline.py` — Firebase 계정 생성 → 로그인 → 캔버스 입력 → 그룹핑 → 분석 → 피드백까지 6단계 자동 테스트 스크립트 작성 완료, 정상 동작 확인
+### 2-8. SFR-004I — 문자 영역 탐지
+- [x] `POST /api/v1/image/{session_id}/detect`
+- [x] `ai_adapters.craft_detect_chars` 어댑터 연결 완료 — *CRAFT 모델은 AI팀 구현 대기*
+- [x] 현재 OpenCV contour 기반 bbox 탐지로 동작 중 (placeholder)
+
+### 2-9. SFR-005I — 크기 균일성 / 기울기 / 줄 정렬 분석
+- [x] `POST /api/v1/image/{session_id}/analyze` (인증 필요)
+- [x] 크기 균일성 (CV 기반), 기울기 일관성 (std 기반), 줄 정렬 (y 분산 기반) 분석 구현
+- [x] `image_analysis_results` 테이블에 저장 완료
+
+### 2-10. SFR-007 — 교정 피드백 생성 (캔버스 + 이미지 모드)
+- [x] `GET /api/v1/canvas/{session_id}/feedback`
+- [x] `GET /api/v1/image/{session_id}/feedback`
+- [x] 한국어 피드백 메시지 + severity(good/warning/error) + 성취 메시지 생성
+- [x] *i18n 구조는 미적용 (지금은 한국어 하드코딩)*
+
+### 2-11. AI 모델 협업 인터페이스
+- [x] `services/ai_adapters.py` — 3개 어댑터 함수 시그니처 확정
+  - `lstm_refine_grouping` — 획 그룹핑 2차 보정
+  - `lstm_analyze_stroke_order` — 획순 분석
+  - `craft_detect_chars` — 문자 영역 탐지
+- [x] `AI_MODEL_INTERFACE.md` — AI팀 공유용 입출력 스펙 문서 작성 완료
+
+### 2-12. 테스트 도구
+- [x] `test_canvas_pipeline.py` — 캔버스 6단계 자동 테스트 (end-to-end 동작 확인)
+- [x] `test_image_pipeline.py` — 이미지 4단계 자동 테스트 (테스트 이미지 자동 생성 포함)
+- [x] 민감 정보 분리: `.env.test` (gitignore), `.env.test.example` (커밋)
 
 ---
 
@@ -81,54 +107,49 @@
 | `ModuleNotFoundError: No module named 'greenlet'` | SQLAlchemy async 엔진의 내부 의존성이 `requirements.txt`에서 누락 | `pip install greenlet` 추가 |
 | `FileNotFoundError: firebase-credentials.json` | Firebase 서비스 계정 키 파일을 다운로드만 하고 정확한 경로/파일명으로 옮기지 않음 | 파일을 `backend/` 루트로 이동, `.env`의 경로와 파일명 일치시킴 |
 | `AttributeError: module 'handwriting' has no attribute 'router'` | 라우트 파일을 빈 채로 두고 `main.py`에서 import만 함 | 각 라우트 파일에 최소 `router = APIRouter()` 정의 |
-| `500 Internal Server Error` (인증 후) | `INVALID_LOGIN_CREDENTIALS` — 가입 정보 불일치 / idToken과 refreshToken 혼동 (`AMf-...`로 시작하는 건 refreshToken, `eyJ...`가 idToken) | 정확한 idToken 필드 값 사용, 필요 시 새 테스트 계정 생성 |
-| `404 Not Found` (analyze-detail) | 코드가 실제 파일에 반영 안 됨 (붙여넣기 누락) | 코드 추가 후 정상화 |
-| `사용자를 찾을 수 없습니다` | 새 Firebase 계정으로 `/auth/login`을 먼저 호출하지 않고 바로 인증이 필요한 엔드포인트 호출 | `/auth/login` 선행 호출로 DB에 사용자 레코드 생성 |
-| `유효하지 않거나 만료된 session_id` | 인메모리 캐시 TTL(10분) 초과 | 전체 플로우를 빠르게 연속 실행, 또는 테스트 자동화 스크립트로 해결 |
+| `500 Internal Server Error` (인증 후) | `INVALID_LOGIN_CREDENTIALS` — idToken과 refreshToken 혼동 | 정확한 idToken 필드 값 사용 |
+| `ModuleNotFoundError: No module named 'app.services.feedback_generator'` | `feedback_generator.py` 파일 미생성 상태에서 서버 기동 시도 | 파일 생성 후 정상화 |
+| `.env.test` gitignore 누락 | `*.env` 패턴은 `.env`로 끝나는 파일만 매칭, `.env.test`는 미적용 | `.gitignore`에 `.env.test` 명시적 추가 |
 
-**공통 교훈**: Python 3.13처�럼 최신 버전 사용 시 패키지 버전 고정값이 prebuilt wheel을 지원하지 않는 경우가 잦음 → 버전 범위를 유연하게 두거나 최신 패치 버전 사용 권장.
+**공통 교훈**: Python 3.13처럼 최신 버전 사용 시 패키지 버전 고정값이 prebuilt wheel을 지원하지 않는 경우가 잦음 → 버전 범위를 유연하게 두거나 최신 패치 버전 사용 권장.
 
 ---
 
 ## 4. 아직 안 한 것 (TODO)
 
 ### 4-1. 캔버스 모드 — 남은 보강 작업
-- [ ] LSTM 기반 2차 그룹핑 (현재 규칙 기반만 적용됨, REQ-004C-1 미완성)
-- [ ] 실제 획순 분석 모델 (현재 stroke 개수 비교하는 placeholder)
+- [ ] LSTM 기반 2차 그룹핑 — AI팀 모델 완성 후 `ai_adapters.lstm_refine_grouping` 내부 교체
+- [ ] 실제 획순 분석 모델 — AI팀 모델 완성 후 `ai_adapters.lstm_analyze_stroke_order` 내부 교체
 - [ ] 표준 획순 DB 11,172자 전체 채우기 (현재 "가" 1글자만 시드)
-- [ ] 문자 인식(어떤 글자인지 식별하는 과정) — 지금은 `char=None`으로 항상 기본 표준값만 사용 중. 표준 DB와 매칭하려면 이 과정이 선행되어야 함
-- [ ] 가중치 설정 파일화 (REQ-005C-6 — 현재 하드코딩됨)
+- [ ] 문자 인식(어떤 글자인지 식별) — 지금은 `char=None`으로 항상 기본 표준값 사용
+- [ ] 가중치 설정 파일화 (REQ-005C-6 — 현재 하드코딩)
 - [ ] i18n 구조 적용 (REQ-007-5)
-- [ ] 색맹 보조 아이콘 등 UI 관련 메타데이터 (REQ-007-6, 프론트와 협의 필요)
 
-### 4-2. 이미지 모드 파이프라인 — 전체 미착수
-- [ ] SFR-003I: 카메라 이미지 입력 + OpenCV 전처리 (`/api/v1/image/preprocess`)
-- [ ] SFR-004I: CRAFT 기반 Bounding Box 탐지
-- [ ] SFR-005I: 크기 균일성 / 기울기 분석
+### 4-2. 이미지 모드 — 남은 보강 작업
+- [ ] CRAFT 모델 연동 — AI팀 모델 완성 후 `ai_adapters.craft_detect_chars` 내부 교체
 - [ ] `font_standards` 테이블 스키마 및 시드 데이터
-- [ ] 이미지 모드용 피드백 생성 로직 (SFR-007의 이미지 모드 분기)
+- [ ] CRAFT angle 값을 기울기 분석에 반영 (현재 aspect ratio 근사 사용 중)
 
 ### 4-3. SFR-008 — 학습 관리 대시보드
 - [ ] 전체 미착수 (우선순위 Medium)
 
 ### 4-4. SFR-009 — 저장 및 클라우드 동기화 보강
-- [x] PostgreSQL 저장은 이미 `analyze-detail` 단계에서 동작 중
+- [x] PostgreSQL 저장은 canvas/image analyze 단계에서 동작 중
 - [ ] Firebase Firestore 동기화 (`user_sessions` 컬렉션)
-- [ ] AWS S3 이미지 업로드 (이미지 모드 + 동의 시) — `.env`의 AWS 키 항목 현재 비어있음
+- [ ] AWS S3 이미지 업로드 — `.env`의 AWS 키 항목 현재 비어있음
 - [ ] 네트워크 장애 시 재시도 큐 메커니즘
 - [ ] 계정 삭제 시 30일 내 데이터 영구 삭제 정책 구현
 
 ### 4-5. 인프라/운영 관련
-- [ ] 인메모리 세션 캐시 → Redis로 교체 (다중 서버 환경 대응, TTL 만료 문제 해결)
-- [ ] `.gitignore`에 `.env`, `firebase-credentials.json` 포함 여부 재확인
-- [ ] 테스트 코드 (pytest) 작성 — 지금까지는 수동 curl / 스크립트 테스트만 진행
-- [ ] API 문서 정비 (Swagger 자동 생성 외 추가 설명 필요 시)
-- [ ] 이메일/비밀번호 로그인은 테스트 목적으로만 켜놓은 상태 — 실제 서비스에서는 Google/Kakao OAuth만 사용할 계획이므로 운영 전 비활성화 검토
+- [ ] 인메모리 세션 캐시 → Redis로 교체
+- [ ] 테스트 코드 (pytest) 작성 — 지금까지는 수동 스크립트 테스트만 진행
+- [ ] 이메일/비밀번호 로그인은 테스트 목적으로만 켜놓은 상태 — 운영 전 비활성화 검토
 
 ---
 
 ## 5. 다음 작업 우선순위 추천
 
-1. **이미지 모드 파이프라인 착수** (SFR-003I~005I) — 우선순위 🔴 High, 캔버스 모드와 동일한 구조로 작업 가능
-2. **AI 모델 트랙과의 협업 포인트 정리** — LSTM 그룹핑, 획순 분석, CRAFT 탐지는 현재 모두 placeholder 상태이므로, AI 모델 개발자와 인터페이스(입출력 스펙)를 먼저 확정해두는 것이 중요
-3. **Redis 도입** — 디버깅 중 세션 만료로 인한 반복적인 트러블슈팅이 있었으므로, 개발 편의성과 운영 안정성 모두를 위해 비교적 빠른 시점에 전환 권장
+1. **AI 모델 트랙 연동** — `AI_MODEL_INTERFACE.md`를 AI팀에 공유하고 LSTM/CRAFT 모델 완성 시점 확인. 완성되면 `ai_adapters.py` 내부만 교체하면 됨
+2. **표준 획순 DB 채우기** — 문자 인식 없이는 캔버스 분석 정확도가 낮음. 우선순위 높음
+3. **Redis 도입** — 인메모리 캐시 TTL 만료 이슈 반복 발생. 개발 편의성·운영 안정성 모두를 위해 전환 권장
+4. **SFR-008 대시보드** — 우선순위 Medium, 프론트와 API 스펙 협의 필요
