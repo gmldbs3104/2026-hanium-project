@@ -186,15 +186,18 @@ class CraftDetector:
             return []
 
         # Step 2: 각 span 내 실제 잉크 bounding box 계산
+        # MORPH_OPEN은 스팬 탐지 전용 — bbox는 원본 crop 기준으로 계산해
+        # 획 끝 얇은 부분(1-2px)이 MORPH_OPEN에 의해 제거되어 bbox가 짧아지는 문제 방지
         result = []
         for sx0, sx1 in spans:
-            seg = clean[:, sx0:sx1]
+            seg = crop[:, sx0:sx1]   # 원본 crop 사용
             if not np.any(seg > 0):
                 continue
 
-            # 잡음 CC 제거: connectivity=4(대각선 무시) + 최대 CC 면적 10% 미만 제거
+            # 잡음 CC 제거: 최대 CC 면적 10% 미만 제거
+            # 획과 연결된 끝 픽셀은 동일 CC → 유지 / 고립된 잡음 점 → 제거
             n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
-                seg, connectivity=4
+                seg, connectivity=8
             )
             if n_labels > 1:
                 max_area = int(stats[1:, cv2.CC_STAT_AREA].max())
@@ -211,10 +214,24 @@ class CraftDetector:
                 continue
             ys = np.where(ink_rows)[0]
             xs = np.where(ink_cols)[0]
+
+            # 스팬 경계(sx1) 바깥으로 획이 잘렸을 경우 우측 보정
+            # crop이 행 끝에서 끊기면 sx1 == crop.shape[1]가 되어
+            # crop 기반 검사가 스킵됨 → binary 원본에서 직접 확인
+            RIGHT_EXT = 25
+            abs_sx1 = rx0 + sx1
+            abs_right_end = min(abs_sx1 + RIGHT_EXT, binary.shape[1])
+            extend_w = 0
+            if abs_right_end > abs_sx1:
+                ext = binary[ry0:ry1, abs_sx1:abs_right_end]
+                if np.any(ext > 0):
+                    ext_cols = np.any(ext > 0, axis=0)
+                    extend_w = int(np.where(ext_cols)[0][-1]) + 1
+
             result.append({
                 "x": rx0 + sx0 + int(xs[0]),
                 "y": ry0 + int(ys[0]),
-                "w": int(xs[-1]) - int(xs[0]) + 1,
+                "w": int(xs[-1]) - int(xs[0]) + 1 + extend_w,
                 "h": int(ys[-1]) - int(ys[0]) + 1,
             })
 
