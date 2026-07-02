@@ -192,13 +192,13 @@ class CraftDetector:
             if not np.any(seg > 0):
                 continue
 
-            # 잡음 CC 제거: 최대 CC 면적의 5% 미만인 작은 점 제거
+            # 잡음 CC 제거: connectivity=4(대각선 무시) + 최대 CC 면적 10% 미만 제거
             n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
-                seg, connectivity=8
+                seg, connectivity=4
             )
             if n_labels > 1:
                 max_area = int(stats[1:, cv2.CC_STAT_AREA].max())
-                min_area = max(max_area * 0.05, 4)
+                min_area = max(int(max_area * 0.10), 6)
                 clean_seg = np.zeros_like(seg)
                 for lbl in range(1, n_labels):
                     if stats[lbl, cv2.CC_STAT_AREA] >= min_area:
