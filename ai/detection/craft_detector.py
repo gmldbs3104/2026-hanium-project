@@ -31,7 +31,7 @@ class CraftDetector:
             rectify=True,
             export_extra=False,
             text_threshold=0.4,
-            link_threshold=0.2,
+            link_threshold=0.5,
             low_text=0.3,
             cuda=cuda,
             long_size=long_size,
@@ -65,30 +65,34 @@ class CraftDetector:
         merged_rows = self._merge_overlapping_rows(row_boxes, img_w, img_h)
 
         # Step 3: 각 행 안에서 column projection으로 글자 분리
+        # CRAFT가 여러 줄을 하나의 단락 박스로 묶은 경우 수평 프로파일로 먼저 행 분리
         chars: List[Dict] = []
         for rx0, ry0, rx1, ry1 in merged_rows:
-            row_h = ry1 - ry0
-            pad = int(row_h * ROW_PAD_RATIO)
-            ry0p = max(0, ry0 - pad)
-            ry1p = min(img_h, ry1 + pad)
-            rx0p = max(0, rx0 - pad)
-            rx1p = min(img_w, rx1 + pad)
+            sub_rows = self._split_para_into_rows(binary_image, ry0, ry1, rx0, rx1)
 
-            char_boxes = self._segment_chars_in_row(
-                binary_image, ry0p, ry1p, rx0p, rx1p
-            )
-            for cb in char_boxes:
-                chars.append({
-                    "char_id": f"char_{len(chars)}",
-                    "bounding_box": {
-                        "x":      float(cb["x"]),
-                        "y":      float(cb["y"]),
-                        "width":  float(cb["w"]),
-                        "height": float(cb["h"]),
-                    },
-                    "angle":      0.0,
-                    "confidence": 1.0,
-                })
+            for sub_ry0, sub_ry1 in sub_rows:
+                row_h = sub_ry1 - sub_ry0
+                pad = int(row_h * ROW_PAD_RATIO)
+                ry0p = max(0, sub_ry0 - pad)
+                ry1p = min(img_h, sub_ry1 + pad)
+                rx0p = max(0, rx0 - pad)
+                rx1p = min(img_w, rx1 + pad)
+
+                char_boxes = self._segment_chars_in_row(
+                    binary_image, ry0p, ry1p, rx0p, rx1p
+                )
+                for cb in char_boxes:
+                    chars.append({
+                        "char_id": f"char_{len(chars)}",
+                        "bounding_box": {
+                            "x":      float(cb["x"]),
+                            "y":      float(cb["y"]),
+                            "width":  float(cb["w"]),
+                            "height": float(cb["h"]),
+                        },
+                        "angle":      0.0,
+                        "confidence": 1.0,
+                    })
 
         # Step 4: reading order 정렬 + char_id 재부여
         chars = sort_reading_order(chars)
@@ -152,6 +156,66 @@ class CraftDetector:
         rgb = cv2.cvtColor(cv2.bitwise_not(binary), cv2.COLOR_GRAY2RGB)
         pred = self._craft.detect_text(rgb)
         return pred.get("boxes", [])
+
+    def _split_para_into_rows(
+        self,
+        binary: np.ndarray,
+        ry0: int, ry1: int,
+        rx0: int, rx1: int,
+    ) -> List[tuple]:
+        """
+        CRAFT 박스(단락) 안에서 수평 잉크 프로파일로 텍스트 행을 분리.
+
+        절대 valley(잉크 2% 미만인 픽셀 행) 기준으로만 분리.
+        행 간 공백이 없는 빽빽한 손글씨나 단일 행 박스는 분리하지 않는다.
+        """
+        crop = binary[ry0:ry1, rx0:rx1]
+        if crop.size == 0:
+            return [(ry0, ry1)]
+
+        para_h = ry1 - ry0
+
+        # 수평 잉크 프로파일
+        row_proj = np.sum(crop.astype(np.float32), axis=1)
+        if row_proj.max() == 0:
+            return [(ry0, ry1)]
+
+        # 정규화 + 11px 스무싱
+        k = 11
+        row_proj_s = np.convolve(row_proj / row_proj.max(), np.ones(k) / k, mode='same')
+
+        # 절대 valley: 잉크가 2% 미만인 픽셀 행 (실제 행 간 공백)
+        in_text = row_proj_s > 0.02
+
+        spans: List[List[int]] = []
+        start = None
+        for i, v in enumerate(in_text):
+            if v and start is None:
+                start = i
+            elif not v and start is not None:
+                spans.append([start, i])
+                start = None
+        if start is not None:
+            spans.append([start, para_h])
+
+        if len(spans) <= 1:
+            return [(ry0, ry1)]
+
+        # 너무 좁은 gap 병합 (단락 높이의 3% 미만은 글자 내부로 처리)
+        min_gap = max(int(para_h * 0.03), 3)
+        merged: List[List[int]] = [spans[0][:]]
+        for s in spans[1:]:
+            if s[0] - merged[-1][1] <= min_gap:
+                merged[-1][1] = s[1]
+            else:
+                merged.append(s[:])
+
+        if len(merged) <= 1:
+            return [(ry0, ry1)]
+
+        # 최소 행 높이 20px
+        valid = [s for s in merged if (s[1] - s[0]) >= 20]
+        return [(ry0 + s[0], ry0 + s[1]) for s in valid] if len(valid) > 1 else [(ry0, ry1)]
 
     def _segment_chars_in_row(
         self,

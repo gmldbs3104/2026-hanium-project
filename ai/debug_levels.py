@@ -12,11 +12,12 @@ from detection.craft_detector import CraftDetector
 from detection.bbox_utils import sort_reading_order
 from analysis.text_quality_analyzer import TextQualityAnalyzer
 
-IMAGE_PATH = (
+_DEFAULT_IMAGE = (
     r"C:\Users\dmack\OneDrive\문서\카카오톡 받은 파일"
     r"\hanium_test\test.jpg"
 )
-OUT = "debug_output"
+IMAGE_PATH = sys.argv[1] if len(sys.argv) > 1 else _DEFAULT_IMAGE
+OUT = sys.argv[2] if len(sys.argv) > 2 else "debug_output"
 os.makedirs(OUT, exist_ok=True)
 
 PALETTE = [
@@ -96,7 +97,7 @@ def chars_to_words(chars):
 
 
 # ── 전처리 ────────────────────────────────────────────────────────────
-print("전처리 중...")
+print("Preprocessing...")
 preprocessor = ImagePreprocessor()
 result = preprocessor.preprocess_from_file(IMAGE_PATH)
 binary = result.binary_image
@@ -104,11 +105,11 @@ img_h, img_w = binary.shape[:2]
 base = cv2.cvtColor(cv2.bitwise_not(binary), cv2.COLOR_GRAY2BGR)
 
 status = "RETAKE" if result.retake_required else "PASS"
-print(f"전처리: {status}  quality={result.quality_score['total']}pt  "
-      f"skew={result.skew_angle:+.1f}deg  출력 크기={img_w}x{img_h}")
+print(f"Preprocess: {status}  quality={result.quality_score['total']}pt  "
+      f"skew={result.skew_angle:+.1f}deg  size={img_w}x{img_h}")
 
-# ── CRAFT 탐지 ────────────────────────────────────────────────────────
-print("CRAFT 탐지 중...")
+# ── CRAFT detection ───────────────────────────────────────────────────
+print("Running CRAFT detection...")
 detector = CraftDetector(cuda=False)
 row_boxes_raw = detector._craft_row_boxes(binary)
 merged_rows   = detector._merge_overlapping_rows(row_boxes_raw, img_w, img_h)
@@ -116,7 +117,7 @@ chars         = detector.detect(binary)
 detector.unload()
 
 words = chars_to_words(chars)
-print(f"행: {len(merged_rows)}개  |  단어: {len(words)}개  |  글자: {len(chars)}개")
+print(f"Rows: {len(merged_rows)}  |  Words: {len(words)}  |  Chars: {len(chars)}")
 
 # ════════════════════════════════════════════════════════════════════
 # 1. 행(row) 시각화
@@ -125,9 +126,9 @@ vis_row = base.copy()
 for i, (rx0, ry0, rx1, ry1) in enumerate(merged_rows):
     color = PALETTE[i % len(PALETTE)]
     draw_box(vis_row, rx0, ry0, rx1 - rx0, ry1 - ry0, color,
-             thickness=4, label=f"행 {i+1}", font_scale=0.9)
+             thickness=4, label=f"Row {i+1}", font_scale=0.9)
 cv2.imwrite(f"{OUT}/level1_rows.jpg", vis_row)
-print(f"행 시각화    → debug_output/level1_rows.jpg")
+print(f"Row vis      -> {OUT}/level1_rows.jpg")
 
 # ════════════════════════════════════════════════════════════════════
 # 2. 단어(word) 시각화
@@ -143,9 +144,9 @@ for wi, word in enumerate(words):
     ww,  wh  = int(max(x2s)) - wx0, int(max(y2s)) - wy0
     pad = 6
     draw_box(vis_word, wx0 - pad, wy0 - pad, ww + pad * 2, wh + pad * 2,
-             color, thickness=4, label=f"단어 {wi+1}", font_scale=0.8)
+             color, thickness=4, label=f"Word {wi+1}", font_scale=0.8)
 cv2.imwrite(f"{OUT}/level2_words.jpg", vis_word)
-print(f"단어 시각화  → debug_output/level2_words.jpg")
+print(f"Word vis     -> {OUT}/level2_words.jpg")
 
 # ════════════════════════════════════════════════════════════════════
 # 3. 글자(char) 시각화
@@ -159,9 +160,9 @@ for i, c in enumerate(chars):
     draw_box(vis_char, x, y, w, h, color, thickness=3,
              label=c["char_id"], font_scale=0.55)
 cv2.imwrite(f"{OUT}/level3_chars.jpg", vis_char)
-print(f"글자 시각화  → debug_output/level3_chars.jpg")
+print(f"Char vis     -> {OUT}/level3_chars.jpg")
 
-# ── 글자별 상세 로그 ─────────────────────────────────────────────────
+# ── per-char log ──────────────────────────────────────────────────────
 print()
 for c in chars:
     bb = c["bounding_box"]
@@ -171,29 +172,29 @@ for c in chars:
 # ════════════════════════════════════════════════════════════════════
 # 4. SFR-005I: 전체 글 품질 분석
 # ════════════════════════════════════════════════════════════════════
-print("\n[SFR-005I] 전체 글 품질 분석 중...")
+print("\n[SFR-005I] Text quality analysis...")
 quality = TextQualityAnalyzer().analyze(chars, words)
 
-print(f"  높이 균일성  : {quality.overall_height_score:.0f}/100")
-print(f"  너비 균일성  : {quality.overall_width_score:.0f}/100")
-print(f"  기준선 정렬  : {quality.overall_baseline_score:.0f}/100")
-print(f"  단어 간격    : {quality.word_spacing_score:.0f}/100")
-print(f"  전체 기울기  : {quality.overall_tilt_deg:+.2f}deg")
+print(f"  Height uniformity : {quality.overall_height_score:.0f}/100")
+print(f"  Width uniformity  : {quality.overall_width_score:.0f}/100")
+print(f"  Baseline alignment: {quality.overall_baseline_score:.0f}/100")
+print(f"  Word spacing      : {quality.word_spacing_score:.0f}/100")
+print(f"  Overall tilt      : {quality.overall_tilt_deg:+.2f}deg")
 
-print("\n  줄별 분석:")
+print("\n  Per-row analysis:")
 for rq in quality.rows:
-    print(f"    {rq.row_idx+1}번째 줄: "
-          f"높이CV={rq.height_cv:.2f}({rq.height_score:.0f}pt) "
-          f"너비CV={rq.width_cv:.2f}({rq.width_score:.0f}pt) "
-          f"기준선={rq.baseline_score:.0f}pt "
-          f"기울기={rq.tilt_deg:+.1f}deg({rq.tilt_score:.0f}pt)")
+    print(f"    Row {rq.row_idx+1}: "
+          f"heightCV={rq.height_cv:.2f}({rq.height_score:.0f}pt) "
+          f"widthCV={rq.width_cv:.2f}({rq.width_score:.0f}pt) "
+          f"baseline={rq.baseline_score:.0f}pt "
+          f"tilt={rq.tilt_deg:+.1f}deg({rq.tilt_score:.0f}pt)")
 
 if quality.issues:
-    print("\n  [피드백 이슈]")
+    print("\n  [Issues]")
     for issue in quality.issues:
         print(f"    . {issue}")
 else:
-    print("\n  [피드백] 글씨 품질이 양호합니다.")
+    print("\n  [Feedback] Writing quality is good.")
 
 # ════════════════════════════════════════════════════════════════════
 # 5. SFR-005I 시각화
@@ -286,6 +287,6 @@ for i, (col, txt) in enumerate(legend):
                 cv2.FONT_HERSHEY_SIMPLEX, 0.38, col, 1, cv2.LINE_AA)
 
 cv2.imwrite(f"{OUT}/level4_analysis.jpg", vis_analysis)
-print(f"\n품질 시각화  -> debug_output/level4_analysis.jpg")
+print(f"\nQuality vis  -> {OUT}/level4_analysis.jpg")
 
-print("\n완료.")
+print("\nDone.")

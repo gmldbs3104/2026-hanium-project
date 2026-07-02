@@ -205,32 +205,32 @@ class TextQualityAnalyzer:
         issues: List[str] = []
 
         if h_score < 60:
-            issues.append(f"글자 높이가 고르지 않습니다 (균일성 {h_score:.0f}/100)")
+            issues.append(f"Character height is inconsistent (uniformity {h_score:.0f}/100)")
         elif h_score < 80:
-            issues.append(f"글자 높이를 좀 더 일정하게 써보세요 (균일성 {h_score:.0f}/100)")
+            issues.append(f"Try to write more uniform character heights (uniformity {h_score:.0f}/100)")
 
         if w_score < 60:
-            issues.append(f"글자 너비가 고르지 않습니다 (균일성 {w_score:.0f}/100)")
+            issues.append(f"Character width is inconsistent (uniformity {w_score:.0f}/100)")
         elif w_score < 80:
-            issues.append(f"글자 너비를 좀 더 일정하게 써보세요 (균일성 {w_score:.0f}/100)")
+            issues.append(f"Try to write more uniform character widths (uniformity {w_score:.0f}/100)")
 
         if b_score < 60:
-            issues.append(f"줄 안에서 글자 높낮이가 다릅니다 (기준선 정렬 {b_score:.0f}/100)")
+            issues.append(f"Characters are not aligned on the baseline (baseline {b_score:.0f}/100)")
         elif b_score < 80:
-            issues.append(f"글자 기준선을 더 맞춰보세요 (기준선 정렬 {b_score:.0f}/100)")
+            issues.append(f"Try to align characters on the baseline better (baseline {b_score:.0f}/100)")
 
         for rq in rows:
             if abs(rq.tilt_deg) > TILT_MAX_DEG:
-                direction = "아래로" if rq.tilt_deg > 0 else "위로"
+                direction = "downward" if rq.tilt_deg > 0 else "upward"
                 issues.append(
-                    f"{rq.row_idx + 1}번째 줄이 오른쪽으로 갈수록 {direction} 기울어집니다 "
+                    f"Row {rq.row_idx + 1} tilts {direction} toward the right "
                     f"({rq.tilt_deg:+.1f}deg)"
                 )
 
         if word_score < 60:
-            issues.append(f"단어 간격이 너무 넓거나 좁습니다 (간격 점수 {word_score:.0f}/100)")
+            issues.append(f"Word spacing is too wide or too narrow (spacing {word_score:.0f}/100)")
         elif word_score < 80:
-            issues.append(f"단어 간격을 조금 조정해보세요 (간격 점수 {word_score:.0f}/100)")
+            issues.append(f"Try to adjust word spacing (spacing {word_score:.0f}/100)")
 
         return issues
 
