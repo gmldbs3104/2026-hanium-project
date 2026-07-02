@@ -16,9 +16,11 @@ ai/
 ├── detection/
 │   ├── craft_detector.py       # SFR-004I: CRAFT + Column Projection 글자 탐지
 │   └── bbox_utils.py           # Reading order 정렬, bbox 유틸
+├── analysis/
+│   └── size_angle_analyzer.py  # SFR-005I: 크기 균일성 / 기울기 분석
 ├── tests/
 │   └── test_preprocessor.py
-├── debug_levels.py             # 3단계 시각화 스크립트 (행→단어→글자)
+├── debug_levels.py             # 4단계 시각화+분석 스크립트 (행→단어→글자→분석)
 ├── AI_MODEL_INTERFACE.md       # 백엔드 연결 인터페이스 스펙
 └── requirement.md              # 시스템 기능 요구사항 (SFR)
 ```
@@ -42,6 +44,21 @@ ai/
 
 **입력**: 카메라 이미지 (파일 / bytes / base64)  
 **출력**: `PreprocessResult` — 이진 이미지 + 품질 점수 + 기울기 각도
+
+### SFR-005I · 크기 균일성 / 기울기 분석 (`analysis/size_angle_analyzer.py`)
+
+글자 탐지 결과를 받아 크기 균일성과 기울기를 분석하고 교정 피드백 재료를 생성합니다.
+
+| 분석 항목 | 방법 | 출력 |
+|----------|------|------|
+| 크기 균일성 | 행 내 글자 높이 변동계수(CV) | `size_uniformity_score` 0~100점 |
+| 글자별 크기 | 행 중앙값 대비 비율 | `size_ratio`, `size_flag` (normal/large/small) |
+| 글자별 기울기 | 잉크 중심선 선형 회귀 | `angle` (degrees), `angle_flag` |
+| 전체 기울기 | 모든 글자 평균·편차 | `overall_tilt`, `mean_angle`, `angle_std` |
+| 피드백 이슈 | 임계값 초과 시 자동 생성 | `issues` 리스트 → SFR-007 입력 |
+
+**크기 판정 기준**: 행 중앙값 대비 1.5배 초과 → large, 0.65배 미만 → small  
+**기울기 판정 기준**: ±3° 초과 → 경미, ±7° 초과 → 명확
 
 ### SFR-004I · 글자 탐지 (`detection/craft_detector.py`)
 
@@ -119,6 +136,7 @@ python debug_levels.py
 | 함수 | SFR | 상태 |
 |------|-----|------|
 | `craft_detect_chars()` | SFR-004I | ✅ 구현 완료 |
+| `analyze_size_angle()` | SFR-005I | ✅ 구현 완료 |
 | `lstm_refine_grouping()` | SFR-004C | 🔲 미구현 (placeholder) |
 | `lstm_analyze_stroke_order()` | SFR-005C | 🔲 미구현 (placeholder) |
 
@@ -126,7 +144,7 @@ python debug_levels.py
 
 ## 앞으로 구현할 것
 
-- **SFR-005I**: 크기 균일성 / 기울기 분석
+- **SFR-007**: 교정 피드백 생성 로직 (analyze_size_angle 이슈 → UI 메시지 변환)
 - **SFR-004C**: 캔버스 획 그룹핑 LSTM 연결
 - **SFR-005C**: 획순 분석 LSTM 연결
-- **SFR-007**: 교정 피드백 생성 로직
+- 백엔드 `ai_adapters.py` 실제 연결

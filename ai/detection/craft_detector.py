@@ -95,6 +95,16 @@ class CraftDetector:
         for i, c in enumerate(chars):
             c["char_id"] = f"char_{i}"
 
+        # Step 5: 노이즈 필터 — 중앙값 대비 너무 작은 박스 제거
+        if len(chars) > 2:
+            median_h = float(np.median([c["bounding_box"]["height"] for c in chars]))
+            median_w = float(np.median([c["bounding_box"]["width"]  for c in chars]))
+            chars = [c for c in chars if
+                     c["bounding_box"]["height"] >= median_h * 0.25 and
+                     c["bounding_box"]["width"]  >= median_w * 0.15]
+            for i, c in enumerate(chars):
+                c["char_id"] = f"char_{i}"
+
         return chars
 
     def unload(self):
@@ -179,6 +189,22 @@ class CraftDetector:
         result = []
         for sx0, sx1 in spans:
             seg = clean[:, sx0:sx1]
+            if not np.any(seg > 0):
+                continue
+
+            # 잡음 CC 제거: 최대 CC 면적의 5% 미만인 작은 점 제거
+            n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+                seg, connectivity=8
+            )
+            if n_labels > 1:
+                max_area = int(stats[1:, cv2.CC_STAT_AREA].max())
+                min_area = max(max_area * 0.05, 4)
+                clean_seg = np.zeros_like(seg)
+                for lbl in range(1, n_labels):
+                    if stats[lbl, cv2.CC_STAT_AREA] >= min_area:
+                        clean_seg[labels == lbl] = 255
+                seg = clean_seg
+
             ink_rows = np.any(seg > 0, axis=1)
             ink_cols = np.any(seg > 0, axis=0)
             if not np.any(ink_rows) or not np.any(ink_cols):
