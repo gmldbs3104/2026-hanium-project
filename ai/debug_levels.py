@@ -109,15 +109,34 @@ print(f"Preprocess: {status}  quality={result.quality_score['total']}pt  "
       f"skew={result.skew_angle:+.1f}deg  size={img_w}x{img_h}")
 
 # ── CRAFT detection ───────────────────────────────────────────────────
-print("Running CRAFT detection...")
+METHOD = sys.argv[3] if len(sys.argv) > 3 else "score_map"  # "score_map" | "row_col"
+print(f"Running CRAFT detection (method={METHOD})...")
 detector = CraftDetector(cuda=False)
-row_boxes_raw = detector._craft_row_boxes(binary)
+pred          = detector._craft_raw_prediction(binary)
+row_boxes_raw = pred.get("boxes", [])
 merged_rows   = detector._merge_overlapping_rows(row_boxes_raw, img_w, img_h)
-chars         = detector.detect(binary)
+chars         = detector.detect(binary, method=METHOD)
 detector.unload()
 
 words = chars_to_words(chars)
 print(f"Rows: {len(merged_rows)}  |  Words: {len(words)}  |  Chars: {len(chars)}")
+
+# ════════════════════════════════════════════════════════════════════
+# 0. Score map 시각화 (score_map 방식일 때만)
+# ════════════════════════════════════════════════════════════════════
+if METHOD == "score_map":
+    score_text = pred.get("score_text_raw")
+    target_ratio = pred.get("target_ratio", 1.0)
+    if score_text is not None:
+        # score map을 원본 이미지 크기로 업스케일
+        scale = 2.0 / target_ratio
+        score_up = cv2.resize(
+            score_text, (img_w, img_h), interpolation=cv2.INTER_LINEAR
+        )
+        score_u8 = (np.clip(score_up, 0, 1) * 255).astype(np.uint8)
+        vis_score = cv2.applyColorMap(score_u8, cv2.COLORMAP_JET)
+        cv2.imwrite(f"{OUT}/level0_score_map.jpg", vis_score)
+        print(f"Score map    -> {OUT}/level0_score_map.jpg")
 
 # ════════════════════════════════════════════════════════════════════
 # 1. 행(row) 시각화
