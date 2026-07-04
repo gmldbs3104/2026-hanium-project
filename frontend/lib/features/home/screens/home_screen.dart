@@ -106,7 +106,7 @@ class _ModeCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: color.withOpacity(0.08),
+      color: color.withValues(alpha: 0.08),
       borderRadius: BorderRadius.circular(20),
       child: InkWell(
         borderRadius: BorderRadius.circular(20),
@@ -115,7 +115,7 @@ class _ModeCard extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 28),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: color.withOpacity(0.25)),
+            border: Border.all(color: color.withValues(alpha: 0.25)),
           ),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
