@@ -1,11 +1,12 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from app.api.v1.routes import auth, handwriting, dashboard, image
-from app.services.session_cache import close_redis
+from app.services.session_cache import get_redis, close_redis
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await get_redis().ping()
     yield
     await close_redis()
 
