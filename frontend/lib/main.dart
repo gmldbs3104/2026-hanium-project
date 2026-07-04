@@ -1,15 +1,34 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'core/app_config.dart';
 import 'core/app_theme.dart';
+import 'features/feedback/services/session_save_queue.dart';
 import 'shared/router/app_router.dart';
 
-void main() {
-  // ===== 실제 Firebase 연동 시 여기서 초기화 =====
-  // WidgetsFlutterBinding.ensureInitialized();
-  // await Firebase.initializeApp(
-  //   options: DefaultFirebaseOptions.currentPlatform,
-  // );
+// import 'firebase_options.dart'; // `flutterfire configure` 실행 시 생성됨
+
+Future<void> main() async {
+  // ⚠️ SFR-009 오프라인 재시도 큐가 shared_preferences(플러그인)를 쓰기 때문에,
+  // mock 모드 여부와 무관하게 바인딩 초기화는 항상 필요하다.
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // mock 모드에서는 Firebase 프로젝트 설정 없이도 앱이 뜨도록 초기화를 건너뜀.
+  // 실제 로그인 테스트 시 AppConfig.useMockApi를 false로 바꾸기 *전에*
+  // `flutterfire configure`로 firebase_options.dart를 생성해야 한다.
+  if (!AppConfig.useMockApi) {
+    await Firebase.initializeApp(
+      // options: DefaultFirebaseOptions.currentPlatform,
+    );
+  }
+
+  // REQ-009-5: 이전 세션에서 저장에 실패해 쌓여있던 항목이 있다면,
+  // 앱을 다시 켰을 때(=연결이 복구됐을 가능성이 높을 때) 조용히 재시도한다.
+  // 결과를 기다리지 않고 백그라운드로 흘려보낸다 (앱 시작을 지연시키지 않기 위함).
+  unawaited(SessionSaveQueue.flush());
 
   runApp(const ProviderScope(child: HandwritingApp()));
 }

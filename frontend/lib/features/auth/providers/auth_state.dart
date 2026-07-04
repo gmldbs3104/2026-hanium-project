@@ -1,19 +1,37 @@
 /// 로그인 제공자 종류
 enum AuthProviderType { google, kakao }
 
-/// 사용자 프로필 (SFR-001 Outputs 기준: UID, 이름, 이메일, 프로필 이미지 URL)
+extension AuthProviderTypeValue on AuthProviderType {
+  /// backend LoginRequest.provider 문자열 값 ("google" | "kakao")
+  String get value => name;
+}
+
+/// 사용자 프로필
+/// (backend/app/schemas/user.py UserOut 스키마와 1:1 대응)
 class UserProfile {
-  final String uid;
-  final String name;
+  final String id;
   final String email;
-  final String? photoUrl;
+  final String? name;
+  final String? profileImageUrl;
+  final String provider;
 
   const UserProfile({
-    required this.uid,
-    required this.name,
+    required this.id,
     required this.email,
-    this.photoUrl,
+    required this.provider,
+    this.name,
+    this.profileImageUrl,
   });
+
+  factory UserProfile.fromJson(Map<String, dynamic> json) {
+    return UserProfile(
+      id: json['id'] as String,
+      email: json['email'] as String,
+      name: json['name'] as String?,
+      profileImageUrl: json['profile_image_url'] as String?,
+      provider: json['provider'] as String,
+    );
+  }
 }
 
 /// 인증 상태 (로그인 전 / 로딩 중 / 로그인 완료 / 에러)
