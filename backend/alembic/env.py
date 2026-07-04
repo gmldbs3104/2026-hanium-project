@@ -4,7 +4,7 @@ from alembic import context
 
 from app.core.config import settings
 from app.db.base import Base
-from app.models import user, correction, stroke_standard  # 모델 import 필수 (autogenerate 인식용)
+from app.models import user, correction, stroke_standard, font_standard  # 모델 import 필수 (autogenerate 인식용)
 
 
 config = context.config

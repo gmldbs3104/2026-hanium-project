@@ -1,5 +1,40 @@
 import math
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from app.models.font_standard import FontStandard
+
+DEFAULT_FONT_STANDARD = {"standard_height": 100, "standard_width": 80, "aspect_ratio": 0.8}
+
+
+async def get_font_standard(
+    db: AsyncSession,
+    char: Optional[str],
+    font_id: str = "myeongjo",
+) -> Dict[str, Any]:
+    """
+    font_standards DB에서 문자별 표준 서체 크기 조회.
+    char가 None이거나 DB에 없으면 기본값 반환.
+    TODO: CRAFT + OCR 구현 후 char를 실제 인식 결과로 채울 것.
+    """
+    if char is None:
+        return DEFAULT_FONT_STANDARD
+
+    result = await db.execute(
+        select(FontStandard).where(
+            FontStandard.char == char,
+            FontStandard.font_id == font_id,
+        )
+    )
+    standard = result.scalar_one_or_none()
+    if standard is None:
+        return DEFAULT_FONT_STANDARD
+
+    return {
+        "standard_height": standard.standard_height,
+        "standard_width": standard.standard_width,
+        "aspect_ratio": standard.aspect_ratio,
+    }
 
 
 def _bbox_area(bbox: Dict) -> float:
