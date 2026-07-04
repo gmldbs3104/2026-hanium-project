@@ -5,9 +5,10 @@ import 'package:go_router/go_router.dart';
 import '../../features/auth/providers/auth_controller.dart';
 import '../../features/auth/providers/auth_state.dart';
 import '../../features/auth/screens/login_screen.dart';
+import '../../features/canvas_mode/models/stroke.dart';
 import '../../features/canvas_mode/screens/canvas_input_screen.dart';
+import '../../features/dashboard/screens/dashboard_screen.dart';
 import '../../features/feedback/screens/feedback_screen.dart';
-import '../../features/home/screens/dashboard_placeholder_screen.dart';
 import '../../features/home/screens/home_screen.dart';
 import '../../features/image_mode/screens/image_capture_screen.dart';
 
@@ -50,10 +51,17 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/feedback',
         builder: (context, state) {
           final extra = state.extra as Map<String, dynamic>;
+          final mode = extra['mode'] as String;
+
           return FeedbackScreen(
-            mode: extra['mode'] as String,
+            mode: mode,
             sessionId: extra['sessionId'] as String,
-            score: extra['score'] as int,
+            // SFR-007 오버레이용 — mode에 따라 아래 중 필요한 것만 넘어옴
+            strokes: extra['strokes'] as List<Stroke>?,
+            canvasMetadata: extra['canvasMetadata'] as CanvasMetadata?,
+            imageBytes: extra['imageBytes'] as List<int>?,
+            imageWidth: extra['imageWidth'] as int?,
+            imageHeight: extra['imageHeight'] as int?,
           );
         },
       ),

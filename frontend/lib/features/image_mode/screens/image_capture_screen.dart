@@ -66,7 +66,9 @@ class _ImageCaptureScreenState extends State<ImageCaptureScreen> {
       final result = await ImageApiService.preprocess(imageBytes: bytes);
 
       // REQ-003I-4: 품질 점수 40점 미만 시 재촬영 요구
-      if (result.qualityScore < 40) {
+      // ⚠️ 백엔드가 quality_score를 아직 안 주면(null) 이 체크를 건너뜁니다.
+      // (0으로 간주하면 실제 연동 시 항상 재촬영 에러가 나는 버그가 생김)
+      if (result.qualityScore != null && result.qualityScore! < 40) {
         setState(() => _errorMessage = '이미지 품질이 낮습니다 (${result.qualityScore}점). 다시 촬영해주세요.');
         return;
       }
@@ -75,7 +77,13 @@ class _ImageCaptureScreenState extends State<ImageCaptureScreen> {
         context.go('/feedback', extra: {
           'mode': 'image',
           'sessionId': result.imageSessionId,
-          'score': result.qualityScore,
+          // ⚠️ 점수/성취 메시지는 여기서 넘기지 않습니다.
+          // preprocess() 응답에는 원래 점수가 없고(백엔드 ImagePreprocessResponse 참고),
+          // feedback_screen.dart가 GET /feedback을 직접 호출해서 진짜 점수를 받아옵니다.
+          // SFR-007 오버레이 렌더링용: 촬영 이미지 바이트 + 원본 크기를 함께 전달
+          'imageBytes': bytes,
+          'imageWidth': result.width,
+          'imageHeight': result.height,
         });
       }
     } on ApiException catch (e) {

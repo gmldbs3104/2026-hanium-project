@@ -101,7 +101,13 @@ class _CanvasInputScreenState extends State<CanvasInputScreen> {
         context.go('/feedback', extra: {
           'mode': 'canvas',
           'sessionId': result.canvasSessionId,
-          'score': result.overallScore,
+          // ⚠️ 점수/성취 메시지는 여기서 넘기지 않습니다.
+          // analyze() 응답에는 원래 점수가 없고(백엔드 CanvasAnalyzeResponse 참고),
+          // feedback_screen.dart가 GET /feedback을 직접 호출해서 진짜 점수를 받아옵니다.
+          // SFR-007 오버레이 렌더링용: 서버에 PNG를 보내지 않으므로(REQ-003C-6)
+          // feedback 화면에서 이 획 데이터로 StrokePainter를 다시 그려 배경으로 사용한다.
+          'strokes': List<Stroke>.from(_strokes),
+          'canvasMetadata': metadata,
         });
       }
     } on ApiException catch (e) {

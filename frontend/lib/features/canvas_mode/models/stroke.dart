@@ -52,20 +52,28 @@ class CanvasMetadata {
       };
 }
 
-/// /api/v1/canvas/analyze 응답 모델 (mock 단계에서는 단순화된 형태)
+/// POST /api/v1/canvas/analyze 응답 모델 (schemas/canvas.py CanvasAnalyzeResponse)
+///
+/// ⚠️ 이 단계는 아직 분석 전 "접수 확인" 응답이라 overall_score가 없습니다.
+/// (이전엔 mock 편의상 overall_score를 여기 끼워 넣었는데, 실제 백엔드로 바꾸면
+///  이 필드가 없어서 파싱 에러가 났을 것 — 최종 점수는 반드시
+///  /canvas/{id}/feedback 응답(CanvasFeedbackResponse.overallScore)에서 받아야 합니다.)
 class CanvasAnalyzeResult {
   final String canvasSessionId;
-  final int overallScore;
+  final int strokeCount;
+  final String status;
 
   const CanvasAnalyzeResult({
     required this.canvasSessionId,
-    required this.overallScore,
+    required this.strokeCount,
+    required this.status,
   });
 
   factory CanvasAnalyzeResult.fromJson(Map<String, dynamic> json) {
     return CanvasAnalyzeResult(
       canvasSessionId: json['canvas_session_id'] as String,
-      overallScore: json['overall_score'] as int,
+      strokeCount: json['stroke_count'] as int,
+      status: json['status'] as String? ?? 'received',
     );
   }
 }
