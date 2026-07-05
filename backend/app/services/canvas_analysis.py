@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.models.stroke_standard import StrokeStandard
 from app.services.ai_adapters import lstm_analyze_stroke_order
+from app.core.config import settings
 
 DEFAULT_STANDARD = {"standard_height": 100, "standard_width": 100, "standard_spacing": 20}
 
@@ -53,10 +54,12 @@ def analyze_size(box: Dict[str, float], standard_height: float, standard_width: 
 
 
 def calculate_overall_score(stroke_order_error: int, spacing_deviation: float, size_deviation: float) -> int:
-    """REQ-005C-1, REQ-005C-6: 가중 합산 종합 점수 (가중치는 추후 설정 파일화 가능)"""
-    stroke_order_penalty = stroke_order_error * 10
-    spacing_penalty = min(abs(spacing_deviation) * 0.5, 30)
-    size_penalty = min(abs(size_deviation) * 0.5, 30)
+    """REQ-005C-1, REQ-005C-6: 가중 합산 종합 점수. 가중치는 .env로 조정 가능."""
+    stroke_order_penalty = stroke_order_error * settings.canvas_stroke_order_penalty
+    spacing_penalty = min(abs(spacing_deviation) * settings.canvas_spacing_penalty_coeff,
+                          settings.canvas_spacing_penalty_max)
+    size_penalty = min(abs(size_deviation) * settings.canvas_size_penalty_coeff,
+                       settings.canvas_size_penalty_max)
 
     score = 100 - stroke_order_penalty - spacing_penalty - size_penalty
     return max(0, min(100, round(score)))

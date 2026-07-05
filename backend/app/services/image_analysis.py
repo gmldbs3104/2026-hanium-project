@@ -3,6 +3,7 @@ from typing import List, Dict, Any, Tuple, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.models.font_standard import FontStandard
+from app.core.config import settings
 
 DEFAULT_FONT_STANDARD = {"standard_height": 100, "standard_width": 80, "aspect_ratio": 0.8}
 
@@ -132,8 +133,9 @@ def calculate_overall_score(
     slant_consistency_score: int,
     line_alignment_score: int,
 ) -> int:
+    """REQ-005I-5: 항목별 가중 합산 종합 점수. 가중치는 .env로 조정 가능."""
     return int(
-        size_uniformity_score * 0.4
-        + slant_consistency_score * 0.35
-        + line_alignment_score * 0.25
+        size_uniformity_score * settings.image_size_weight
+        + slant_consistency_score * settings.image_slant_weight
+        + line_alignment_score * settings.image_line_weight
     )
