@@ -32,6 +32,9 @@ Google Colab (T4/A100 GPU) 실행용
 # ======================================================================
 import os
 
+# ──────────────────────────────────────────────────────────────────────
+# 1차 학습 (처음 실행 — 2~3시간)
+# ──────────────────────────────────────────────────────────────────────
 CFG = {
     # Drive 경로 (원본 데이터)
     "manifest_path"    : "/content/drive/MyDrive/aihub_handwriting/matched_pairs.json",
@@ -41,23 +44,41 @@ CFG = {
     # 로컬 캐시 경로 — Drive보다 10배 빠름 (세션 종료 시 삭제됨)
     "cache_dir"        : "/content/aihub_cache",
 
-    # 학습 설정 (무료 T4 기준 — 약 2~3시간 소요)
-    "img_size"    : 512,    # 512px: T4 메모리 여유, 속도 2배
+    # 학습 설정
+    "img_size"    : 512,
     "batch_size"  : 4,
     "num_workers" : 2,
     "lr"          : 1e-4,
-    "epochs"      : 10,     # 무료 세션 내 완료 가능한 상한
+    "epochs"      : 10,
     "warmup_ep"   : 2,
-
-    # 데이터 (2,000개면 T4에서 충분한 학습 효과)
     "max_samples" : 2_000,
 
-    # 저장 (Drive에 자주 저장 — 끊겨도 복구 가능)
+    # 저장
     "save_dir"    : "/content/drive/MyDrive/craft_finetuned",
     "save_every"  : 2,
 
-    "pretrained"  : "/content/craft_mlt_25k.pth",
+    "pretrained"   : "/content/craft_mlt_25k.pth",
+    "resume_from"  : None,   # 1차: None / 2차: 아래 RUN2_CFG 사용
 }
+
+# ──────────────────────────────────────────────────────────────────────
+# 2차 학습 (1차 완료 후 — 5시간)
+# 아래 주석을 해제하고 CFG = RUN2_CFG 로 교체해서 실행
+# ──────────────────────────────────────────────────────────────────────
+# RUN2_CFG = {
+#     **{k: v for k, v in CFG.items()},   # 1차 설정 그대로 상속
+#
+#     # 재개할 체크포인트 (1차 학습의 최적 가중치)
+#     "resume_from"  : "/content/drive/MyDrive/craft_finetuned/craft_best.pth",
+#
+#     # 추가 학습 설정
+#     "epochs"       : 25,       # 추가로 25 epoch (총 35 epoch)
+#     "max_samples"  : 3_000,    # 데이터 조금 더 (시간 여유)
+#     "lr"           : 3e-5,     # 낮은 LR로 정밀 조정
+#     "warmup_ep"    : 0,        # 재개 시 warmup 불필요
+#     "save_every"   : 3,
+# }
+# CFG = RUN2_CFG   # ← 이 줄을 활성화
 
 os.makedirs(CFG["save_dir"],  exist_ok=True)
 os.makedirs(CFG["cache_dir"], exist_ok=True)
@@ -397,11 +418,32 @@ def main():
     print(f"학습: {len(train_ds)}장  검증: {len(val_ds)}장")
 
     # ── 모델 ──────────────────────────────────────────────────────────
-    model = CRAFT(pretrained_backbone=True, freeze_backbone=True).to(DEVICE)
-    if os.path.exists(CFG["pretrained"]):
-        model.load_pretrained_craft(CFG["pretrained"])
+    resuming = bool(CFG.get("resume_from"))
+    # resume 시 backbone 동결 없이 전체 파라미터 학습
+    model = CRAFT(pretrained_backbone=(not resuming),
+                  freeze_backbone=(not resuming)).to(DEVICE)
+
+    start_epoch = 1
+    best_val    = float('inf')
+    history     = []
+
+    if resuming:
+        ckpt_path = CFG["resume_from"]
+        if not os.path.exists(ckpt_path):
+            raise FileNotFoundError(f"체크포인트 없음: {ckpt_path}")
+        ckpt = torch.load(ckpt_path, map_location=DEVICE)
+        model.load_state_dict(ckpt["model_state"])
+        start_epoch = ckpt["epoch"] + 1
+        best_val    = ckpt.get("val_loss", float('inf'))
+        history     = ckpt.get("history", [])
+        print(f"  체크포인트 로드: {ckpt_path}")
+        print(f"  재개 지점: epoch {ckpt['epoch']}  val_loss={best_val:.4f}")
+        print(f"  {start_epoch} epoch부터 추가 학습 시작")
     else:
-        print("⚠ 사전학습 가중치 없음 — 처음부터 학습")
+        if os.path.exists(CFG["pretrained"]):
+            model.load_pretrained_craft(CFG["pretrained"])
+        else:
+            print("  사전학습 가중치 없음 — 처음부터 학습")
 
     criterion = CRAFTLoss(lambda_affinity=1.0)
 
@@ -414,13 +456,13 @@ def main():
         optimizer, T_max=CFG["epochs"], eta_min=CFG["lr"] * 0.01,
     )
 
-    best_val  = float('inf')
-    history   = []
+    end_epoch = start_epoch + CFG["epochs"] - 1
 
-    for epoch in range(1, CFG["epochs"] + 1):
+    for epoch in range(start_epoch, end_epoch + 1):
+        local_ep = epoch - start_epoch + 1  # 이번 세션 기준 epoch 번호
 
-        # warm-up 이후 backbone 동결 해제
-        if epoch == CFG["warmup_ep"] + 1:
+        # warmup: 1차 학습 전용 (resume 시 warmup_ep=0 으로 설정됨)
+        if CFG["warmup_ep"] > 0 and local_ep == CFG["warmup_ep"] + 1:
             for p in model.parameters():
                 p.requires_grad = True
             optimizer = torch.optim.AdamW(
@@ -437,33 +479,37 @@ def main():
         val_loss = validate(model, val_loader, criterion, DEVICE)
         scheduler.step()
 
+        is_best = val_loss < best_val
         history.append({
             "epoch": epoch, "train": tr_loss, "val": val_loss,
             "region": tr_r, "affinity": tr_a,
         })
 
-        print(f"Epoch {epoch:3d}/{CFG['epochs']} "
+        print(f"Epoch {epoch:3d} ({local_ep}/{CFG['epochs']}) "
               f"| train={tr_loss:.4f} (r={tr_r:.4f} a={tr_a:.4f}) "
               f"| val={val_loss:.4f}"
-              + (" ← best" if val_loss < best_val else ""))
+              + (" ← best" if is_best else ""))
 
-        # 체크포인트 저장
-        if val_loss < best_val:
+        # best 체크포인트 (optimizer state 포함 — resume 지원)
+        if is_best:
             best_val = val_loss
             torch.save({
-                "epoch": epoch,
-                "model_state": model.state_dict(),
-                "val_loss": val_loss,
-                "cfg": CFG,
+                "epoch":           epoch,
+                "model_state":     model.state_dict(),
+                "optimizer_state": optimizer.state_dict(),
+                "val_loss":        best_val,
+                "history":         history,
+                "cfg":             CFG,
             }, os.path.join(CFG["save_dir"], "craft_best.pth"))
 
-        if epoch % CFG["save_every"] == 0:
+        # 주기적 체크포인트
+        if local_ep % CFG["save_every"] == 0:
             torch.save({
-                "epoch": epoch,
-                "model_state": model.state_dict(),
+                "epoch":           epoch,
+                "model_state":     model.state_dict(),
                 "optimizer_state": optimizer.state_dict(),
-                "history": history,
-                "cfg": CFG,
+                "history":         history,
+                "cfg":             CFG,
             }, os.path.join(CFG["save_dir"], f"craft_ep{epoch:03d}.pth"))
 
     print(f"\n학습 완료. 최적 val_loss={best_val:.4f}")
