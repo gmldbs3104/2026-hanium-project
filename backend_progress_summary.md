@@ -1,6 +1,6 @@
 # AI 손글씨 교정 플랫폼 — 백엔드 진행 현황 정리
 
-> 작성 기준일: 2026-07-04 (최초 2026-06-27)
+> 작성 기준일: 2026-07-05 (최초 2026-06-27)
 > 용도: 팀 공유 / 작업 인계 / 다음 세션 컨텍스트 제공용
 
 ---
@@ -122,6 +122,33 @@
   - `canvas_analysis.get_standard()`와 동일한 패턴으로 설계
   - `char=None` 시 `DEFAULT_FONT_STANDARD` 반환 (TODO: OCR 구현 후 실제 char 사용)
 
+### 2-17. SFR-008 대시보드 API 기초 구현 (2026-07-05)
+
+- [x] `app/schemas/dashboard.py` — Pydantic 응답 모델 작성
+  - `PeriodSummary`, `WeakItem`, `ScoreTrendPoint`, `DashboardResponse`
+  - `is_new_user: bool` — True이면 프론트에서 온보딩 뷰 표시 (REQ-008-5)
+  - `recommended_exercises: List[Any] = []` — TODO: 연습 예문 DB 구축 후 구현
+- [x] `app/services/dashboard_service.py` — DB 집계 로직 구현
+  - `period` 필터: `week(7일)` / `month(30일)` / `all(전체)` → `created_at >= since` WHERE절 적용
+  - `mode` 필터: `canvas` / `image` / `all` → 해당 테이블만 조회
+  - **canvas**: session_id별 그룹핑 → 세션 수준 overall/item 평균 계산
+    - 항목별 점수 역산: `획순 = 100 - error_count × penalty`, `자간/크기 = 100 - min(abs(deviation) × coeff, max)`
+  - **image**: 테이블 행이 이미 세션 수준 — 저장된 점수 직접 사용 (크기 균일성 / 기울기 일관성 / 줄 정렬)
+  - `period_summary`: total_sessions, avg_score, improvement_rate(전반부→후반부 변화율%), canvas/image 세션 수
+  - `weak_items`: 항목×모드별 평균 점수 → 오름차순 정렬 → 하위 10개 (REQ-008-3)
+  - `score_trend`: 날짜×모드별 일별 평균 점수 시계열
+  - 신규 사용자(데이터 없음): `is_new_user: true`, 나머지 필드 모두 0/빈 배열
+- [x] `app/api/v1/routes/dashboard.py` — 엔드포인트 구현
+  - `GET /api/v1/dashboard?period=month&mode=all`
+  - 인증 필요 (`get_current_user` dependency)
+  - **Redis 캐시**: 키 = `dashboard:{user_id}:{period}:{mode}`, TTL = 3600초(1시간) (SFR-008 캐시 요건)
+  - `session_cache.get_session` / `set_session` 재사용 (TTL 파라미터만 변경)
+  - 쿼리 파라미터 타입 `Literal["week","month","all"]` / `Literal["canvas","image","all"]`으로 자동 검증
+
+**현재 미구현 (보류)**:
+- `recommended_exercises`: 연습 예문 DB 없음 → 빈 배열 반환 (TODO 주석)
+- 캐시 무효화: 신규 세션 저장(`analyze-detail`, `image/analyze`) 시 `dashboard:*` 캐시 삭제 — 후순위
+
 ### 2-16. 가중치 설정 파일화 (2026-07-05)
 - [x] `app/core/config.py` — 캔버스 5개 + 이미지 3개 총 8개 가중치 필드 추가
   - 캔버스: `canvas_stroke_order_penalty(10.0)`, `canvas_spacing_penalty_coeff(0.5)`, `canvas_spacing_penalty_max(30.0)`, `canvas_size_penalty_coeff(0.5)`, `canvas_size_penalty_max(30.0)`
@@ -174,7 +201,10 @@
 - [ ] CRAFT angle 값을 기울기 분석에 반영 (현재 aspect ratio 근사 사용 중)
 
 ### 4-3. SFR-008 — 학습 관리 대시보드
-- [ ] 전체 미착수 (우선순위 Medium)
+- [x] ~~전체 미착수~~ → **2026-07-05 기초 구현 완료** (아래 2-17 참고)
+- [ ] `recommended_exercises` 반환 — 연습 예문 DB 설계 및 시딩 (현재 빈 배열 반환)
+- [ ] 대시보드 캐시 무효화 (SFR-009 연계) — 새 세션 저장 시 Redis 캐시 삭제 필요
+- [ ] 프론트엔드 연동 시 `is_new_user: true` 처리 — 온보딩 뷰 표시 로직 프론트 담당
 
 ### 4-4. SFR-009 — 저장 및 클라우드 동기화 보강
 - [x] PostgreSQL 저장은 canvas/image analyze 단계에서 동작 중
@@ -197,4 +227,6 @@
 3. ~~**Redis 도입**~~ → **완료** (2026-07-04)
 4. ~~**`font_standards` 테이블 스키마 및 시드 데이터**~~ → **완료** (2026-07-04)
 5. ~~**가중치 설정 파일화**~~ → **완료** (2026-07-05)
-6. **SFR-008 대시보드** — 우선순위 Medium, 프론트와 API 스펙 협의 필요
+6. ~~**SFR-008 대시보드**~~ → **완료** (2026-07-05) — 연습 예문 DB 및 캐시 무효화만 남음
+7. **AWS S3 이미지 업로드 연동** — `.env` AWS 키 입력 후 S3 업로드 라우트 구현
+8. **Google OAuth 전용 전환** — Firebase 콘솔에서 이메일/비밀번호 비활성화 + `auth.py` provider 검증 추가
