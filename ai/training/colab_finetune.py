@@ -19,7 +19,8 @@ Google Colab (T4/A100 GPU) 실행용
 # [셀 1] 패키지 설치 (Colab에서 한 번만 실행)
 # ======================================================================
 # !pip install -q torch torchvision --index-url https://download.pytorch.org/whl/cu118
-# !pip install -q opencv-python-headless scipy tqdm
+# !pip install -q opencv-python-headless tqdm
+# !pip install -q craft-text-detector   # CRAFT 가중치 자동 다운로드에 사용
 
 # ======================================================================
 # [셀 2] Google Drive 마운트
@@ -84,15 +85,36 @@ os.makedirs(CFG["save_dir"],  exist_ok=True)
 os.makedirs(CFG["cache_dir"], exist_ok=True)
 
 # ======================================================================
-# [셀 4] 사전학습 CRAFT 가중치 다운로드
+# [셀 4] 사전학습 CRAFT 가중치 확보
+# craft_text_detector 패키지가 자동으로 다운로드하는 가중치를 재사용
 # ======================================================================
-import urllib.request
+import glob, numpy as np
 
-WEIGHT_URL = "https://github.com/clovaai/CRAFT-pytorch/releases/download/pre-release/craft_mlt_25k.pth"
-if not os.path.exists(CFG["pretrained"]):
-    print("사전학습 가중치 다운로드 중...")
-    urllib.request.urlretrieve(WEIGHT_URL, CFG["pretrained"])
-    print("완료:", CFG["pretrained"])
+def _find_craft_weights() -> str:
+    """craft_text_detector가 캐시한 craft_mlt_25k.pth 경로를 반환."""
+    import craft_text_detector as _ctd
+    pkg_dir = os.path.dirname(_ctd.__file__)
+    candidates = glob.glob(os.path.join(pkg_dir, "**", "craft_mlt_25k.pth"), recursive=True)
+    return candidates[0] if candidates else None
+
+weight_path = _find_craft_weights()
+
+if weight_path is None:
+    # 한 번도 실행 안 된 경우 → 더미 추론으로 다운로드 트리거
+    print("가중치 없음 — craft_text_detector로 다운로드 중...")
+    from craft_text_detector import Craft as _Craft
+    _c = _Craft(output_dir=None, crop_type="box", cuda=False, long_size=64)
+    _c.detect_text(np.zeros((64, 64, 3), dtype=np.uint8))
+    del _c
+    weight_path = _find_craft_weights()
+
+if weight_path:
+    CFG["pretrained"] = weight_path
+    print("가중치 경로:", CFG["pretrained"])
+else:
+    # 자동 탐색 실패 시 Drive에 직접 올린 파일 사용
+    CFG["pretrained"] = "/content/drive/MyDrive/aihub_handwriting/craft_mlt_25k.pth"
+    print("가중치를 찾지 못했습니다. Drive 경로를 직접 확인하세요:", CFG["pretrained"])
 
 # ======================================================================
 # [셀 5] 임포트
