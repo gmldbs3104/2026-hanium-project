@@ -29,4 +29,5 @@ class ImageAnalysisResult(Base):
     line_alignment_score = Column(Integer, nullable=True)
     char_level = Column(JSON, nullable=True)
     overall_score = Column(Integer, nullable=True)
+    s3_image_url = Column(String, nullable=True)  # S3 원본 이미지 URL (SFR-009)
     created_at = Column(DateTime, default=datetime.utcnow)

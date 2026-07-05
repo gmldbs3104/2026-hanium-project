@@ -7,6 +7,7 @@ from app.core.deps import get_current_user
 from app.models.user import User
 from app.models.correction import ImageAnalysisResult
 from app.services.session_cache import get_session, set_session
+from app.services.s3_service import upload_handwriting_image
 from app.services.image_preprocessing import preprocess_image, detect_char_bboxes
 from app.services.image_analysis import (
     analyze_size_uniformity,
@@ -46,17 +47,23 @@ async def preprocess(file: UploadFile = File(...)):
         raise HTTPException(status_code=422, detail=str(e))
 
     image_session_id = str(uuid4())
+
+    # S3 업로드 (미설정 시 None 반환 — 서비스 계속 동작)
+    s3_url = await upload_handwriting_image(image_bytes, image_session_id, file.content_type)
+
     # numpy 배열은 tolist()로 직렬화해서 캐시 저장
     await set_session(image_session_id, {
         "binary_image": binary_image.tolist(),
         "width": width,
         "height": height,
+        "s3_image_url": s3_url,
     })
 
     return ImagePreprocessResponse(
         image_session_id=image_session_id,
         width=width,
         height=height,
+        s3_image_url=s3_url,
     )
 
 
@@ -131,6 +138,7 @@ async def analyze(
         line_alignment_score=line_alignment_score,
         char_level=[c.model_dump() for c in char_analyses],
         overall_score=overall_score,
+        s3_image_url=session_data.get("s3_image_url"),  # preprocess에서 업로드된 URL
     )
     db.add(result_row)
     await db.commit()
@@ -153,6 +161,7 @@ async def analyze(
         line_alignment_score=line_alignment_score,
         overall_score=overall_score,
         char_analyses=char_analyses,
+        s3_image_url=session_data.get("s3_image_url"),
     )
 
 

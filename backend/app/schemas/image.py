@@ -18,6 +18,7 @@ class ImagePreprocessResponse(BaseModel):
     image_session_id: str
     width: int
     height: int
+    s3_image_url: Optional[str] = None  # S3 미설정 시 null
 
 
 class ImageDetectResponse(BaseModel):
@@ -40,6 +41,7 @@ class ImageAnalysisResponse(BaseModel):
     line_alignment_score: int
     overall_score: int
     char_analyses: List[ImageCharAnalysis]
+    s3_image_url: Optional[str] = None
 
 
 class ImageFeedbackItem(BaseModel):
