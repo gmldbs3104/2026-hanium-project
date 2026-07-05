@@ -122,6 +122,26 @@
   - `canvas_analysis.get_standard()`와 동일한 패턴으로 설계
   - `char=None` 시 `DEFAULT_FONT_STANDARD` 반환 (TODO: OCR 구현 후 실제 char 사용)
 
+### 2-18. SFR-009 AWS S3 이미지 업로드 연동 (2026-07-05)
+
+- [x] `requirements.txt`: `boto3==1.35.36` 추가
+- [x] `app/services/s3_service.py`: 비동기 S3 업로드 서비스
+  - `upload_handwriting_image(image_bytes, session_id, content_type) -> Optional[str]`
+  - boto3(동기) + `asyncio.run_in_executor()`로 async 환경에 통합
+  - S3 키 경로: `handwriting/{session_id}/original.{jpg|png|webp}`
+  - AWS 미설정(`aws_access_key_id` 또는 `aws_s3_bucket_name` 비어 있음) 시 None 반환 → **graceful degradation** (서비스 중단 없음)
+  - S3 업로드 실패(`BotoCoreError`, `ClientError`) 시 None 반환 + 에러 로깅
+- [x] `app/models/correction.py`: `image_analysis_results`에 `s3_image_url` 컬럼 추가 (`nullable=True`)
+- [x] Alembic 마이그레이션 `8cc78a9d44f7` 생성 및 적용
+- [x] `app/api/v1/routes/image.py`
+  - `POST /image/preprocess`: 원본 이미지 S3 업로드 → URL을 Redis 세션 캐시에 저장 → 응답에 포함
+  - `POST /image/{id}/analyze`: 캐시에서 S3 URL 읽어 `image_analysis_results.s3_image_url`에 저장
+- [x] `app/schemas/image.py`: `ImagePreprocessResponse`, `ImageAnalysisResponse`에 `s3_image_url: Optional[str]` 추가
+
+**버킷 설정 안내** (`.env.example` 주석):
+- 현재 URL 형식: `https://{bucket}.s3.{region}.amazonaws.com/{key}` (퍼블릭 버킷 기준)
+- 프라이빗 버킷 사용 시 presigned URL 생성 필요 → 후순위 TODO
+
 ### 2-17. SFR-008 대시보드 API 기초 구현 (2026-07-05)
 
 - [x] `app/schemas/dashboard.py` — Pydantic 응답 모델 작성
@@ -208,8 +228,8 @@
 
 ### 4-4. SFR-009 — 저장 및 클라우드 동기화 보강
 - [x] PostgreSQL 저장은 canvas/image analyze 단계에서 동작 중
+- [x] ~~AWS S3 이미지 업로드~~ → **완료** (2026-07-05, 아래 2-18 참고)
 - [ ] Firebase Firestore 동기화 (`user_sessions` 컬렉션)
-- [ ] AWS S3 이미지 업로드 — `.env`의 AWS 키 항목 현재 비어있음
 - [ ] 네트워크 장애 시 재시도 큐 메커니즘
 - [ ] 계정 삭제 시 30일 내 데이터 영구 삭제 정책 구현
 
@@ -228,5 +248,5 @@
 4. ~~**`font_standards` 테이블 스키마 및 시드 데이터**~~ → **완료** (2026-07-04)
 5. ~~**가중치 설정 파일화**~~ → **완료** (2026-07-05)
 6. ~~**SFR-008 대시보드**~~ → **완료** (2026-07-05) — 연습 예문 DB 및 캐시 무효화만 남음
-7. **AWS S3 이미지 업로드 연동** — `.env` AWS 키 입력 후 S3 업로드 라우트 구현
+7. ~~**AWS S3 이미지 업로드 연동**~~ → **완료** (2026-07-05)
 8. **Google OAuth 전용 전환** — Firebase 콘솔에서 이메일/비밀번호 비활성화 + `auth.py` provider 검증 추가
