@@ -122,6 +122,14 @@
   - `canvas_analysis.get_standard()`와 동일한 패턴으로 설계
   - `char=None` 시 `DEFAULT_FONT_STANDARD` 반환 (TODO: OCR 구현 후 실제 char 사용)
 
+### 2-16. 가중치 설정 파일화 (2026-07-05)
+- [x] `app/core/config.py` — 캔버스 5개 + 이미지 3개 총 8개 가중치 필드 추가
+  - 캔버스: `canvas_stroke_order_penalty(10.0)`, `canvas_spacing_penalty_coeff(0.5)`, `canvas_spacing_penalty_max(30.0)`, `canvas_size_penalty_coeff(0.5)`, `canvas_size_penalty_max(30.0)`
+  - 이미지: `image_size_weight(0.4)`, `image_slant_weight(0.35)`, `image_line_weight(0.25)`
+- [x] `app/services/canvas_analysis.py` — `calculate_overall_score()` 하드코딩 → `settings.*` 참조
+- [x] `app/services/image_analysis.py` — `calculate_overall_score()` 하드코딩 → `settings.*` 참조
+- [x] `.env.example` — 8개 가중치 항목 및 설명 추가
+
 ---
 
 ## 3. 주요 트러블슈팅 기록
@@ -157,7 +165,7 @@
 - [ ] 실제 획순 분석 모델 — AI팀 모델 완성 후 `ai_adapters.lstm_analyze_stroke_order` 내부 교체
 - [x] ~~표준 획순 DB 11,172자 전체 채우기~~ → **완료** (`seed_stroke_standards.py`, 2026-07-04)
 - [ ] 문자 인식(어떤 글자인지 식별) — 지금은 `char=None`으로 항상 기본 표준값 사용
-- [ ] 가중치 설정 파일화 (REQ-005C-6 — 현재 하드코딩)
+- [x] ~~가중치 설정 파일화~~ → **완료** (`config.py` + canvas/image `calculate_overall_score`, 2026-07-05)
 - [ ] i18n 구조 적용 (REQ-007-5)
 
 ### 4-2. 이미지 모드 — 남은 보강 작업
@@ -188,5 +196,5 @@
 2. ~~**표준 획순 DB 채우기**~~ → **완료** (2026-07-04)
 3. ~~**Redis 도입**~~ → **완료** (2026-07-04)
 4. ~~**`font_standards` 테이블 스키마 및 시드 데이터**~~ → **완료** (2026-07-04)
-5. **가중치 설정 파일화** — canvas 분석 가중치 하드코딩 → `.env` 또는 config 파일로 분리
+5. ~~**가중치 설정 파일화**~~ → **완료** (2026-07-05)
 6. **SFR-008 대시보드** — 우선순위 Medium, 프론트와 API 스펙 협의 필요
