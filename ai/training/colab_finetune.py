@@ -33,33 +33,34 @@ Google Colab (T4/A100 GPU) 실행용
 import os
 
 CFG = {
-    # matched_pairs.json 경로 (stem 목록 + 원본 Windows 경로 포함)
+    # Drive 경로 (원본 데이터)
     "manifest_path"    : "/content/drive/MyDrive/aihub_handwriting/matched_pairs.json",
+    "drive_img_root"   : "/content/drive/MyDrive/aihub_handwriting/원천데이터",
+    "drive_label_root" : "/content/drive/MyDrive/aihub_handwriting/라벨링데이터",
 
-    # Colab에서 실제 데이터가 있는 경로 (하위 폴더 재귀 탐색)
-    "colab_img_root"   : "/content/drive/MyDrive/aihub_handwriting/원천데이터",
-    "colab_label_root" : "/content/drive/MyDrive/aihub_handwriting/라벨링데이터",
+    # 로컬 캐시 경로 — Drive보다 10배 빠름 (세션 종료 시 삭제됨)
+    "cache_dir"        : "/content/aihub_cache",
 
-    # 학습 설정
-    "img_size"    : 768,        # 입력 이미지 크기 (장변 기준 리사이즈)
-    "batch_size"  : 4,          # T4 기준 4~8
+    # 학습 설정 (무료 T4 기준 — 약 2~3시간 소요)
+    "img_size"    : 512,    # 512px: T4 메모리 여유, 속도 2배
+    "batch_size"  : 4,
     "num_workers" : 2,
     "lr"          : 1e-4,
-    "epochs"      : 30,
-    "warmup_ep"   : 3,          # 초기 N epoch: backbone 동결
+    "epochs"      : 10,     # 무료 세션 내 완료 가능한 상한
+    "warmup_ep"   : 2,
 
-    # 데이터 제한 (None = 전체 사용)
-    "max_samples" : 10_000,     # 빠른 실험: 1000~5000, 본학습: None
+    # 데이터 (2,000개면 T4에서 충분한 학습 효과)
+    "max_samples" : 2_000,
 
-    # 저장
+    # 저장 (Drive에 자주 저장 — 끊겨도 복구 가능)
     "save_dir"    : "/content/drive/MyDrive/craft_finetuned",
-    "save_every"  : 5,          # N epoch마다 체크포인트 저장
+    "save_every"  : 2,
 
-    # 사전학습 가중치 경로 (셀 4에서 자동 다운로드)
     "pretrained"  : "/content/craft_mlt_25k.pth",
 }
 
-os.makedirs(CFG["save_dir"], exist_ok=True)
+os.makedirs(CFG["save_dir"],  exist_ok=True)
+os.makedirs(CFG["cache_dir"], exist_ok=True)
 
 # ======================================================================
 # [셀 4] 사전학습 CRAFT 가중치 다운로드
@@ -95,13 +96,76 @@ DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print("Device:", DEVICE)
 
 # ======================================================================
-# [셀 6] 데이터셋 클래스
+# [셀 6] Drive → 로컬 캐시 복사 (학습 전 한 번만 실행)
+# Drive I/O 병목을 제거해 학습 속도 3~5배 향상
+# ======================================================================
+
+def setup_local_cache(cfg: dict) -> tuple:
+    """
+    manifest에서 max_samples개를 무작위 선택 →
+    Drive에서 /content 로컬로 PNG + JSON 복사.
+
+    Returns
+    -------
+    (local_img_root, local_label_root) : 복사된 로컬 경로
+    """
+    import shutil
+    manifest_path = cfg["manifest_path"]
+    drive_img_root   = cfg["drive_img_root"]
+    drive_label_root = cfg["drive_label_root"]
+    cache_dir        = cfg["cache_dir"]
+    max_samples      = cfg["max_samples"]
+
+    local_img_dir   = os.path.join(cache_dir, "images")
+    local_label_dir = os.path.join(cache_dir, "labels")
+    os.makedirs(local_img_dir,   exist_ok=True)
+    os.makedirs(local_label_dir, exist_ok=True)
+
+    # 이미 복사된 경우 건너뜀
+    existing = len(glob.glob(os.path.join(local_img_dir, "*.png")))
+    if existing >= max_samples:
+        print(f"  로컬 캐시 이미 존재 ({existing}개) — 복사 생략")
+        return local_img_dir, local_label_dir
+
+    # manifest stem 목록
+    with open(manifest_path, encoding="utf-8") as f:
+        manifest = json.load(f)
+    random.shuffle(manifest)
+    subset = manifest[:max_samples]
+
+    # Drive에서 stem 기반으로 파일 탐색
+    print(f"  Drive에서 stem 인덱스 구축 중...")
+    img_map, label_map = {}, {}
+    for p in glob.glob(os.path.join(drive_img_root,   "**", "*.png"),  recursive=True):
+        img_map[os.path.splitext(os.path.basename(p))[0]] = p
+    for p in glob.glob(os.path.join(drive_label_root, "**", "*.json"), recursive=True):
+        label_map[os.path.splitext(os.path.basename(p))[0]] = p
+
+    ok = err = 0
+    print(f"  {max_samples}개 로컬 복사 시작...")
+    for entry in tqdm(subset, desc="캐시 복사"):
+        stem = entry["stem"]
+        if stem not in img_map or stem not in label_map:
+            err += 1
+            continue
+        try:
+            shutil.copy2(img_map[stem],   os.path.join(local_img_dir,   stem + ".png"))
+            shutil.copy2(label_map[stem], os.path.join(local_label_dir, stem + ".json"))
+            ok += 1
+        except Exception as e:
+            err += 1
+
+    print(f"  복사 완료: 성공 {ok}개, 실패 {err}개")
+    return local_img_dir, local_label_dir
+
+# ======================================================================
+# [셀 7] 데이터셋 클래스
 # ======================================================================
 
 class HandwritingDataset(Dataset):
     """AI Hub 손글씨 OCR 데이터셋 (matched_pairs.json 기반)."""
 
-    def __init__(self, manifest_path, img_root, label_root, img_size=768,
+    def __init__(self, manifest_path, img_root, label_root, img_size=512,
                  max_samples=None, augment=True):
         self.img_size = img_size
         self.augment  = augment
@@ -228,7 +292,7 @@ def collate_fn(batch):
     return imgs, regions, affinities
 
 # ======================================================================
-# [셀 7] 손실 함수
+# [셀 8] 손실 함수
 # ======================================================================
 
 class CRAFTLoss(nn.Module):
@@ -258,7 +322,7 @@ class CRAFTLoss(nn.Module):
         return loss_r + self.lambda_a * loss_a, loss_r.item(), loss_a.item()
 
 # ======================================================================
-# [셀 8] 학습 루프
+# [셀 9] 학습 루프
 # ======================================================================
 
 def train_one_epoch(model, loader, optimizer, criterion, device, epoch):
@@ -299,15 +363,20 @@ def validate(model, loader, criterion, device):
     return total_loss / len(loader)
 
 # ======================================================================
-# [셀 9] 메인 학습
+# [셀 10] 메인 학습
 # ======================================================================
 
 def main():
-    # ── 데이터 ────────────────────────────────────────────────────────
+    # ── 로컬 캐시 구성 (Drive I/O 병목 제거) ──────────────────────────
+    print("=== 1단계: 로컬 캐시 구성 ===")
+    local_img_root, local_label_root = setup_local_cache(CFG)
+
+    # ── 데이터셋 ──────────────────────────────────────────────────────
+    print("\n=== 2단계: 데이터셋 로드 ===")
     all_pairs = HandwritingDataset(
         manifest_path = CFG["manifest_path"],
-        img_root      = CFG["colab_img_root"],
-        label_root    = CFG["colab_label_root"],
+        img_root      = local_img_root,
+        label_root    = local_label_root,
         img_size      = CFG["img_size"],
         max_samples   = CFG["max_samples"],
         augment       = True,
@@ -324,6 +393,7 @@ def main():
                               shuffle=False, num_workers=CFG["num_workers"],
                               collate_fn=collate_fn, pin_memory=True)
 
+    print(f"\n=== 3단계: 학습 시작 ===")
     print(f"학습: {len(train_ds)}장  검증: {len(val_ds)}장")
 
     # ── 모델 ──────────────────────────────────────────────────────────
@@ -402,7 +472,7 @@ def main():
 
 
 # ======================================================================
-# [셀 10] 학습된 가중치 → craft_detector.py 교체 방법
+# [셀 11] 학습된 가중치 → craft_detector.py 교체 방법
 # ======================================================================
 """
 파인튜닝 완료 후 프로젝트에 적용하는 방법:
