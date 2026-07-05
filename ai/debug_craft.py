@@ -59,7 +59,7 @@ for i, c in enumerate(chars):
     cv2.rectangle(vis_box, (x, y), (x + w, y + h), color, 2)
 
     # 중심점
-    cx, cy = int(c["center"]["x"]), int(c["center"]["y"])
+    cx, cy = int(bb["x"] + bb["width"] / 2), int(bb["y"] + bb["height"] / 2)
     cv2.circle(vis_box, (cx, cy), 3, color, -1)
 
     # char_id 레이블
@@ -80,7 +80,7 @@ print(f"    saved → {out_box}")
 vis_meta = base.copy()
 for i, c in enumerate(chars):
     bb     = c["bounding_box"]
-    cx, cy = int(c["center"]["x"]), int(c["center"]["y"])
+    cx, cy = int(bb["x"] + bb["width"] / 2), int(bb["y"] + bb["height"] / 2)
     angle  = c["angle"]
     color  = PALETTE[i % len(PALETTE)]
     half_w = int(bb["width"] / 2)
@@ -103,13 +103,12 @@ print(f"    saved → {out_meta}")
 
 # ── 콘솔 출력 ────────────────────────────────────────────────────────────
 print()
-print(f"{'id':<8} {'x':>5} {'y':>5} {'w':>5} {'h':>5} {'cx':>7} {'cy':>7} {'angle':>7} {'conf':>6}")
-print("-" * 65)
+print(f"{'id':<8} {'x':>5} {'y':>5} {'w':>5} {'h':>5} {'angle':>7} {'conf':>6}")
+print("-" * 55)
 for c in chars:
     bb = c["bounding_box"]
     print(f"{c['char_id']:<8} {bb['x']:>5.0f} {bb['y']:>5.0f}"
           f" {bb['width']:>5.0f} {bb['height']:>5.0f}"
-          f" {c['center']['x']:>7.1f} {c['center']['y']:>7.1f}"
           f" {c['angle']:>+7.1f} {c['confidence']:>6.3f}")
 
 print(f"\nDone. total={len(chars)} chars")

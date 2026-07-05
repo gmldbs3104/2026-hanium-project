@@ -1,40 +1,37 @@
 """
-SFR-004I: CRAFT character score map 기반 글자 탐지
+SFR-004I: CRAFT Score Map + Morphology 하이브리드 글자 탐지
 
-CRAFT 설계 원리
---------------
-score_text : 각 픽셀이 어떤 글자(character)의 중심부일 확률.
-             글자 하나당 하나의 Gaussian blob 형태로 나타남.
-score_link : 인접 두 글자가 같은 단어일 확률 (여기서는 사용 안 함).
+파이프라인
+---------
+1. CRAFT 추론 → score_text_raw (1/2 해상도 히트맵)
+2. Hysteresis Thresholding
+3. 방향성 Morphology Closing
+4. score map 공간에서 Watershed → 글자 단위 분할
+5. binary image의 CC를 watershed label에 배정 (투표)
+   → CC 경계가 실제 잉크에 정확히 일치 → tight bbox 보장
+6. 내부 박스 제거 후처리
 
-score_text 단독 사용 + threshold 이진화만으로 개별 글자 blob 분리 가능.
-dilation 없음 — dilation을 넣으면 인접 글자 blob이 합쳐짐.
-
-반환 메타데이터 (글자당)
------------------------
-char_id      : "char_0", "char_1", ...  (reading order)
-bounding_box : x, y, width, height      (binary image 픽셀 기준 tight bbox)
-center       : x, y                     (tight bbox 중심점)
-angle        : float (도)               (minAreaRect 기반 기울기, -45~+45)
-confidence   : float                    (해당 blob의 score_text 최댓값)
+반환: AI_MODEL_INTERFACE.md SFR-004I 스펙 준수
+  char_id, bounding_box(x/y/width/height), angle, confidence
 """
 import cv2
 import numpy as np
+from collections import defaultdict
 from typing import List, Dict, Tuple
 
 from craft_text_detector import Craft
+from scipy import ndimage as ndi
+from skimage.feature import peak_local_max
+from skimage.segmentation import watershed
 
-# CRAFT score_text 이진화 임계값
-# 손글씨는 인쇄체보다 score가 낮은 경향 → 0.4 사용
-SCORE_THRESH: float = 0.40
 
-# blob 면적 필터: median 면적의 이 비율 미만은 잡음 파편으로 제거
-MIN_AREA_RATIO: float = 0.10
-MIN_AREA_ABS: int = 6  # score map 픽셀 단위 절대 최솟값
+HIGH_THRESH:    float = 0.40
+LOW_THRESH:     float = 0.20
+MIN_AREA_RATIO: float = 0.08
 
 
 class CraftDetector:
-    """CRAFT score_text 기반 개별 글자 탐지기."""
+    """CRAFT score map + morphology + CC-assignment 하이브리드 탐지기."""
 
     def __init__(self, cuda: bool = False, long_size: int = 1280):
         self._craft = Craft(
@@ -42,7 +39,7 @@ class CraftDetector:
             rectify=True,
             export_extra=False,
             text_threshold=0.4,
-            link_threshold=0.5,
+            link_threshold=0.4,
             low_text=0.3,
             cuda=cuda,
             long_size=long_size,
@@ -56,174 +53,295 @@ class CraftDetector:
 
     def detect(self, binary_image: np.ndarray) -> List[Dict]:
         """
-        전처리된 binary image에서 개별 글자를 탐지한다.
-
         Parameters
         ----------
-        binary_image : (H, W) uint8
-            ImagePreprocessor 출력 — THRESH_BINARY_INV (0=배경, 255=획)
-
-        Returns
-        -------
-        List[Dict]  reading order 정렬 완료, char_id 부여 완료.
-        각 항목:
-          char_id      : str
-          bounding_box : {"x", "y", "width", "height"}  — tight, 픽셀 단위
-          center       : {"x", "y"}
-          angle        : float  (도, -45 ~ +45)
-          confidence   : float  (0 ~ 1)
+        binary_image : (H, W) uint8, 값 0(배경) or 255(획)
         """
-        pred = self._craft_prediction(binary_image)
-        raw  = self._extract_chars(pred, binary_image)
-        raw  = self._sort_reading_order(raw, binary_image.shape)
-
-        chars = []
-        for i, r in enumerate(raw):
-            chars.append({
-                "char_id": f"char_{i}",
-                "bounding_box": {
-                    "x":      float(r["x"]),
-                    "y":      float(r["y"]),
-                    "width":  float(r["w"]),
-                    "height": float(r["h"]),
-                },
-                "center": {
-                    "x": float(r["x"] + r["w"] / 2.0),
-                    "y": float(r["y"] + r["h"] / 2.0),
-                },
-                "angle":      float(r["angle"]),
-                "confidence": float(r["conf"]),
-            })
-        return chars
+        pred  = self._craft_prediction(binary_image)
+        chars = self._hybrid_detect(pred, binary_image)
+        chars = self._filter_noise(chars)
+        chars = self._remove_contained(chars)
+        chars = self._sort_reading_order(chars, binary_image.shape)
+        print(f"    → {len(chars)} chars detected")
+        return self._format_output(chars)
 
     def unload(self):
         del self._craft
 
     # ------------------------------------------------------------------ #
-    # 내부 구현
+    # 핵심 파이프라인
     # ------------------------------------------------------------------ #
 
     def _craft_prediction(self, binary: np.ndarray) -> dict:
-        """CRAFT 추론. predict.py 패치로 score_text_raw / target_ratio 포함."""
         rgb = cv2.cvtColor(cv2.bitwise_not(binary), cv2.COLOR_GRAY2RGB)
         return self._craft.detect_text(rgb)
 
-    def _extract_chars(self, pred: dict, binary: np.ndarray) -> List[Dict]:
-        """
-        score_text_raw → threshold 이진화 → CC 추출 → tight bbox + 메타데이터.
-
-        핵심: dilation 없음.
-        CRAFT score_text는 이미 글자별 Gaussian blob이므로
-        threshold만으로 개별 글자를 분리할 수 있다.
-        """
-        score_text   = pred.get("score_text_raw")
+    def _hybrid_detect(self, pred: dict, binary: np.ndarray) -> List[Dict]:
+        score        = pred.get("score_text_raw")
         target_ratio = pred.get("target_ratio", 1.0)
-        if score_text is None:
+        if score is None:
             return []
 
+        scale        = 2.0 / target_ratio
         img_h, img_w = binary.shape[:2]
-        # score map 해상도 → 원본 해상도 변환 비율
-        scale = 2.0 / target_ratio
 
-        # ── 1. threshold 이진화 ───────────────────────────────────────────
-        mask = (score_text >= SCORE_THRESH).astype(np.uint8) * 255
-        n_labels, _, stats, _ = cv2.connectedComponentsWithStats(
-            mask, connectivity=8
-        )
+        # ── Step 1: Hysteresis Thresholding ───────────────────────────
+        hyst = self._hysteresis_threshold(score)
+        print(f"  [hyst]  pixels={int(hyst.sum())}")
 
-        # ── 2. 면적 필터 (잡음 파편 제거) ────────────────────────────────
-        areas = [stats[lbl, cv2.CC_STAT_AREA] for lbl in range(1, n_labels)]
-        if not areas:
+        # ── HIGH blob 크기 통계 ────────────────────────────────────────
+        high_u8 = (score >= HIGH_THRESH).astype(np.uint8)
+        n_high, _, stats_h, _ = cv2.connectedComponentsWithStats(
+            high_u8, connectivity=8)
+        if n_high < 2:
             return []
-        min_area = max(MIN_AREA_ABS, int(np.median(areas) * MIN_AREA_RATIO))
-        print(f"  [CRAFT] blobs={len(areas)}  median_area={np.median(areas):.1f}"
-              f"  min_area={min_area}  thresh={SCORE_THRESH}")
+        widths  = [stats_h[l, cv2.CC_STAT_WIDTH]  for l in range(1, n_high)]
+        heights = [stats_h[l, cv2.CC_STAT_HEIGHT] for l in range(1, n_high)]
+        med_w   = float(np.median(widths))
+        med_h   = float(np.median(heights))
+        print(f"  [blob]  n={n_high-1}  med_w={med_w:.1f}  med_h={med_h:.1f} (score map px)")
 
-        result = []
-        for lbl in range(1, n_labels):
-            if stats[lbl, cv2.CC_STAT_AREA] < min_area:
-                continue
+        # ── Step 2: 방향성 Morphology Closing ─────────────────────────
+        closed = self._directional_close(hyst, med_w, med_h)
 
-            # score map 좌표
-            sx = stats[lbl, cv2.CC_STAT_LEFT]
-            sy = stats[lbl, cv2.CC_STAT_TOP]
-            sw = stats[lbl, cv2.CC_STAT_WIDTH]
-            sh = stats[lbl, cv2.CC_STAT_HEIGHT]
+        # ── Step 3: score map 공간에서 Watershed ──────────────────────
+        labels_score = self._watershed_segment(closed, score, med_w)
+        print(f"  [wshed] {int(labels_score.max())} regions")
 
-            # ── 3. score 좌표 → 원본 이미지 좌표 ────────────────────────
-            x0 = max(0, int(sx * scale))
-            y0 = max(0, int(sy * scale))
-            x1 = min(img_w, int((sx + sw) * scale))
-            y1 = min(img_h, int((sy + sh) * scale))
-            if x1 <= x0 or y1 <= y0:
-                continue
+        # ── Step 4: binary CC를 watershed label에 배정 → tight bbox ───
+        return self._extract_chars(labels_score, binary, score, scale, img_w, img_h)
 
-            # ── 4. binary image에서 실제 잉크 픽셀 tight bbox ────────────
-            seg = binary[y0:y1, x0:x1]
-            if not np.any(seg > 0):
-                continue
-            ys = np.where(np.any(seg > 0, axis=1))[0]
-            xs = np.where(np.any(seg > 0, axis=0))[0]
-            if not len(ys) or not len(xs):
-                continue
+    # ------------------------------------------------------------------ #
+    # Step 1: Hysteresis Thresholding
+    # ------------------------------------------------------------------ #
 
-            tx = x0 + int(xs[0])
-            ty = y0 + int(ys[0])
-            tw = int(xs[-1] - xs[0]) + 1
-            th = int(ys[-1] - ys[0]) + 1
-
-            # ── 5. 회전각 계산 (minAreaRect on ink pixels) ───────────────
-            angle = self._calc_angle(binary, tx, ty, tw, th)
-
-            # ── 6. confidence = 해당 score blob의 최댓값 ─────────────────
-            score_crop = score_text[sy:sy + sh, sx:sx + sw]
-            conf = float(score_crop.max()) if score_crop.size > 0 else 0.0
-
-            result.append({
-                "x": tx, "y": ty, "w": tw, "h": th,
-                "angle": angle,
-                "conf":  conf,
-            })
-
+    def _hysteresis_threshold(self, score: np.ndarray) -> np.ndarray:
+        high_mask = (score >= HIGH_THRESH).astype(np.uint8)
+        low_mask  = (score >= LOW_THRESH).astype(np.uint8)
+        n, labels, _, _ = cv2.connectedComponentsWithStats(low_mask, connectivity=8)
+        result = np.zeros_like(low_mask)
+        for lbl in range(1, n):
+            if np.any((labels == lbl) & (high_mask > 0)):
+                result[labels == lbl] = 1
         return result
 
-    def _calc_angle(
-        self, binary: np.ndarray,
-        x: int, y: int, w: int, h: int
-    ) -> float:
+    # ------------------------------------------------------------------ #
+    # Step 2: 방향성 Morphology Closing
+    # ------------------------------------------------------------------ #
+
+    def _directional_close(
+        self, hyst: np.ndarray, med_w: float, med_h: float
+    ) -> np.ndarray:
+        m8 = (hyst > 0).astype(np.uint8) * 255
+
+        if med_w < 18:
+            ch, cv_ = 0.50, 0.50
+        elif med_w < 40:
+            ch, cv_ = 0.28, 0.28
+        else:
+            ch, cv_ = 0.18, 0.18
+
+        kw_h     = max(2, int(med_w * ch))
+        kh_h     = max(1, int(med_h * (ch * 0.40)))
+        ker_h    = cv2.getStructuringElement(cv2.MORPH_RECT, (kw_h, kh_h))
+        closed_h = cv2.morphologyEx(m8, cv2.MORPH_CLOSE, ker_h)
+
+        kw_v     = max(1, int(med_w * (cv_ * 0.40)))
+        kh_v     = max(2, int(med_h * cv_))
+        ker_v    = cv2.getStructuringElement(cv2.MORPH_RECT, (kw_v, kh_v))
+        closed_v = cv2.morphologyEx(m8, cv2.MORPH_CLOSE, ker_v)
+
+        combined = cv2.bitwise_or(closed_h, closed_v)
+        print(f"  [close] ker_h=({kw_h},{kh_h}) ker_v=({kw_v},{kh_v})")
+        return combined
+
+    # ------------------------------------------------------------------ #
+    # Step 3: score map 공간 Watershed
+    # ------------------------------------------------------------------ #
+
+    def _watershed_segment(
+        self, mask: np.ndarray, score: np.ndarray, med_w: float
+    ) -> np.ndarray:
+        binary   = (mask > 0).astype(np.uint8)
+        dist     = ndi.distance_transform_edt(binary)
+
+        if med_w < 18:
+            md_ratio = 0.90
+        elif med_w < 40:
+            md_ratio = 0.55
+        else:
+            md_ratio = 0.50
+        min_dist  = max(8, int(med_w * md_ratio))
+
+        local_max = peak_local_max(score, min_distance=min_dist, labels=binary)
+        peak_mask = np.zeros(score.shape, dtype=bool)
+        if len(local_max) > 0:
+            peak_mask[local_max[:, 0], local_max[:, 1]] = True
+
+        markers, _ = ndi.label(peak_mask)
+        print(f"  [wshed] min_dist={min_dist}  peaks={int(peak_mask.sum())}")
+        return watershed(-dist, markers, mask=binary)
+
+    # ------------------------------------------------------------------ #
+    # Step 4: binary CC → watershed label 배정 → tight bbox
+    # ------------------------------------------------------------------ #
+
+    def _extract_chars(
+        self,
+        labels_score: np.ndarray,
+        binary: np.ndarray,
+        score: np.ndarray,
+        scale: float,
+        img_w: int,
+        img_h: int,
+    ) -> List[Dict]:
         """
-        글자 영역 잉크 픽셀의 minAreaRect로 기울기 계산.
-        반환값: -45 ~ +45 도 (수평=0, 시계방향=양수)
+        binary image의 connected component를 score map watershed label에
+        투표 방식으로 배정한다.
+
+        - labels_score를 이미지 크기로 업스케일 → 각 잉크 픽셀의 watershed label 조회
+        - 각 binary CC 안에서 가장 많은 watershed label이 그 CC의 글자
+        - 같은 글자(wlbl)로 배정된 CC를 합쳐 tight bbox 계산
+
+        이점: CC 경계 = 실제 잉크 경계 → bbox가 잉크에 tight하게 붙음
         """
-        seg = binary[y:y + h, x:x + w]
-        pts = np.column_stack(np.where(seg > 0))  # (row, col)
-        if len(pts) < 5:
-            return 0.0
-        # cv2는 (x, y) 순서
-        pts_xy = pts[:, ::-1].astype(np.float32)
-        rect   = cv2.minAreaRect(pts_xy)
-        angle  = float(rect[2])
-        # minAreaRect 각도 정규화: -90~0 → -45~+45
-        if angle < -45:
-            angle += 90
-        return angle
+        # watershed label을 이미지 크기로 업스케일 (1회만)
+        labels_img = cv2.resize(
+            labels_score.astype(np.int32),
+            (img_w, img_h),
+            interpolation=cv2.INTER_NEAREST,
+        )
+
+        # binary image의 CC 분석
+        _, cc_labels, _, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+
+        # 잉크 픽셀에서 CC label과 watershed label을 동시에 추출
+        ink_mask     = binary > 0
+        ink_cc       = cc_labels[ink_mask]
+        ink_wlbl     = labels_img[ink_mask]
+
+        # watershed label이 있는 픽셀만 사용
+        valid        = ink_wlbl > 0
+        ink_cc       = ink_cc[valid]
+        ink_wlbl     = ink_wlbl[valid]
+
+        if len(ink_cc) == 0:
+            return []
+
+        # 각 CC에 대해 가장 많이 겹치는 watershed label을 찾음 (투표)
+        n_wlbl = int(labels_score.max()) + 1
+        pairs  = ink_cc.astype(np.int64) * n_wlbl + ink_wlbl.astype(np.int64)
+        unique_pairs, counts = np.unique(pairs, return_counts=True)
+        pair_cc   = (unique_pairs // n_wlbl).astype(np.int32)
+        pair_wlbl = (unique_pairs %  n_wlbl).astype(np.int32)
+
+        # CC → 최다득표 watershed label 매핑
+        cc_to_wlbl: Dict[int, int] = {}
+        for uc in np.unique(pair_cc):
+            mask     = pair_cc == uc
+            best_idx = np.argmax(counts[mask])
+            cc_to_wlbl[int(uc)] = int(pair_wlbl[mask][best_idx])
+
+        # watershed label → CC 목록으로 역인덱스
+        wlbl_to_ccs: Dict[int, List[int]] = defaultdict(list)
+        for cc, wlbl in cc_to_wlbl.items():
+            wlbl_to_ccs[wlbl].append(cc)
+
+        # 각 글자(wlbl)의 CC들을 합쳐 tight bbox 계산
+        chars: List[Dict] = []
+        score_h, score_w  = score.shape
+
+        for wlbl, cc_list in wlbl_to_ccs.items():
+            char_ink = np.isin(cc_labels, cc_list) & ink_mask
+
+            if not np.any(char_ink):
+                continue
+
+            ink_ys, ink_xs = np.where(char_ink)
+            tx = int(ink_xs.min())
+            ty = int(ink_ys.min())
+            tw = int(ink_xs.max() - ink_xs.min()) + 1
+            th = int(ink_ys.max() - ink_ys.min()) + 1
+            if tw < 4 or th < 4:
+                continue
+
+            # angle: 해당 글자 잉크 픽셀로만 계산
+            pts_xy = np.column_stack([ink_xs, ink_ys]).astype(np.float32)
+            angle  = 0.0
+            if len(pts_xy) >= 5:
+                rect  = cv2.minAreaRect(pts_xy)
+                angle = float(rect[2])
+                if angle < -45:
+                    angle += 90
+
+            # confidence: score map에서 해당 bbox 영역 평균
+            sx0  = max(0,       int(tx / scale))
+            sy0  = max(0,       int(ty / scale))
+            sx1  = min(score_w, int((tx + tw) / scale) + 1)
+            sy1  = min(score_h, int((ty + th) / scale) + 1)
+            conf = float(np.mean(score[sy0:sy1, sx0:sx1])) \
+                   if sy1 > sy0 and sx1 > sx0 else 0.0
+
+            chars.append({
+                "x": tx, "y": ty, "w": tw, "h": th,
+                "angle": angle, "conf": conf,
+            })
+
+        return chars
+
+    # ------------------------------------------------------------------ #
+    # 유틸
+    # ------------------------------------------------------------------ #
+
+    def _filter_noise(self, chars: List[Dict]) -> List[Dict]:
+        """median 면적의 MIN_AREA_RATIO 미만 blob 제거."""
+        if len(chars) < 2:
+            return chars
+        areas  = [c["w"] * c["h"] for c in chars]
+        med    = float(np.median(areas))
+        before = len(chars)
+        chars  = [c for c in chars if c["w"] * c["h"] >= med * MIN_AREA_RATIO]
+        if before != len(chars):
+            print(f"  [filter] {before - len(chars)}개 노이즈 제거 → {len(chars)}")
+        return chars
+
+    def _remove_contained(self, chars: List[Dict]) -> List[Dict]:
+        """다른 bbox 안에 75% 이상 포함된 박스 제거 (글자 내부 박스 방지)."""
+        if len(chars) < 2:
+            return chars
+        keep = []
+        for i, c in enumerate(chars):
+            contained = False
+            for j, other in enumerate(chars):
+                if i == j:
+                    continue
+                ix1 = max(c["x"], other["x"])
+                iy1 = max(c["y"], other["y"])
+                ix2 = min(c["x"] + c["w"], other["x"] + other["w"])
+                iy2 = min(c["y"] + c["h"], other["y"] + other["h"])
+                if ix2 > ix1 and iy2 > iy1:
+                    inter = (ix2 - ix1) * (iy2 - iy1)
+                    area  = c["w"] * c["h"]
+                    if inter / area > 0.75:
+                        contained = True
+                        break
+            if not contained:
+                keep.append(c)
+        removed = len(chars) - len(keep)
+        if removed:
+            print(f"  [contain] {removed}개 내부 박스 제거 → {len(keep)}")
+        return keep
 
     def _sort_reading_order(
         self, chars: List[Dict], img_shape: Tuple[int, int]
     ) -> List[Dict]:
-        """
-        읽기 순서 정렬: 위→아래(행), 같은 행 내 왼쪽→오른쪽.
-        행 판정: 두 글자 중심 y 차이가 작은 쪽 높이의 60% 이내면 같은 행.
-        """
+        """위→아래(행), 같은 행 내 왼쪽→오른쪽."""
         if not chars:
             return chars
-
-        # 중심 y 기준 정렬 후 행 그룹화
         sorted_c = sorted(chars, key=lambda c: c["y"] + c["h"] / 2.0)
         rows: List[List[Dict]] = []
-
         for c in sorted_c:
-            cy = c["y"] + c["h"] / 2.0
+            cy     = c["y"] + c["h"] / 2.0
             placed = False
             for row in rows:
                 row_cy = np.mean([r["y"] + r["h"] / 2.0 for r in row])
@@ -234,11 +352,27 @@ class CraftDetector:
                     break
             if not placed:
                 rows.append([c])
-
         result = []
         for row in rows:
             result.extend(sorted(row, key=lambda c: c["x"]))
         return result
+
+    def _format_output(self, chars: List[Dict]) -> List[Dict]:
+        """AI_MODEL_INTERFACE.md SFR-004I 스펙 형식으로 변환."""
+        return [
+            {
+                "char_id": f"char_{i}",
+                "bounding_box": {
+                    "x":      float(c["x"]),
+                    "y":      float(c["y"]),
+                    "width":  float(c["w"]),
+                    "height": float(c["h"]),
+                },
+                "angle":      float(c["angle"]),
+                "confidence": float(c["conf"]),
+            }
+            for i, c in enumerate(chars)
+        ]
 
 
 # ------------------------------------------------------------------ #
@@ -259,15 +393,12 @@ def craft_detect_chars(
     binary_image_list : 2D list (rows × cols), 값 0 또는 255
     image_width       : 이미지 너비 (px)
     image_height      : 이미지 높이 (px)
-
-    Returns
-    -------
-    List[Dict]  char_id / bounding_box / center / angle / confidence
     """
     image = np.array(binary_image_list, dtype=np.uint8)
     if image.shape != (image_height, image_width):
         image = cv2.resize(
-            image, (image_width, image_height), interpolation=cv2.INTER_NEAREST
+            image, (image_width, image_height),
+            interpolation=cv2.INTER_NEAREST,
         )
     detector = CraftDetector(cuda=cuda)
     result   = detector.detect(image)
