@@ -81,80 +81,47 @@ def generate_score_maps(
 
 
 # ── AI Hub JSON 파싱 ─────────────────────────────────────────────────────
+import json
 
 def parse_aihub_json(json_path: str) -> list:
     """
-    AI Hub 손글씨 OCR JSON → 음절 bbox 목록
+    AI Hub 손글씨 OCR JSON (실제 포맷) → bbox polygon 목록
+
+    실제 포맷:
+    {
+      "Images": { "identifier": "IMG_OCR_53_...", "width": ..., "height": ... },
+      "bbox": [
+        { "id": 1, "data": "안녕", "x": [x1,x2,x3,x4], "y": [y1,y2,y3,y4] },
+        ...
+      ]
+    }
+
+    x/y 배열 순서: [좌상, 좌하, 우상, 우하]
+    → CRAFT polygon (시계방향 좌상 기준): [좌상, 우상, 우하, 좌하]
 
     Returns
     -------
-    List[np.ndarray (4,2)]  — 이미지 좌표 (x, y) 순서
+    List[np.ndarray (4,2)]  — 이미지 좌표 (x, y) 순서, 시계방향
     """
     with open(json_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
 
     boxes = []
 
-    # 포맷 탐지 (AI Hub는 버전마다 구조가 다를 수 있음)
-    annotations = (
-        data.get('annotations') or
-        data.get('annotation') or
-        []
-    )
-
-    if isinstance(annotations, dict):
-        annotations = [annotations]
-
-    for ann in annotations:
-        # 음절 단위 항목 추출
-        syllables = (
-            ann.get('syllables') or
-            ann.get('chars') or
-            ann.get('bbox_list') or
-            []
-        )
-
-        # 음절 목록이 없으면 ann 자체가 bbox일 수도 있음
-        if not syllables and 'points' in ann:
-            syllables = [ann]
-
-        for syl in syllables:
-            pts = _extract_points(syl)
-            if pts is not None:
-                boxes.append(pts)
+    for item in data.get('bbox', []):
+        xs = item.get('x', [])
+        ys = item.get('y', [])
+        if len(xs) != 4 or len(ys) != 4:
+            continue
+        # x: [좌상x, 좌하x, 우상x, 우하x]
+        # y: [좌상y, 좌하y, 우상y, 우하y]
+        # → 시계방향: 좌상(0), 우상(2), 우하(3), 좌하(1)
+        pts = np.array([
+            [xs[0], ys[0]],   # 좌상
+            [xs[2], ys[2]],   # 우상
+            [xs[3], ys[3]],   # 우하
+            [xs[1], ys[1]],   # 좌하
+        ], dtype=np.float32)
+        boxes.append(pts)
 
     return boxes
-
-
-def _extract_points(item: dict) -> 'np.ndarray | None':
-    """dict에서 4점 polygon (4,2) 추출. 다양한 key 이름 대응."""
-    import numpy as np
-
-    # 4점 리스트 형태: [[x,y],[x,y],[x,y],[x,y]]
-    for key in ('points', 'polygon', 'vertices', 'coords'):
-        val = item.get(key)
-        if val is not None:
-            try:
-                pts = np.array(val, dtype=np.float32)
-                if pts.shape == (4, 2):
-                    return pts
-                if pts.shape == (8,):           # [x1,y1,...,x4,y4]
-                    return pts.reshape(4, 2)
-            except Exception:
-                continue
-
-    # bbox [x, y, w, h] 형태
-    for key in ('bbox', 'bounding_box'):
-        val = item.get(key)
-        if val is not None:
-            try:
-                x, y, w, h = float(val[0]), float(val[1]), float(val[2]), float(val[3])
-                return np.array([[x, y], [x+w, y], [x+w, y+h], [x, y+h]], dtype=np.float32)
-            except Exception:
-                continue
-
-    return None
-
-
-# json import는 파싱 함수에서 필요
-import json

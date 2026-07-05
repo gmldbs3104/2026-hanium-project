@@ -3,26 +3,23 @@ CRAFT Fine-tuning on AI Hub Korean Handwriting OCR Dataset
 Google Colab (T4/A100 GPU) 실행용
 
 사용법:
-  1. Google Colab에 이 파일 업로드 (또는 Drive에 저장)
-  2. AI Hub 데이터를 Drive에 압축 해제: /content/drive/MyDrive/aihub_handwriting/
-       ├── images/  (.png)
-       └── labels/  (.json)
-  3. 셀 단위로 순서대로 실행
+  1. Google Drive에 다음 구조로 데이터 업로드:
+       MyDrive/aihub_handwriting/
+         ├── 원천데이터/   (PNG, 하위 폴더 포함)
+         ├── 라벨링데이터/ (JSON, 하위 폴더 포함)
+         └── matched_pairs.json  (ai/training/matched_pairs.json 업로드)
 
-데이터 구조 예시:
-  aihub_handwriting/
-    ├── images/TRAIN_00001.png
-    ├── images/TRAIN_00002.png
-    └── labels/TRAIN_00001.json
-    └── labels/TRAIN_00002.json
+  2. 학습 스크립트 3개 업로드 (같은 폴더):
+       craft_model.py, gt_generator.py, colab_finetune.py
+
+  3. Colab에서 셀 단위로 순서대로 실행
 """
 
 # ======================================================================
 # [셀 1] 패키지 설치 (Colab에서 한 번만 실행)
 # ======================================================================
 # !pip install -q torch torchvision --index-url https://download.pytorch.org/whl/cu118
-# !pip install -q opencv-python-headless scipy scikit-image tqdm
-# !pip install -q craft-text-detector   # 사전학습 가중치 다운로드용
+# !pip install -q opencv-python-headless scipy tqdm
 
 # ======================================================================
 # [셀 2] Google Drive 마운트
@@ -36,10 +33,12 @@ Google Colab (T4/A100 GPU) 실행용
 import os
 
 CFG = {
-    # AI Hub 데이터 경로
-    "data_root"   : "/content/drive/MyDrive/aihub_handwriting",
-    "img_dir"     : "images",
-    "label_dir"   : "labels",
+    # matched_pairs.json 경로 (stem 목록 + 원본 Windows 경로 포함)
+    "manifest_path"    : "/content/drive/MyDrive/aihub_handwriting/matched_pairs.json",
+
+    # Colab에서 실제 데이터가 있는 경로 (하위 폴더 재귀 탐색)
+    "colab_img_root"   : "/content/drive/MyDrive/aihub_handwriting/원천데이터",
+    "colab_label_root" : "/content/drive/MyDrive/aihub_handwriting/라벨링데이터",
 
     # 학습 설정
     "img_size"    : 768,        # 입력 이미지 크기 (장변 기준 리사이즈)
@@ -76,7 +75,7 @@ if not os.path.exists(CFG["pretrained"]):
 # ======================================================================
 # [셀 5] 임포트
 # ======================================================================
-import sys, glob, random, math
+import sys, glob, json, random, math
 import cv2
 import numpy as np
 import torch
@@ -100,31 +99,42 @@ print("Device:", DEVICE)
 # ======================================================================
 
 class HandwritingDataset(Dataset):
-    """AI Hub 손글씨 OCR 데이터셋."""
+    """AI Hub 손글씨 OCR 데이터셋 (matched_pairs.json 기반)."""
 
-    def __init__(self, data_root, img_dir, label_dir, img_size=768,
+    def __init__(self, manifest_path, img_root, label_root, img_size=768,
                  max_samples=None, augment=True):
-        self.img_size  = img_size
-        self.augment   = augment
+        self.img_size = img_size
+        self.augment  = augment
 
-        img_root   = os.path.join(data_root, img_dir)
-        label_root = os.path.join(data_root, label_dir)
+        # manifest에서 stem 목록 추출 (Windows 절대경로는 무시, stem만 사용)
+        with open(manifest_path, 'r', encoding='utf-8') as f:
+            manifest = json.load(f)
+        valid_stems = {entry['stem'] for entry in manifest}
+        print(f"  manifest stems: {len(valid_stems)}")
 
-        # 이미지-라벨 페어 수집 (.png ↔ .json)
-        img_paths = sorted(glob.glob(os.path.join(img_root, "**", "*.png"), recursive=True))
-        pairs = []
-        for ip in img_paths:
-            stem  = os.path.splitext(os.path.basename(ip))[0]
-            lp    = os.path.join(label_root, stem + ".json")
-            if os.path.exists(lp):
-                pairs.append((ip, lp))
+        # Colab 경로에서 stem으로 파일 찾기
+        img_map = {}
+        for p in glob.glob(os.path.join(img_root, '**', '*.png'), recursive=True):
+            stem = os.path.splitext(os.path.basename(p))[0]
+            if stem in valid_stems:
+                img_map[stem] = p
+
+        label_map = {}
+        for p in glob.glob(os.path.join(label_root, '**', '*.json'), recursive=True):
+            stem = os.path.splitext(os.path.basename(p))[0]
+            if stem in valid_stems:
+                label_map[stem] = p
+
+        matched_stems = sorted(img_map.keys() & label_map.keys())
+        pairs = [(img_map[s], label_map[s]) for s in matched_stems]
 
         if max_samples:
             random.shuffle(pairs)
             pairs = pairs[:max_samples]
 
         self.pairs = pairs
-        print(f"  데이터셋: {len(self.pairs)}쌍 로드됨")
+        print(f"  데이터셋: {len(self.pairs)}쌍 로드됨 "
+              f"(img_found={len(img_map)}, label_found={len(label_map)})")
 
     def __len__(self):
         return len(self.pairs)
@@ -295,12 +305,12 @@ def validate(model, loader, criterion, device):
 def main():
     # ── 데이터 ────────────────────────────────────────────────────────
     all_pairs = HandwritingDataset(
-        data_root  = CFG["data_root"],
-        img_dir    = CFG["img_dir"],
-        label_dir  = CFG["label_dir"],
-        img_size   = CFG["img_size"],
-        max_samples= CFG["max_samples"],
-        augment    = True,
+        manifest_path = CFG["manifest_path"],
+        img_root      = CFG["colab_img_root"],
+        label_root    = CFG["colab_label_root"],
+        img_size      = CFG["img_size"],
+        max_samples   = CFG["max_samples"],
+        augment       = True,
     )
 
     val_size  = max(50, int(len(all_pairs) * 0.1))
