@@ -13,6 +13,10 @@ Google Colab (T4/A100 GPU) 실행용
        craft_model.py, gt_generator.py, colab_finetune.py
 
   3. Colab에서 셀 단위로 순서대로 실행
+
+실행 전략:
+  1차 실행: 아래 CFG 그대로 → 3,000샘플 × 15 epoch (약 4~5시간)
+  2차 실행: 아래 RESUME_CFG 주석 해제 → 나머지 데이터로 이어서 학습
 """
 
 # ======================================================================
@@ -33,7 +37,9 @@ Google Colab (T4/A100 GPU) 실행용
 import os
 
 # ──────────────────────────────────────────────────────────────────────
-# 1차 학습 (처음 실행 — 2~3시간)
+# 1차 실행 (처음 시작 — 약 4~5시간)
+# manifest를 stem 순 정렬 후 [0:5000] 사용 → 2차와 비중복
+# 총 시간: 캐시 복사 ~65분 + 학습 ~3시간
 # ──────────────────────────────────────────────────────────────────────
 CFG = {
     # Drive 경로 (원본 데이터)
@@ -51,37 +57,37 @@ CFG = {
     "lr"          : 1e-4,
     "epochs"      : 10,
     "warmup_ep"   : 2,
-    "max_samples" : 2_000,
+    "max_samples" : 5_000,    # stem 정렬 후 [sample_start : sample_start+max_samples]
+    "sample_start" : 0,       # 1차: 0~4999번 데이터
 
     # 저장
     "save_dir"    : "/content/drive/MyDrive/craft_finetuned",
     "save_every"  : 2,
 
     "pretrained"   : "/content/craft_mlt_25k.pth",
-    "resume_from"  : None,   # 1차: None / 2차: 아래 RUN2_CFG 사용
+    "resume_from"  : None,
 }
-
-# ──────────────────────────────────────────────────────────────────────
-# 2차 학습 (1차 완료 후 — 5시간)
-# 아래 주석을 해제하고 CFG = RUN2_CFG 로 교체해서 실행
-# ──────────────────────────────────────────────────────────────────────
-# RUN2_CFG = {
-#     **{k: v for k, v in CFG.items()},   # 1차 설정 그대로 상속
-#
-#     # 재개할 체크포인트 (1차 학습의 최적 가중치)
-#     "resume_from"  : "/content/drive/MyDrive/craft_finetuned/craft_best.pth",
-#
-#     # 추가 학습 설정
-#     "epochs"       : 25,       # 추가로 25 epoch (총 35 epoch)
-#     "max_samples"  : 3_000,    # 데이터 조금 더 (시간 여유)
-#     "lr"           : 3e-5,     # 낮은 LR로 정밀 조정
-#     "warmup_ep"    : 0,        # 재개 시 warmup 불필요
-#     "save_every"   : 3,
-# }
-# CFG = RUN2_CFG   # ← 이 줄을 활성화
 
 os.makedirs(CFG["save_dir"],  exist_ok=True)
 os.makedirs(CFG["cache_dir"], exist_ok=True)
+
+# ──────────────────────────────────────────────────────────────────────
+# 2차 실행 (시간 생길 때 — 나머지 전체 ~10,314장으로 추가 학습)
+# 1차와 완전 비중복 (stem 정렬 기준 5000번 이후 전부)
+# 총 시간: 캐시 복사 ~2시간 + 학습 ~3시간 = 약 5시간
+# ──────────────────────────────────────────────────────────────────────
+# RESUME_CFG = {
+#     **{k: v for k, v in CFG.items()},
+#
+#     "resume_from"   : "/content/drive/MyDrive/craft_finetuned/craft_best.pth",
+#     "sample_start"  : 5_000,   # 1차(0~4999) 이후 나머지 전부 (~10,314장)
+#     "max_samples"   : None,    # None = sample_start부터 끝까지 전부 사용
+#     "epochs"        : 5,       # 10,314장 기준 epoch당 ~35분 → 5 epoch ≈ 3시간
+#     "lr"            : 3e-5,
+#     "warmup_ep"     : 0,
+#     "save_every"    : 1,       # epoch당 저장 (epoch이 길어서)
+# }
+# CFG = RESUME_CFG   # ← 이 줄 활성화
 
 # ======================================================================
 # [셀 4] 사전학습 가중치 확인
@@ -144,17 +150,22 @@ def setup_local_cache(cfg: dict) -> tuple:
     os.makedirs(local_img_dir,   exist_ok=True)
     os.makedirs(local_label_dir, exist_ok=True)
 
-    # 이미 복사된 경우 건너뜀
+    # 이미 복사된 경우 건너뜀 (subset 계산 전이라 여기서 max_samples만 확인)
     existing = len(glob.glob(os.path.join(local_img_dir, "*.png")))
-    if existing >= max_samples:
-        print(f"  로컬 캐시 이미 존재 ({existing}개) — 복사 생략")
+    sample_start = cfg.get("sample_start", 0)
+    if max_samples is not None and existing >= max_samples:
+        print(f"  로컬 캐시 이미 존재 ({existing}개, start={sample_start}) — 복사 생략")
         return local_img_dir, local_label_dir
 
-    # manifest stem 목록
+    # manifest stem 목록 — stem 정렬로 실행마다 동일한 순서 보장
     with open(manifest_path, encoding="utf-8") as f:
         manifest = json.load(f)
-    random.shuffle(manifest)
-    subset = manifest[:max_samples]
+    manifest.sort(key=lambda e: e["stem"])
+    sample_start = cfg.get("sample_start", 0)
+    if max_samples is not None:
+        subset = manifest[sample_start : sample_start + max_samples]
+    else:
+        subset = manifest[sample_start:]   # sample_start부터 끝까지 전부
 
     # Drive에서 stem 기반으로 파일 탐색
     print(f"  Drive에서 stem 인덱스 구축 중...")
@@ -165,7 +176,7 @@ def setup_local_cache(cfg: dict) -> tuple:
         label_map[os.path.splitext(os.path.basename(p))[0]] = p
 
     ok = err = 0
-    print(f"  {max_samples}개 로컬 복사 시작...")
+    print(f"  [{sample_start}~{sample_start+len(subset)-1}번] {len(subset)}개 로컬 복사 시작...")
     for entry in tqdm(subset, desc="캐시 복사"):
         stem = entry["stem"]
         if stem not in img_map or stem not in label_map:

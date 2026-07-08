@@ -164,7 +164,7 @@ class ImagePreprocessor:
             return 0.0
         angles = []
         for line in lines:
-            x1, y1, x2, y2 = line[0]
+            x1, y1, x2, y2 = line.flatten()[:4]
             if x2 - x1 == 0:
                 continue
             angle = math.degrees(math.atan2(y2 - y1, x2 - x1))

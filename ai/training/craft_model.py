@@ -32,11 +32,11 @@ class CRAFT(nn.Module):
         vgg = vgg16_bn(pretrained=pretrained_backbone)
         features = list(vgg.features.children())
 
-        self.slice1 = nn.Sequential(*features[:13])   # conv1~2  → 64ch
-        self.slice2 = nn.Sequential(*features[13:20]) # conv3    → 128ch
-        self.slice3 = nn.Sequential(*features[20:27]) # conv4    → 256ch
-        self.slice4 = nn.Sequential(*features[27:34]) # conv5    → 512ch
-        self.slice5 = nn.Sequential(*features[34:],   # conv5 pool → 512ch
+        self.slice1 = nn.Sequential(*features[:13])   # → 128ch (block2 relu, before pool)
+        self.slice2 = nn.Sequential(*features[13:20]) # → 256ch (block3 2nd relu, before 3rd conv)
+        self.slice3 = nn.Sequential(*features[20:27]) # → 512ch (block4 1st relu, after pool)
+        self.slice4 = nn.Sequential(*features[27:34]) # → 512ch (block4 last + pool)
+        self.slice5 = nn.Sequential(*features[34:],   # → 1024ch
                                     nn.MaxPool2d(3, stride=1, padding=1),
                                     nn.Conv2d(512, 1024, 3, padding=6, dilation=6),
                                     nn.Conv2d(1024, 1024, 1))
@@ -45,11 +45,11 @@ class CRAFT(nn.Module):
             for p in list(self.slice1.parameters()) + list(self.slice2.parameters()):
                 p.requires_grad = False
 
-        # 업샘플링 헤드
+        # 업샘플링 헤드 — skip 채널: s4=512, s3=512, s2=256, s1=128
         self.up1 = DoubleConv(1024 + 512, 512, 256)
-        self.up2 = DoubleConv(256  + 256, 256, 128)
-        self.up3 = DoubleConv(128  + 128, 128,  64)
-        self.up4 = DoubleConv(64   +  64,  64,  32)
+        self.up2 = DoubleConv(256  + 512, 256, 128)
+        self.up3 = DoubleConv(128  + 256, 128,  64)
+        self.up4 = DoubleConv(64   + 128,  64,  32)
 
         # 출력: region score + affinity score
         self.out = nn.Sequential(

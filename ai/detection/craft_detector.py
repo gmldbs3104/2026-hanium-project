@@ -12,11 +12,19 @@ SFR-004I: CRAFT 기본 출력 기반 글자 탐지
 반환: AI_MODEL_INTERFACE.md SFR-004I 스펙 준수
   char_id, bounding_box(x/y/width/height), angle, confidence
 """
+import logging
+import os
 import cv2
 import numpy as np
 from typing import List, Dict, Tuple, Optional
 
 from craft_text_detector import Craft
+
+logger = logging.getLogger(__name__)
+
+_FINETUNED_WEIGHT = os.path.join(
+    os.path.dirname(__file__), "..", "models", "craft_finetuned_raw.pth"
+)
 
 
 class CraftDetector:
@@ -30,6 +38,16 @@ class CraftDetector:
         low_text: float = 0.4,
         use_dist_transform: bool = True,
     ):
+        weight_path = os.path.normpath(_FINETUNED_WEIGHT)
+        if os.path.exists(weight_path):
+            craft_weight = weight_path
+        else:
+            logger.warning(
+                "파인튜닝 가중치를 찾을 수 없습니다: %s — 기본 pretrained 가중치로 폴백합니다.",
+                weight_path,
+            )
+            craft_weight = None
+
         self._craft = Craft(
             output_dir=None,
             rectify=True,
@@ -41,6 +59,7 @@ class CraftDetector:
             long_size=long_size,
             refiner=False,
             crop_type="box",
+            weight_path_craft_net=craft_weight,
         )
         self._use_dist = use_dist_transform
 

@@ -5,3 +5,4 @@ __pycache__/
 debug_output/
 *.egg-info/
 .env
+models/*.pth
