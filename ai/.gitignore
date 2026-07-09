@@ -6,3 +6,6 @@ debug_output/
 *.egg-info/
 .env
 models/*.pth
+models/*.bak
+training/kaggle_upload/
+training/kaggle_upload.zip

@@ -39,29 +39,61 @@ class CraftDetector:
         use_dist_transform: bool = True,
     ):
         weight_path = os.path.normpath(_FINETUNED_WEIGHT)
-        if os.path.exists(weight_path):
-            craft_weight = weight_path
-        else:
+        craft_weight = weight_path if os.path.exists(weight_path) else None
+        if craft_weight is None:
             logger.warning(
                 "파인튜닝 가중치를 찾을 수 없습니다: %s — 기본 pretrained 가중치로 폴백합니다.",
                 weight_path,
             )
-            craft_weight = None
 
-        self._craft = Craft(
-            output_dir=None,
-            rectify=True,
-            export_extra=False,
-            text_threshold=text_threshold,
-            link_threshold=link_threshold,
-            low_text=low_text,
-            cuda=cuda,
-            long_size=long_size,
-            refiner=False,
-            crop_type="box",
-            weight_path_craft_net=craft_weight,
+        self._craft = self._load_craft(
+            craft_weight, text_threshold, link_threshold, low_text, cuda, long_size,
         )
         self._use_dist = use_dist_transform
+
+    @staticmethod
+    def _load_craft(craft_weight, text_threshold, link_threshold, low_text, cuda, long_size) -> Craft:
+        """
+        지정된 가중치로 Craft를 생성한다. 체크포인트가 현재 CraftNet 구조와
+        호환되지 않는 경우(state_dict 키 불일치 등) 조용히 죽는 대신 pretrained로
+        폴백한다 — 학습/추론 아키텍처가 어긋난 옛 체크포인트가 남아 있어도
+        서비스 자체는 항상 뜨도록 하기 위함.
+        """
+        try:
+            return Craft(
+                output_dir=None,
+                rectify=True,
+                export_extra=False,
+                text_threshold=text_threshold,
+                link_threshold=link_threshold,
+                low_text=low_text,
+                cuda=cuda,
+                long_size=long_size,
+                refiner=False,
+                crop_type="box",
+                weight_path_craft_net=craft_weight,
+            )
+        except Exception:
+            if craft_weight is None:
+                raise
+            logger.exception(
+                "파인튜닝 가중치 로드 실패(%s) — 현재 CraftNet 구조와 호환되지 않는 "
+                "체크포인트일 수 있습니다. pretrained 가중치로 폴백합니다.",
+                craft_weight,
+            )
+            return Craft(
+                output_dir=None,
+                rectify=True,
+                export_extra=False,
+                text_threshold=text_threshold,
+                link_threshold=link_threshold,
+                low_text=low_text,
+                cuda=cuda,
+                long_size=long_size,
+                refiner=False,
+                crop_type="box",
+                weight_path_craft_net=None,
+            )
 
     # ------------------------------------------------------------------ #
     # 공개 API

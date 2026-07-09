@@ -241,14 +241,21 @@ class HandwritingDataset(Dataset):
         img_path, lbl_path = self.pairs[idx]
 
         # 이미지 로드
-        img = cv2.imread(img_path)
+        img = cv2.imread(img_path)  # BGR
         if img is None:
             # 손상 파일 → 더미 반환
             return self.__getitem__((idx + 1) % len(self))
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
         # 라벨 파싱
         boxes = parse_aihub_json(lbl_path)  # List[ndarray (4,2)]
+
+        # 실제 서비스 추론 경로(image_preprocessor.py + craft_detector.py)와 동일하게
+        # 이진화 -> deskew -> distance transform을 거친 뒤 학습. 원본 컬러 사진을 그대로
+        # 학습에 쓰면 모델이 실제 서비스 입력 분포를 한 번도 못 보게 되어 탐지가 거의
+        # 안 나온다 (같은 이미지로 실측: 원본 입력 65박스 vs 이진화+distance-transform
+        # 입력 3박스).
+        binary, boxes = self._binarize_and_deskew(img, boxes)
+        img = self._to_dist_transform_rgb(binary)
 
         # 리사이즈 (장변 = img_size, 비율 유지, 32 배수 패딩)
         img, boxes, ratio = self._resize(img, boxes)
@@ -269,6 +276,63 @@ class HandwritingDataset(Dataset):
         affinity_t = torch.from_numpy(affinity_map).unsqueeze(0)
 
         return img_t, region_t, affinity_t
+
+    # ------------------------------------------------------------------
+    # image_preprocessor.py / craft_detector.py와 동일한 전처리 재현
+    # ------------------------------------------------------------------
+
+    def _binarize_and_deskew(self, bgr, boxes):
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        binary = cv2.adaptiveThreshold(
+            blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV,
+            blockSize=15, C=5,
+        )
+
+        angle = self._detect_skew_angle(binary)
+        if abs(angle) < 0.5 or abs(angle) > 45.0:
+            return binary, boxes
+
+        h, w = binary.shape[:2]
+        center = (w / 2.0, h / 2.0)
+        matrix = cv2.getRotationMatrix2D(center, -angle, 1.0)
+        cos, sin = abs(matrix[0, 0]), abs(matrix[0, 1])
+        new_w = int(h * sin + w * cos)
+        new_h = int(h * cos + w * sin)
+        matrix[0, 2] += (new_w / 2.0) - center[0]
+        matrix[1, 2] += (new_h / 2.0) - center[1]
+        rotated = cv2.warpAffine(binary, matrix, (new_w, new_h), borderValue=0)
+
+        new_boxes = []
+        for box in boxes:
+            pts = np.column_stack([box, np.ones(len(box), dtype=np.float32)])
+            new_boxes.append((pts @ matrix.T).astype(np.float32))
+        return rotated, new_boxes
+
+    def _detect_skew_angle(self, binary):
+        h, w = binary.shape[:2]
+        edges = cv2.Canny(binary, 50, 150, apertureSize=3)
+        min_len = max(100, int(w * 0.15))
+        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 80,
+                                minLineLength=min_len, maxLineGap=10)
+        if lines is None:
+            return 0.0
+        angles = []
+        for line in lines:
+            x1, y1, x2, y2 = line.flatten()[:4]
+            if x2 - x1 == 0:
+                continue
+            angle = math.degrees(math.atan2(y2 - y1, x2 - x1))
+            if -6.0 < angle < 6.0:
+                angles.append(angle)
+        if len(angles) < 5:
+            return 0.0
+        return float(np.median(angles))
+
+    def _to_dist_transform_rgb(self, binary):
+        dist = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
+        dist_norm = cv2.normalize(dist, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+        return cv2.cvtColor(dist_norm, cv2.COLOR_GRAY2RGB)
 
     def _resize(self, img, boxes):
         h, w = img.shape[:2]
@@ -309,20 +373,26 @@ class HandwritingDataset(Dataset):
 
 
 def collate_fn(batch):
+    """
+    배치 내 최대 크기로 패딩.
+    주의: region/affinity map은 원본 이미지의 1/2 해상도이므로, 이미지와 같은
+    (max_h, max_w)로 패딩하면 절반 크기 GT를 억지로 2배로 늘려 패딩하는 셈이 되어
+    예측(원래부터 1/2 해상도)과 정렬이 완전히 어긋난다. 반드시 max_h/2, max_w/2로
+    따로 패딩해야 한다.
+    """
     imgs, regions, affinities = zip(*batch)
-    # 배치 내 최대 크기로 패딩
     max_h = max(x.shape[1] for x in imgs)
     max_w = max(x.shape[2] for x in imgs)
     max_h = math.ceil(max_h / 32) * 32
     max_w = math.ceil(max_w / 32) * 32
 
-    def pad(t, val=0.0):
+    def pad(t, target_h, target_w, val=0.0):
         _, h, w = t.shape
-        return F.pad(t, (0, max_w - w, 0, max_h - h), value=val)
+        return F.pad(t, (0, target_w - w, 0, target_h - h), value=val)
 
-    imgs       = torch.stack([pad(x) for x in imgs])
-    regions    = torch.stack([pad(x) for x in regions])
-    affinities = torch.stack([pad(x) for x in affinities])
+    imgs       = torch.stack([pad(x, max_h, max_w) for x in imgs])
+    regions    = torch.stack([pad(x, max_h // 2, max_w // 2) for x in regions])
+    affinities = torch.stack([pad(x, max_h // 2, max_w // 2) for x in affinities])
     return imgs, regions, affinities
 
 # ======================================================================
@@ -331,12 +401,38 @@ def collate_fn(batch):
 
 class CRAFTLoss(nn.Module):
     """
-    Region + Affinity MSE Loss.
-    신뢰도 마스크(confidence_mask)로 애매한 영역(라벨 없는 부분) 가중치 감소.
+    OHEM(Online Hard Example Mining) 적용 Region + Affinity MSE Loss.
+
+    GT의 99%+가 배경(0)인 극단적 클래스 불균형 때문에 순수 MSE는 "이미지 내용과
+    무관하게 전부 0에 가까운 값 출력"만으로 loss를 충분히 낮출 수 있어 학습이
+    collapse한다(실제로 40 epoch 학습 결과 전 픽셀이 상수값으로 수렴하는 현상 확인됨).
+    OHEM으로 양성 픽셀 전부 + 가장 틀린 음성 픽셀 top-k만 loss에 반영해 이를 방지한다.
     """
-    def __init__(self, lambda_affinity: float = 1.0):
+    def __init__(self, lambda_affinity: float = 1.0,
+                 ohem_ratio: int = 3, ohem_min_neg: int = 100):
         super().__init__()
         self.lambda_a = lambda_affinity
+        self.ohem_ratio = ohem_ratio
+        self.ohem_min_neg = ohem_min_neg
+
+    def _ohem_mse(self, pred, gt):
+        loss = (pred - gt) ** 2
+        total = 0.0
+        B = pred.shape[0]
+        for b in range(B):
+            gt_b, loss_b = gt[b], loss[b]
+            pos_mask = gt_b > 0.1
+            num_pos  = int(pos_mask.sum().item())
+            pos_loss = loss_b[pos_mask]
+
+            neg_loss = loss_b[~pos_mask]
+            k = min(max(self.ohem_min_neg, self.ohem_ratio * max(num_pos, 1)), neg_loss.numel())
+            hard_neg_loss, _ = torch.topk(neg_loss, k)
+
+            sample_loss = (torch.cat([pos_loss, hard_neg_loss]).mean()
+                           if num_pos > 0 else hard_neg_loss.mean())
+            total = total + sample_loss
+        return total / B
 
     def forward(self, pred_region, pred_affinity, gt_region, gt_affinity):
         # 예측 크기를 GT 크기에 맞춤 (GT는 이미 1/2)
@@ -351,8 +447,8 @@ class CRAFTLoss(nn.Module):
         gt_region   = gt_region.squeeze(1)
         gt_affinity = gt_affinity.squeeze(1)
 
-        loss_r = F.mse_loss(pred_region,   gt_region)
-        loss_a = F.mse_loss(pred_affinity, gt_affinity)
+        loss_r = self._ohem_mse(pred_region,   gt_region)
+        loss_a = self._ohem_mse(pred_affinity, gt_affinity)
         return loss_r + self.lambda_a * loss_a, loss_r.item(), loss_a.item()
 
 # ======================================================================
@@ -534,31 +630,22 @@ def main():
 # [셀 11] 학습된 가중치 → craft_detector.py 교체 방법
 # ======================================================================
 """
-파인튜닝 완료 후 프로젝트에 적용하는 방법:
+craft_model.py의 CRAFT는 craft_text_detector 패키지의 공식 CraftNet과
+state_dict 키가 100% 동일하도록 작성되어 있음 (basenet.slice1~5, upconv1~4.conv.*,
+conv_cls.*, sigmoid 없음). 따라서 별도 통합 코드 없이 체크포인트 파일만 옮기면 됨:
 
-1. craft_best.pth를 프로젝트 ai/models/ 에 복사
+1. craft_best.pth(또는 craft_ep*.pth)를 프로젝트 ai/models/craft_finetuned_raw.pth로 복사
+   ※ 이 스크립트가 저장하는 체크포인트는 {"model_state": ..., ...} 딕셔너리이므로
+     model_state만 꺼내서 저장해야 함:
+       ckpt = torch.load('craft_best.pth', map_location='cpu')
+       torch.save(ckpt['model_state'], 'craft_finetuned_raw.pth')
 
-2. ai/detection/craft_detector.py의 CraftDetector.__init__에서:
+2. ai/detection/craft_detector.py는 이미 ai/models/craft_finetuned_raw.pth가 있으면
+   자동으로 로드하도록 되어 있음 (Craft(weight_path_craft_net=...)) — 코드 수정 불필요.
 
-    # 기존
-    self._craft = Craft(...)
-
-    # 교체: 파인튜닝 가중치 로드
-    from training.craft_model import CRAFT
-    self._model = CRAFT(pretrained_backbone=False, freeze_backbone=False)
-    ckpt = torch.load('models/craft_best.pth', map_location='cpu')
-    self._model.load_state_dict(ckpt['model_state'])
-    self._model.eval()
-
-3. _craft_prediction()도 직접 추론으로 교체:
-
-    def _craft_prediction(self, binary):
-        dist = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
-        dist_norm = cv2.normalize(dist, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
-        img_t = preprocess(dist_norm)          # normalize 등
-        with torch.no_grad():
-            region, affinity = self._model(img_t)
-        # boxes 생성 → 기존 _process_boxes 로직 재사용
+3. 로드 확인: python -c "from detection.craft_detector import CraftDetector; CraftDetector()"
+   가 에러 없이 끝나고, ai/test_images/의 7개 이미지 재탐지 결과 및
+   ai/debug_gt.py의 score map 통계(collapse 여부)를 확인할 것.
 """
 
 if __name__ == '__main__':
