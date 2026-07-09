@@ -42,6 +42,10 @@ SPACING_SCORE_MAX_DEV = 1.0  # 비율 편차 1.0(=평균너비만큼 벗어남) 
 # 위치만으로는 헷갈리기 쉬워서, 모양(길쭉한 방향)도 같이 비교해 구분한다.
 SHAPE_WEIGHT = 1.5
 
+# 목표 글자와 완전히 다른 걸 썼는지 판단하는 임계값 (둘 중 하나라도 넘으면 "다른 글자로 보임")
+MATCH_QUALITY_THRESHOLD = 0.6        # 매칭된 획들의 평균 위치+모양 오차 (정규화 좌표 기준)
+COUNT_MISMATCH_RATIO_THRESHOLD = 2.0  # 실제 획수/기대 획수 비율이 이 배수 이상 벗어나면 의심
+
 
 def _path_descriptor(path: List[Tuple[float, float]]) -> Tuple[float, float, float, float]:
     """path의 (중심x, 중심y, 너비, 높이)."""
@@ -105,13 +109,37 @@ def analyze_stroke_order_by_position(strokes: List[Dict], bbox: Dict, target_cha
     # 사용자가 그린 순서대로, 아직 안 쓰인 정답 획 중 위치가 가장 가까운 것에 그리디 매칭
     remaining = list(range(len(canonical)))
     matched_indices: List[int] = []
+    matched_dists: List[float] = []
     for ac in actual_centroids:
         if not remaining:
             matched_indices.append(-1)
             continue
         best_idx = min(remaining, key=lambda ci: _descriptor_distance(ac, canonical[ci][1]))
         matched_indices.append(best_idx)
+        matched_dists.append(_descriptor_distance(ac, canonical[best_idx][1]))
         remaining.remove(best_idx)
+
+    # ── 애초에 목표 글자를 쓴 게 맞는지 먼저 확인 ──────────────────────────
+    # 목표와 전혀 다른 글자(혹은 낙서)를 썼다면, 그걸 억지로 목표 템플릿에 끼워
+    # 맞춰서 "몇 번째 획이 틀렸다"는 세부 피드백을 주는 건 오히려 혼란만 줌.
+    # (1) 매칭된 획들의 평균 위치·모양 오차가 크거나 (2) 획 수 자체가 크게
+    # 다르면 "다른 글자로 보임"으로 판단하고 세부 피드백은 생략한다.
+    avg_match_dist = sum(matched_dists) / len(matched_dists) if matched_dists else 1.0
+    count_ratio = len(strokes) / len(canonical) if canonical else 1.0
+    likely_wrong_character = (
+        avg_match_dist > MATCH_QUALITY_THRESHOLD
+        or count_ratio > COUNT_MISMATCH_RATIO_THRESHOLD
+        or count_ratio < 1.0 / COUNT_MISMATCH_RATIO_THRESHOLD
+    )
+
+    if likely_wrong_character:
+        return {
+            "expected_sequence": [c[0] for c in canonical],
+            "actual_sequence": [canonical[m][0] if m != -1 else "unknown" for m in matched_indices],
+            "error_count": len(canonical),
+            "likely_wrong_character": True,
+            "corrections": [f"목표 글자('{target_char}')와 많이 달라 보입니다. 다시 확인해주세요."],
+        }
 
     # matched_indices[i] == i  →  i번째로 그린 획이 표준 순서상으로도 i번째 위치가 맞음
     error_count = sum(1 for i, m in enumerate(matched_indices) if m != i)
@@ -132,6 +160,7 @@ def analyze_stroke_order_by_position(strokes: List[Dict], bbox: Dict, target_cha
         "expected_sequence": [c[0] for c in canonical],
         "actual_sequence": [canonical[m][0] if m != -1 else "unknown" for m in matched_indices],
         "error_count": error_count,
+        "likely_wrong_character": False,
         "corrections": corrections,
     }
 
