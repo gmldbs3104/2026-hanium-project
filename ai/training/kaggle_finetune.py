@@ -52,13 +52,32 @@ DATA_ROOT = os.path.dirname(_candidates[0])
 print("DATA_ROOT 자동 탐색됨:", DATA_ROOT)
 print("DATA_ROOT 내용물:", os.listdir(DATA_ROOT))
 
-# 이전 실행에서 만든 체크포인트(craft_best.pth)를 Kaggle Dataset에 추가로 올려뒀으면
-# 자동으로 찾아서 이어서 학습(resume)한다. craft_mlt_25k.pth(원본 pretrained)와는
-# 파일명이 달라서 구분됨. 없으면 처음부터 학습.
-_resume_candidates = glob.glob("/kaggle/input/**/craft_best.pth", recursive=True)
-_resume_from = _resume_candidates[0] if _resume_candidates else None
-if _resume_from:
-    print("이어서 학습할 체크포인트 발견:", _resume_from)
+# 이전 실행에서 만든 체크포인트를 Kaggle Dataset에 올려뒀으면 자동으로 찾아서
+# 이어서 학습(resume)한다. craft_mlt_25k.pth(원본 pretrained)와는 파일명이 달라서
+# 구분됨. 없으면 처음부터 학습.
+#
+# craft_best.pth든 craft_ep*.pth든 전부 후보로 찾고(파일명을 정확히 안 맞춰
+# 올려도 되도록), 여러 Dataset에 체크포인트가 여러 개 붙어있어도(예: 이전
+# 버전을 지우지 않고 새 Dataset을 추가로 붙인 경우) 안에 저장된 epoch 값을
+# 직접 열어봐서 가장 진행된 것을 자동으로 고른다 — 어떤 파일이 뭐가 붙어있는지
+# 사람이 정확히 정리해두지 않아도 항상 올바른 체크포인트로 이어서 학습되게 하기 위함.
+import torch as _torch
+
+_resume_candidates = (
+    glob.glob("/kaggle/input/**/craft_best.pth", recursive=True)
+    + glob.glob("/kaggle/input/**/craft_ep*.pth", recursive=True)
+)
+_resume_from = None
+if _resume_candidates:
+    def _ckpt_epoch(path):
+        try:
+            return _torch.load(path, map_location="cpu").get("epoch", -1)
+        except Exception:
+            return -1
+    _epochs = {p: _ckpt_epoch(p) for p in _resume_candidates}
+    _resume_from = max(_epochs, key=_epochs.get)
+    print(f"체크포인트 후보 {len(_resume_candidates)}개 발견: {_epochs}")
+    print(f"-> epoch이 가장 큰 것을 선택해 이어서 학습: {_resume_from}")
 else:
     print("이전 체크포인트 없음 — 처음부터(craft_mlt_25k.pth 기준) 학습")
 
@@ -71,7 +90,11 @@ CFG = {
     "batch_size"  : 4,
     "num_workers" : 3,         # 이진화+deskew(Canny/Hough) 전처리가 추가돼 CPU 부담이 늘어서 상향
     "lr"          : 1e-4,
-    "epochs"      : 15,        # resume 여부와 무관하게 "이번 실행에서 몇 epoch 더 돌릴지"
+    "epochs"      : 6,         # resume 여부와 무관하게 "이번 실행에서 몇 epoch 더 돌릴지"
+                               # -- OHEM 피크 가중치 수정이 실제로 효과 있는지 짧게
+                               # 먼저 확인하기 위해 이번엔 15가 아니라 6으로 축소.
+                               # peak_quality가 epoch마다 오르는 게 확인되면 그때
+                               # 더 늘려서 이어서 돌리면 됨.
     "warmup_ep"   : 0 if _resume_from else 2,  # resume 시엔 이미 backbone이 풀려있어 warmup 불필요
 
     "save_dir"    : "/kaggle/working/craft_finetuned",
@@ -331,6 +354,20 @@ class CRAFTLoss(nn.Module):
             num_pos  = int(pos_mask.sum().item())
             pos_loss = loss_b[pos_mask]
 
+            if num_pos > 0:
+                # Gaussian 특성상 "양성"(GT>0.1)으로 잡히는 픽셀 대부분은 피크가
+                # 아니라 가장자리(낮은 값)라, 가중치 없이 평균내면 모델이 그 다수
+                # 가장자리에 맞춰 전반적으로 낮게(더 안전하게) 예측하는 쪽으로
+                # 수렴하기 쉽다. 실측 결과 이 상태로 계속 학습하니 loss는 계속
+                # 낮아지는데 실제 탐지(피크가 threshold를 넘는지)는 오히려
+                # 나빠지는 현상을 확인함 — epoch 9→11→13 갈수록 탐지량 지속 감소.
+                # 피크(GT값이 클수록)에 더 큰 가중치를 줘서 이 편향을 상쇄한다.
+                # 가중치 평균이 1이 되도록 정규화해 pos/neg 전체 균형은 유지하고
+                # 양성 그룹 "내부" 분포만 피크 쪽으로 재배분한다.
+                peak_weight = gt_b[pos_mask] ** 2
+                peak_weight = peak_weight * (num_pos / peak_weight.sum().clamp(min=1e-6))
+                pos_loss = pos_loss * peak_weight
+
             neg_loss = loss_b[~pos_mask]
             k = min(max(self.ohem_min_neg, self.ohem_ratio * max(num_pos, 1)), neg_loss.numel())
             hard_neg_loss, _ = torch.topk(neg_loss, k)
@@ -388,14 +425,39 @@ def train_one_epoch(model, loader, optimizer, criterion, device, epoch):
 
 @torch.no_grad()
 def validate(model, loader, criterion, device):
+    """
+    val_loss와 함께 peak_quality(GT 피크 위치에서 모델이 실제로 얼마나 높게
+    반응하는지, GT>0.7인 픽셀들의 평균 예측값)를 같이 계산해서 반환한다.
+
+    val_loss가 낮아지는 것과 실제 탐지 품질이 같이 좋아지는 게 아니라는 걸 실측으로
+    확인함(epoch가 진행될수록 val_loss는 계속 개선됐지만 실제 탐지 개수는 꾸준히
+    감소) — OHEM이 양성 픽셀 대부분을 차지하는 Gaussian 가장자리(낮은 값)에 맞춰
+    모델이 전반적으로 낮게 예측하는 쪽으로 수렴했기 때문으로 추정. peak_quality는
+    "글자 중심에서 확신 있게 반응하는지"를 직접 재기 때문에 val_loss보다 실제
+    탐지 품질과 더 직접적으로 연결된다고 판단해 체크포인트 선택 기준으로 사용한다.
+    """
     model.eval()
     total_loss = 0.0
+    peak_sum, peak_count = 0.0, 0
     for imgs, regions, affinities in loader:
         imgs, regions, affinities = (x.to(device) for x in (imgs, regions, affinities))
         pred_r, pred_a = model(imgs)
         loss, _, _     = criterion(pred_r, pred_a, regions, affinities)
         total_loss    += loss.item()
-    return total_loss / len(loader)
+
+        pred_r_matched = pred_r
+        gt_r = regions.squeeze(1)
+        if pred_r_matched.shape != gt_r.shape:
+            pred_r_matched = F.interpolate(pred_r_matched.unsqueeze(1), size=gt_r.shape[-2:],
+                                           mode='bilinear', align_corners=False).squeeze(1)
+        peak_mask = gt_r > 0.7
+        if peak_mask.any():
+            peak_sum   += pred_r_matched[peak_mask].sum().item()
+            peak_count += int(peak_mask.sum().item())
+
+    val_loss = total_loss / len(loader)
+    peak_quality = peak_sum / peak_count if peak_count > 0 else 0.0
+    return val_loss, peak_quality
 
 # ======================================================================
 # [셀 6] 메인 학습 — 시간 예산(max_minutes) 안전장치 포함
@@ -435,6 +497,7 @@ def main():
 
     start_epoch = 1
     best_val    = float('inf')
+    best_peak   = -float('inf')
     history     = []
 
     if resuming:
@@ -442,6 +505,7 @@ def main():
         model.load_state_dict(ckpt["model_state"])
         start_epoch = ckpt["epoch"] + 1
         best_val    = ckpt.get("val_loss", float('inf'))
+        best_peak   = ckpt.get("peak_quality", -float('inf'))
         history     = ckpt.get("history", [])
         print(f"체크포인트 재개: epoch {ckpt['epoch']} -> {start_epoch}부터")
     elif os.path.exists(CFG["pretrained"]):
@@ -479,27 +543,33 @@ def main():
 
         tr_loss, tr_r, tr_a = train_one_epoch(
             model, train_loader, optimizer, criterion, DEVICE, epoch)
-        val_loss = validate(model, val_loader, criterion, DEVICE)
+        val_loss, peak_quality = validate(model, val_loader, criterion, DEVICE)
         scheduler.step()
 
         elapsed_min = (time.time() - start_time) / 60
-        is_best = val_loss < best_val
+        # val_loss가 아니라 peak_quality(GT 피크 위치에서의 평균 예측값, 높을수록
+        # 좋음)로 "best"를 결정한다 — val_loss는 계속 낮아지는데 실제 탐지는
+        # 나빠지는 현상을 실측했기 때문(validate() docstring 참고).
+        is_best = peak_quality > best_peak
         history.append({
             "epoch": epoch, "train": tr_loss, "val": val_loss,
+            "peak_quality": round(peak_quality, 4),
             "region": tr_r, "affinity": tr_a, "elapsed_min": round(elapsed_min, 1),
         })
 
         print(f"Epoch {epoch:3d} ({local_ep}/{CFG['epochs']}) "
               f"| train={tr_loss:.4f} (r={tr_r:.4f} a={tr_a:.4f}) "
-              f"| val={val_loss:.4f} | 경과 {elapsed_min:.1f}분"
+              f"| val={val_loss:.4f} | peak_quality={peak_quality:.4f} | 경과 {elapsed_min:.1f}분"
               + (" <- best" if is_best else ""))
 
         if is_best:
-            best_val = val_loss
+            best_val  = val_loss
+            best_peak = peak_quality
             torch.save({
                 "epoch": epoch, "model_state": model.state_dict(),
                 "optimizer_state": optimizer.state_dict(),
-                "val_loss": best_val, "history": history, "cfg": CFG,
+                "val_loss": best_val, "peak_quality": best_peak,
+                "history": history, "cfg": CFG,
             }, os.path.join(CFG["save_dir"], "craft_best.pth"))
 
         if local_ep % CFG["save_every"] == 0:
@@ -515,7 +585,8 @@ def main():
             stopped_early = True
             break
 
-    print(f"\n학습 {'조기 ' if stopped_early else ''}종료. 최적 val_loss={best_val:.4f}")
+    print(f"\n학습 {'조기 ' if stopped_early else ''}종료. "
+          f"최적 peak_quality={best_peak:.4f} (그때 val_loss={best_val:.4f})")
     print(f"최적 가중치: {CFG['save_dir']}/craft_best.pth")
     return history
 

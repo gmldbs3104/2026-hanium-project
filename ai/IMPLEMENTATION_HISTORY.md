@@ -1,8 +1,8 @@
 # AI 모듈 구현 과정 전체 기록
 
 > 2026 한이음 드림업 — AI 손글씨 교정 플랫폼
-> 최초 작성: 2026-07-08 / 최종 갱신: 2026-07-09
-> 대상: SFR-003I(전처리) · SFR-004I(CRAFT 탐지) 개발 과정
+> 최초 작성: 2026-07-08 / 최종 갱신: 2026-07-10
+> 대상: SFR-003I(전처리) · SFR-004I(CRAFT 탐지) · SFR-005I(판단) 개발 과정
 
 ---
 
@@ -21,7 +21,8 @@
 11. [Phase 9 — Colab → Kaggle 전환](#11-phase-9--colab--kaggle-전환)
 12. [Phase 10 — 2차 파인튜닝(Kaggle 3,500장) — score map은 정상인데 실제 탐지 0개](#12-phase-10--2차-파인튜닝kaggle-3500장--score-map은-정상인데-실제-탐지-0개)
 13. [Phase 11 — 3차 파인튜닝(Kaggle 전체 15,314장) 진행 중](#13-phase-11--3차-파인튜닝kaggle-전체-15314장-진행-중)
-14. [현재 상태 및 남은 과제](#14-현재-상태-및-남은-과제)
+14. [Phase 12 — 체크포인트 선별 지표 개선 시도 및 파인튜닝 최종 롤백](#14-phase-12--체크포인트-선별-지표-개선-시도-및-파인튜닝-최종-롤백)
+15. [현재 상태 및 남은 과제](#15-현재-상태-및-남은-과제)
 
 ---
 
@@ -433,40 +434,95 @@ CFG["warmup_ep"] = 0 if _resume_from else 2   # resume 시엔 이미 backbone이
 
 ---
 
-## 14. 현재 상태 및 남은 과제
+## 14. Phase 12 — 체크포인트 선별 지표 개선 시도 및 파인튜닝 최종 롤백
 
-*(2026-07-09 기준)*
+### 14.1 resume 학습(epoch 8~13) 결과 — val_loss는 개선, 실제 탐지는 악화
 
-### 14.1 확실히 동작하는 것
+Phase 11의 resume 학습이 완료되어 epoch 9/11/13 체크포인트를 모두 확보. **val_loss 기준으로 가장 낮은(=가장 "좋은") 체크포인트를 골랐더니, 실제 AI Hub 이미지 3장에 대한 탐지 개수가 오히려 계속 줄어드는 역전 현상을 확인**(threshold=0.05, 정답 172/215/144 기준):
+
+```
+epoch  9 : [31, 42, 70]   val_loss 기준으로는 이보다 나쁨
+epoch 11 : [15, 24, 33]   val_loss는 9보다 낮음(=더 좋음)
+epoch 13 : [ 8, 20, 24]   val_loss는 11보다도 더 낮음
+```
+
+### 14.2 원인 진단 — OHEM이 GT 피크 주변의 저값 픽셀까지 "정답"으로 취급
+
+`_ohem_mse`가 `gt > 0.1`인 모든 픽셀을 동일 가중치의 양성으로 취급하는데, Gaussian GT는 중심(피크, ≈1.0)에서 멀어질수록 값이 낮아진다. 이 저값 주변부 픽셀까지 동일 가중치로 학습에 반영되면, 모델이 "중심에서도 확신 있게 높은 값을 내는 것"보다 "전체적으로 무난하게 낮은 값을 내는 것"이 손실 관점에서 더 유리해지는 방향으로 서서히 편향된다 — val_loss는 실제로 떨어지지만, 정작 필요한 "박스 디코딩에 쓰일 만큼 뾰족하고 확신 있는 피크"는 오히려 무뎌지는 것으로 해석.
+
+### 14.3 개선 시도 — GT 값 제곱 가중치 + `peak_quality` 지표
+
+`_ohem_mse`의 양성 픽셀 loss에 `gt_value ** 2` 가중치를 곱해 GT 피크에 가까운 픽셀일수록 더 크게 반영되도록 수정. 체크포인트 선별 기준도 `val_loss` 대신, GT>0.7 픽셀에서의 평균 예측값을 뜻하는 자체 지표 `peak_quality`로 교체(`validate()`가 `(val_loss, peak_quality)` 튜플 반환, `is_best = peak_quality > best_peak`).
+
+이 fix를 적용해 epoch 9에서 6 epoch 추가 학습(epoch 14 = peak_quality 기준 best, `peak_quality=0.72`, 미적용 대비 큰 개선).
+
+### 14.4 검증 — peak_quality 개선이 실제 탐지 품질과 상관관계가 없음을 확인
+
+같은 AI Hub 3장으로 재검증(threshold=0.05):
+
+```
+epoch  9 (fix 이전)     : [31, 42, 70]  ← 지금까지 전체 실험 중 최고
+epoch 11               : [15, 24, 33]
+epoch 13               : [ 8, 20, 24]
+epoch 14 (peak-weighted OHEM 적용) : [15, 27, 34]  ← epoch13보다는 낫지만 epoch9엔 미달
+```
+
+test_images(도메인 밖) 7장에서는 격차가 더 뚜렷함 — 예: test.jpg가 pretrained/epoch9 기준 8/8 정확히 잡히던 것이 epoch14에서는 0개로 하락. `peak_quality=0.72`라는 지표상의 큰 개선이 실제 탐지 성능에는 반영되지 않음을 재확인.
+
+### 14.5 결정적 발견 — 검증 자체가 실제 배포 경로를 쓰지 않고 있었음
+
+이 시점까지의 모든 "epoch N: [a,b,c]" 비교는 `craft_text_detector`의 실제 `Craft.detect_text()`가 아니라, score map을 직접 꺼내 **임의로 낮춘 threshold(0.05)로 커스텀 connected-components 스크립트**를 돌린 결과였다. 실제 서비스가 쓰는 `CraftDetector` 클래스(기본 threshold text=0.7/link=0.4/low_text=0.4)로 다시 정식 검증하자 훨씬 심각한 결과가 나왔다:
+
+| | AI Hub 3장 (정답 172/215/144) | test_images 7장 |
+|---|---|---|
+| **pretrained (파인튜닝 없음)** | 204/241/166 탐지 (112~119%) | 정상 탐지 (8,8,130,78,20,12,24) |
+| **epoch 9 (지금까지의 "최선")** | **0 / 0 / 0** | **전부 0** |
+
+epoch 9의 region score map 최댓값이 이미지당 0.54 수준까지밖에 오르지 않아 기본 threshold(0.7)를 절대 못 넘는다. threshold를 억지로 0.05까지 낮춰도 AI Hub 이미지에서 정답의 22% 수준(39/172)밖에 못 잡는다 — **정상적인 방식으로는 회복 불가능한 수준**.
+
+### 14.6 최종 결론 — 파인튜닝 롤백, pretrained로 확정 배포
+
+이번 세션에서 시도한 세 번의 연속된 재학습(원본 OHEM, 도메인일치+peak-weighted OHEM 등)이 전부 동일한 패턴을 보였다 — **어떤 지표(val_loss든 peak_quality든)로 체크포인트를 고르든, 실제 배포 경로 기준 탐지 성능은 학습이 진행될수록 pretrained보다 나빠졌다.** epoch 7~9 부근이 유일하게 그나마 쓸만했던 지점이었지만, 그마저도 정식 threshold 기준으로는 완전히 0 detection이라 실사용 불가.
+
+**조치**: `ai/models/craft_finetuned_raw.pth`를 제거(`craft_finetuned_epoch9.pth.bak`로 보관)해 `craft_detector.py`의 기존 폴백 로직이 자동으로 pretrained 가중치를 쓰도록 되돌림. 코드 변경 없이 파일 존재 여부만으로 전환되므로 롤백/재시도 모두 안전하게 반복 가능.
+
+**남는 가설(미검증)**: 어절 단위 bbox를 글자 수로 기계적 등분한 pseudo-GT의 부정확성(13.3절), distance-transform 전처리가 파인튜닝 상황에서 오히려 신호를 약화시킬 가능성, 학습률/스케줄이 이 소규모 파인튜닝에 비해 여전히 과도할 가능성 등 — 다음에 다시 시도한다면 이 중 하나를 바꿔서 **반드시 실제 `CraftDetector` 클래스로 검증**해야 한다(14.5절 교훈).
+
+---
+
+## 15. 현재 상태 및 남은 과제
+
+*(2026-07-10 기준)*
+
+### 15.1 확실히 동작하는 것
 
 - **이미지 전처리** (`image_preprocessor.py`): 정상 동작
-- **pretrained CRAFT 탐지** (`craft_detector.py`, 파인튜닝 가중치 없을 때 자동 폴백): 7개 테스트 이미지에서 8~130개 글자 탐지, 기존 baseline과 회귀 없이 일치 확인
-- **학습/추론 아키텍처 통합**: `craft_model.py`가 공식 구조와 `missing=0 unexpected=0`으로 완전 호환
+- **CRAFT 글자 탐지** (`craft_detector.py`): 현재 **pretrained(craft_mlt_25k.pth) 가중치로 배포 확정**. 7개 테스트 이미지에서 8~130개 글자 탐지, AI Hub 3장에서 정답 대비 112~119% 탐지, 기존 baseline과 회귀 없이 일치 확인
+- **학습/추론 아키텍처 통합**: `craft_model.py`가 공식 구조와 `missing=0 unexpected=0`으로 완전 호환 (파인튜닝을 다시 시도할 때 재사용 가능한 자산)
 - **단어→글자 GT 분할**: 실제 AI Hub 샘플로 시각 검증 완료(다글자 단어가 정확히 글자별로 분리됨)
-- **학습 파이프라인 자체(코드 레벨)**: OHEM 적용, 학습/추론 입력 도메인 일치, deskew 좌표 변환 정확도까지 전부 로컬 검증 통과
+- **크기·기울기 판단 모듈** (`analysis/handwriting_analyzer.py`, SFR-005I): 구현 완료. `craft_detect_chars()` 출력을 그대로 입력받아 행 분류, 크기 균일성, 기울기, baseline 정렬 편차를 산출
 
-### 14.2 아직 미해결/진행 중
+### 15.2 아직 미해결/보류
 
-- **파인튜닝 모델의 실사용 정확도**: 3차 학습(전체 15,314장) 진행 중 — 7 epoch 시점 결과는 collapse는 아니지만 recall이 낮음(under-training으로 진단), resume으로 추가 학습 중, 최종 검증 대기
-- **`ai/analysis/handwriting_analyzer.py`(SFR-005I)**: 2026-07-03 커밋(664bae8a)에서 삭제된 뒤 재구현되지 않음. 크기균일성/기울기/baseline 정렬 분석 로직을 처음부터 새로 작성해야 함 (`git show 664bae8a~1:ai/analysis/size_angle_analyzer.py`로 이전 버전 참고 가능)
+- **CRAFT 파인튜닝(SFR-004I 정확도 개선)**: 세 차례 재학습 전부 pretrained보다 낮은 성능으로 확인되어 **롤백, 현재 미배포 상태**(Phase 12 참조). 학습 파이프라인 코드 자체(아키텍처 통합, OHEM, 도메인 일치)는 검증돼 있어 재시도 시 그대로 재사용 가능하나, 근본 원인(pseudo-GT 정밀도/전처리/하이퍼파라미터 등, 14.6절 가설)은 미확정
 - **`backend/app/services/ai_adapters.py`**: 아직 없음 — AI↔백엔드 연동 전, backend는 스켈레톤 수준
-- **단어→글자 균등분할의 정밀도 한계** (13.3절): recall이 잡힌 후 재평가 필요
+- **단어→글자 균등분할의 정밀도 한계** (13.3절): 파인튜닝 재시도 시 함께 재평가 필요
 - **AI Hub 053(태블릿 촬영 대출신청서 양식)과 실제 앱 사용자가 촬영할 손글씨의 도메인 차이**: 파인튜닝을 아무리 잘해도 데이터셋 자체의 갭은 못 메움 — 실제 서비스 입력 환경(연습장/줄노트/자유 문장 등)에 대한 검증 필요
 
-### 14.3 파일 현황
+### 15.3 파일 현황
 
 | 파일 | 상태 |
 |---|---|
 | `ai/preprocessing/image_preprocessor.py` | ✅ 완성 |
-| `ai/detection/craft_detector.py` | ✅ 완성 (파인튜닝 가중치 로드 실패 시 pretrained 자동 폴백) |
-| `ai/training/craft_model.py` | ✅ 공식 구조로 재작성 완료, 키 호환 검증됨 |
+| `ai/detection/craft_detector.py` | ✅ 완성, **현재 pretrained 가중치로 동작 중** |
+| `ai/analysis/handwriting_analyzer.py` | ✅ 완성 (SFR-005I) |
+| `ai/training/craft_model.py` | ✅ 공식 구조로 재작성 완료, 키 호환 검증됨 (재파인튜닝 시 재사용) |
 | `ai/training/gt_generator.py` | ✅ 단어→글자 분할 구현 및 검증됨 |
-| `ai/training/colab_finetune.py` | ✅ OHEM/도메인일치 반영 완료 (현재는 Kaggle로 전환해 미사용) |
-| `ai/training/kaggle_finetune.py` | ✅ 현재 사용 중, resume 지원 |
+| `ai/training/colab_finetune.py` | ✅ OHEM/도메인일치/peak-weighted 반영 완료 (현재는 Kaggle로 전환해 미사용) |
+| `ai/training/kaggle_finetune.py` | ✅ 현재 사용 중, resume 지원, peak_quality 기준 체크포인트 선별 |
 | `ai/training/prepare_kaggle_dataset.py` | ✅ 완성 |
-| `ai/debug_gt.py` | ✅ GT 시각화 + 체크포인트 collapse 진단 도구 |
-| `ai/models/craft_finetuned_raw.pth` | ⏳ 3차 학습(resume) 결과 대기 중 |
-| `ai/analysis/handwriting_analyzer.py` | ❌ 미구현 (SFR-005I) |
+| `ai/debug_gt.py` / `ai/debug_compare_production.py` | ✅ 체크포인트 검증 도구 (반드시 실제 `CraftDetector` 경로로 검증) |
+| `ai/models/craft_finetuned_epoch9.pth.bak` | 🔴 파인튜닝 최종 결과물이나 pretrained보다 성능이 낮아 미배포 (보관용) |
 
 ---
 

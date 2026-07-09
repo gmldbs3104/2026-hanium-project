@@ -425,6 +425,18 @@ class CRAFTLoss(nn.Module):
             num_pos  = int(pos_mask.sum().item())
             pos_loss = loss_b[pos_mask]
 
+            if num_pos > 0:
+                # Gaussian 특성상 "양성"(GT>0.1)으로 잡히는 픽셀 대부분은 피크가
+                # 아니라 가장자리(낮은 값)라, 가중치 없이 평균내면 모델이 그 다수
+                # 가장자리에 맞춰 전반적으로 낮게 예측하는 쪽으로 수렴하기 쉽다.
+                # (kaggle_finetune.py 실측: val_loss는 계속 낮아지는데 실제 탐지는
+                # epoch가 갈수록 감소하는 현상 확인) 피크(GT값이 클수록)에 더 큰
+                # 가중치를 줘서 이 편향을 상쇄한다. 가중치 평균 1로 정규화해 pos/neg
+                # 전체 균형은 유지하고 양성 그룹 "내부" 분포만 재배분한다.
+                peak_weight = gt_b[pos_mask] ** 2
+                peak_weight = peak_weight * (num_pos / peak_weight.sum().clamp(min=1e-6))
+                pos_loss = pos_loss * peak_weight
+
             neg_loss = loss_b[~pos_mask]
             k = min(max(self.ohem_min_neg, self.ohem_ratio * max(num_pos, 1)), neg_loss.numel())
             hard_neg_loss, _ = torch.topk(neg_loss, k)

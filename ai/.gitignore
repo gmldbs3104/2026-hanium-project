@@ -7,5 +7,6 @@ debug_output/
 .env
 models/*.pth
 models/*.bak
+craft_*.pth
 training/kaggle_upload/
 training/kaggle_upload.zip
