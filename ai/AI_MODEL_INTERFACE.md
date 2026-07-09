@@ -195,15 +195,17 @@ List[Dict]
 ## 4. 크기 균일성 / 기울기 분석 (SFR-005I)
 
 **함수명**: `analyze_size_angle`  
-**역할**: 탐지된 글자 bounding box와 이진화 이미지를 분석해 크기 균일성과 기울기를 반환한다.
+**역할**: 탐지된 글자 bounding box를 분석해 크기 균일성·기울기·기준선 정렬을 반환한다.
+
+> **2026-07-09 변경**: 기존에는 `binary_image_list`를 다시 잘라 기울기를 자체
+> 재계산했으나, `craft_detect_chars()`가 이미 requirement.md 스펙(`minAreaRect`)대로
+> 계산한 `angle` 필드를 제공하므로 그 값을 그대로 재사용하도록 변경. 이미지 파라미터가
+> 더 이상 필요 없어져 시그니처에서 제거함.
 
 ### Input
 
 ```python
-binary_image_list: List[List[int]]  # 이진화 이미지 (0 or 255)
-image_width:  int
-image_height: int
-chars: List[Dict]                   # craft_detect_chars() 반환값
+chars: List[Dict]   # craft_detect_chars() 반환값 그대로
 ```
 
 ### Output
@@ -218,6 +220,7 @@ Dict
   "mean_angle": 2.1,
   "angle_std": 3.5,
   "overall_tilt": "straight",
+  "line_alignment_score": 91.2,
   "issues": ["글자가 오른쪽으로 약간(2.1°) 기울어져 있습니다"],
   "chars": [
     {
@@ -237,9 +240,10 @@ Dict
 | `mean_angle` | `float` | 전체 글자 평균 기울기 (degrees, 양수=시계방향) |
 | `angle_std` | `float` | 기울기 표준편차 |
 | `overall_tilt` | `str` | `"straight"` \| `"leaning_right"` \| `"leaning_left"` |
+| `line_alignment_score` | `float` | 행 내 기준선(baseline) 정렬도 0~100점 |
 | `issues` | `List[str]` | SFR-007에 전달할 피드백 메시지 목록 |
 | `chars[].size_ratio` | `float` | 행 내 중앙값 대비 높이 비율 (1.0=정상) |
-| `chars[].angle` | `float` | 글자 개별 기울기 (degrees) |
+| `chars[].angle` | `float` | 글자 개별 기울기 (degrees, `craft_detect_chars()`의 `angle` 그대로) |
 | `chars[].size_flag` | `str` | `"normal"` \| `"large"` \| `"small"` |
 | `chars[].angle_flag` | `str` | `"normal"` \| `"tilted_cw"` \| `"tilted_ccw"` |
 
@@ -247,7 +251,7 @@ Dict
 
 | 항목 | 내용 |
 |------|------|
-| 현재 | 잉크 중심선 선형 회귀로 기울기 추정, CV 기반 크기 균일성 점수 |
+| 현재 | `craft_detect_chars()`가 제공하는 `angle`(minAreaRect 기반) 재사용, CV 기반 크기 균일성 점수, 행 내 바닥 y좌표 편차 기반 기준선 정렬 점수 |
 | 교체 목표 | 필요 시 딥러닝 기반 기울기 추정으로 교체 가능 |
 
 ---
