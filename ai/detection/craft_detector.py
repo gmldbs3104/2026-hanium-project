@@ -26,18 +26,157 @@ _FINETUNED_WEIGHT = os.path.join(
     os.path.dirname(__file__), "..", "models", "craft_finetuned_raw.pth"
 )
 
+# ── 자소→음절 병합 파라미터 (DETECTION_IMPROVEMENT_PLAN.md 3단계) ────────────
+# 기준 높이(ref_h)는 행(row) 단위로 추정: 박스가 자소 파편뿐이어도(소형 밀집
+# 손글씨) 같은 행 파편들의 y범위 전체는 음절 높이에 가깝다. 전역 박스 통계는
+# 전부 파편인 경우 음절보다 훨씬 작게 나와 병합을 봉쇄하는 문제가 있었음.
+_MERGE_H_GAP_RATIO = 0.18    # 가로 병합 허용 간격 (행 ref_h 대비)
+_MERGE_V_GAP_RATIO = 0.35    # 세로 병합 허용 간격 (받침/모음이 아래 떨어진 경우)
+_MERGE_X_OVERLAP_MIN = 0.40  # 세로 병합 시 요구되는 x 겹침 비율 (좁은 쪽 기준)
+_MERGE_Y_OVERLAP_MIN = 0.40  # 가로 병합 시 요구되는 y 겹침 비율 (낮은 쪽 기준)
+# 병합 폭주 방지 (음절 기하 제약):
+_MERGE_W_CAP_REF = 1.35      # 클러스터 폭 ≤ 1.35 × 행 ref_h
+_MERGE_W_CAP_ASPECT = 1.6    # 클러스터 폭 ≤ 1.6 × 클러스터 높이 (음절은 대략 정사각형)
+_MERGE_H_CAP_REF = 1.10      # 클러스터 높이 ≤ 1.10 × 행 ref_h (행 넘는 세로 병합 차단)
+
+
+def _group_rows(chars: List[Dict]) -> List[List[int]]:
+    """y구간이 겹치는 박스들을 같은 행으로 묶는다 (파편이어도 키 큰 자소와 겹침)."""
+    order = sorted(range(len(chars)), key=lambda i: chars[i]["y"])
+    rows: List[List[int]] = []
+    spans: List[List[float]] = []  # 행별 [y0, y1]
+    for i in order:
+        y0, y1 = chars[i]["y"], chars[i]["y"] + chars[i]["h"]
+        placed = False
+        for row, span in zip(rows, spans):
+            if min(y1, span[1]) - max(y0, span[0]) > 0:  # y 겹침
+                row.append(i)
+                span[0], span[1] = min(span[0], y0), max(span[1], y1)
+                placed = True
+                break
+        if not placed:
+            rows.append([i])
+            spans.append([y0, y1])
+    return rows
+
+
+def merge_jaso_boxes(chars: List[Dict]) -> List[Dict]:
+    """
+    자소 수준으로 과분할된 박스들을 음절 단위로 병합하는 후처리.
+
+    행 단위 Union-Find + "가까운 쌍부터" 그리디 병합. 병합 결과가 음절 기하
+    제약(행 높이 대비 폭 상한 + 종횡비 상한)을 넘으면 그 병합은 거부한다 —
+    인접 음절끼리 붙는 것을 구조적으로 차단하면서, 이미 음절 크기인 박스
+    (큰 글씨)는 병합할 것이 없어 회귀가 최소화된다.
+    """
+    if len(chars) <= 1:
+        return chars
+
+    merged_all: List[Dict] = []
+    for row in _group_rows(chars):
+        merged_all.extend(_merge_row([chars[i] for i in row]))
+    return merged_all
+
+
+def _merge_row(chars: List[Dict]) -> List[Dict]:
+    n = len(chars)
+    if n == 1:
+        return chars
+
+    # 행 기준 높이: 극단값에 덜 민감하도록 y0의 10분위 ~ y1의 90분위 범위 사용
+    y0s = sorted(c["y"] for c in chars)
+    y1s = sorted(c["y"] + c["h"] for c in chars)
+    ref_h = y1s[min(n - 1, int(n * 0.9))] - y0s[int(n * 0.1)]
+    if ref_h <= 0:
+        return chars
+
+    h_gap_max = ref_h * _MERGE_H_GAP_RATIO
+    v_gap_max = ref_h * _MERGE_V_GAP_RATIO
+    w_cap_ref = ref_h * _MERGE_W_CAP_REF
+    h_cap = ref_h * _MERGE_H_CAP_REF
+
+    parent = list(range(n))
+    cluster = [[c["x"], c["y"], c["x"] + c["w"], c["y"] + c["h"]] for c in chars]
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def _ov(a0, a1, b0, b1):
+        return max(0.0, min(a1, b1) - max(a0, b0))
+
+    pairs = []
+    for i in range(n):
+        xi0, yi0, xi1, yi1 = cluster[i]
+        for j in range(i + 1, n):
+            xj0, yj0, xj1, yj1 = cluster[j]
+            x_gap = max(xj0 - xi1, xi0 - xj1)
+            y_gap = max(yj0 - yi1, yi0 - yj1)
+            y_ov = _ov(yi0, yi1, yj0, yj1)
+            min_h = min(yi1 - yi0, yj1 - yj0)
+            x_ov = _ov(xi0, xi1, xj0, xj1)
+            min_w = min(xi1 - xi0, xj1 - xj0)
+
+            horizontal_ok = (x_gap <= h_gap_max
+                             and min_h > 0 and y_ov / min_h >= _MERGE_Y_OVERLAP_MIN)
+            vertical_ok = (y_gap <= v_gap_max
+                           and min_w > 0 and x_ov / min_w >= _MERGE_X_OVERLAP_MIN)
+            if horizontal_ok or vertical_ok:
+                pairs.append((max(x_gap, y_gap), i, j))
+    pairs.sort()
+
+    for _, i, j in pairs:
+        ri, rj = find(i), find(j)
+        if ri == rj:
+            continue
+        bi, bj = cluster[ri], cluster[rj]
+        mx0, my0 = min(bi[0], bj[0]), min(bi[1], bj[1])
+        mx1, my1 = max(bi[2], bj[2]), max(bi[3], bj[3])
+        mw, mh = mx1 - mx0, my1 - my0
+        if mw > w_cap_ref or mw > mh * _MERGE_W_CAP_ASPECT or mh > h_cap:
+            continue  # 음절 기하 제약 위반 → 병합 거부
+        parent[rj] = ri
+        cluster[ri] = [mx0, my0, mx1, my1]
+
+    groups: Dict[int, List[int]] = {}
+    for i in range(n):
+        groups.setdefault(find(i), []).append(i)
+
+    merged: List[Dict] = []
+    for root, members in groups.items():
+        if len(members) == 1:
+            merged.append(chars[members[0]])
+            continue
+        x0, y0, x1, y1 = cluster[root]
+        areas = [chars[m]["w"] * chars[m]["h"] for m in members]
+        total = sum(areas) or 1.0
+        conf = sum(chars[m]["conf"] * a for m, a in zip(members, areas)) / total
+        biggest = members[int(np.argmax(areas))]
+        merged.append({
+            "x": float(x0), "y": float(y0),
+            "w": float(x1 - x0), "h": float(y1 - y0),
+            "angle": chars[biggest]["angle"], "conf": float(conf),
+        })
+    return merged
+
 
 class CraftDetector:
 
     def __init__(
         self,
         cuda: bool = False,
-        long_size: int = 1280,
+        long_size: int = 960,
         text_threshold: float = 0.7,
         link_threshold: float = 1.0,
         low_text: float = 0.4,
         use_dist_transform: bool = True,
     ):
+        # long_size=960: 실사용 시나리오(연습장의 중대형 손글씨) 평가에서 1280보다
+        # 정확도가 높고(글자가 CRAFT 수용영역의 적정 크기에 가까워짐) 추론도
+        # ~1.8배 빠름. 단 소형 밀집 글씨(양식지 등)는 더 나빠짐 — 알려진 한계.
+        # (평가 근거: DETECTION_IMPROVEMENT_PLAN.md 3·4단계)
         # link_threshold=1.0: affinity(link) score를 디코딩에서 사실상 제외해
         # region score 단독으로 박스를 만든다. affinity는 "인접 글자를 단어로
         # 묶는" 신호라서 글자 단위 분리가 목표인 이 프로젝트에서는 켜두면
@@ -112,6 +251,7 @@ class CraftDetector:
         """
         pred  = self._craft_prediction(binary_image)
         chars = self._process_boxes(pred, binary_image)
+        chars = merge_jaso_boxes(chars)
         chars = self._sort_reading_order(chars, binary_image.shape)
         print(f"    → {len(chars)} chars detected")
         return self._format_output(chars)

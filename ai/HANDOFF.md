@@ -11,6 +11,8 @@
 ## 0. 문서 읽는 순서
 
 1. **이 문서(`HANDOFF.md`)** — 전체 지도. 무엇이 어디 있는지, 뭐가 되고 뭐가 안 되는지 요약.
+   그다음 `DETECTION_IMPROVEMENT_PLAN.md` — 2026-07-13 탐지 품질 재진단과 개선 4단계의
+   전 과정·정량 결과·남은 작업이 기록된 최신 작업 문서 (음절 단위 평가셋 `eval/` 포함).
 2. `requirement.md` — 전체 SFR(기능 요구사항) 목록. 지금 하는 작업이 어느 요구사항에
    대응하는지 확인할 때 참고.
 3. `AI_MODEL_INTERFACE.md` — 백엔드와 약속한 함수 시그니처 3개. **함수 이름/파라미터/
@@ -107,7 +109,7 @@ ai/
 | 구성요소 | 상태 |
 |---|---|
 | 이미지 전처리 (SFR-003I) | ✅ 완성, 정상 동작 |
-| CRAFT 글자 탐지 (SFR-004I) | ✅ 완성, **pretrained(craft_mlt_25k.pth) 가중치로 배포 확정**. AI Hub 검증 이미지 3장에서 정답 대비 112~119% 탐지, test_images 7장에서도 정상 |
+| CRAFT 글자 탐지 (SFR-004I) | ✅ 완성, **pretrained + region단독 디코딩(link=1.0) + 자소→음절 병합 후처리 + long_size=960**. 실사용 유사 3장 평균 F1@0.3=0.935. 소형 밀집 글씨는 알려진 한계. 정량 평가셋/과정은 `DETECTION_IMPROVEMENT_PLAN.md` 참고 |
 | 손글씨 도메인 CRAFT 파인튜닝 | ❌ 세 차례 시도(도메인 일치 → OHEM → peak-weighted OHEM) 전부 pretrained보다 낮은 성능. **최종 롤백, 미배포** |
 | 크기·기울기 판단 (SFR-005I) | ✅ 완성. `craft_detect_chars()` 출력을 그대로 받아 행 분류, 크기 균일성, 기울기, baseline 정렬 분석 |
 

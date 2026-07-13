@@ -129,11 +129,13 @@ def main():
     ap.add_argument("--text-th", type=float, default=0.7)
     ap.add_argument("--link-th", type=float, default=0.4)
     ap.add_argument("--low-text", type=float, default=0.4)
+    ap.add_argument("--long-size", type=int, default=1280)
     args = ap.parse_args()
 
     pre = ImagePreprocessor()
     detector = CraftDetector(
         cuda=False,
+        long_size=args.long_size,
         text_threshold=args.text_th,
         link_threshold=args.link_th,
         low_text=args.low_text,
@@ -164,7 +166,8 @@ def main():
 
     # 출력
     print(f"\n===== 평가 결과 [{args.tag}] "
-          f"(text={args.text_th} link={args.link_th} low={args.low_text}) =====")
+          f"(text={args.text_th} link={args.link_th} low={args.low_text} "
+          f"long={args.long_size}) =====")
     hdr = f"{'이미지':<24} {'pred':>5} {'gt':>4} {'ratio':>6} {'F1@0.5':>7} {'F1@0.3':>7} {'R@0.3':>6}"
     print(hdr)
     print("-" * len(hdr))
