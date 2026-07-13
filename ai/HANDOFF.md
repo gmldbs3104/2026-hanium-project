@@ -239,9 +239,16 @@ SFR-004C(획 그룹핑) → SFR-005C(획순/자간/크기 분석) 흐름입니�
 
 ### 5.1 아직 안 된 것
 
-- **`backend/app/services/ai_adapters.py` 자체가 없음** — AI↔백엔드 연동 전. `backend/app`
-  디렉토리만 존재하는 스켈레톤 상태. AI 모듈은 지금처럼 독립 함수로 검증됐고, 연동은
-  백엔드 트랙이 이 인터페이스 문서를 보고 진행할 예정.
+- **AI↔백엔드 실제 연동이 안 됨** — 단, `ai_adapters.py`가 "없다"는 게 아니라
+  **`origin/feature/backend-setup` 브랜치에 placeholder 상태로 이미 존재**함 (2026-07-13
+  확인). 백엔드 트랙은 그 브랜치에서 라우트/DB/Redis 세션 캐시까지 상당히 진행했고,
+  `ai_adapters.py`의 3개 함수는 전부 스텁(craft_detect_chars는 OpenCV contour,
+  lstm_*은 개수 비교/passthrough) 상태로 AI 구현 교체를 기다리는 중. **현재 브랜치
+  (feature/ai-setup)에는 백엔드 코드가 초기 스켈레톤만 보이므로, 백엔드 상태를 확인할
+  때는 반드시 `git show origin/feature/backend-setup:backend/...`로 볼 것.** 주의:
+  백엔드가 자체 전처리(`image_preprocessing.py`, 단순 Otsu)와 자체 분석
+  (`image_analysis.py`)을 이미 구현해뒀는데 이게 AI 파트의 전처리/분석과 다름 —
+  연동 시 그대로 두면 입력 도메인 불일치가 서비스에서 재현될 위험이 있음.
 - **캔버스 모드 2단계(실사용자 데이터 fine-tuning)** — 데이터 수집 방법은
   `CANVAS_DATA_PLAN.md`에 제안돼 있으나 팀 논의/구현 전.
 - **이미지 모드 CRAFT 파인튜닝** — 3차 시도까지 실패, 근본 원인 미확정(아래 5.2 참고).
