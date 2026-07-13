@@ -60,6 +60,84 @@ def _group_rows(chars: List[Dict]) -> List[List[int]]:
     return rows
 
 
+# 과폭 박스 분할: 행 높이 대비 이 배수보다 넓으면 다음절 병합으로 보고 분할 시도
+_SPLIT_W_TRIGGER = 1.35
+# 분할 경계 탐색 창: 등분 지점 기준 ± (조각 폭 × 이 비율) 안에서 잉크 최소 열을 찾음
+_SPLIT_SEARCH_RATIO = 0.25
+
+
+def split_wide_boxes(chars: List[Dict], binary: np.ndarray) -> List[Dict]:
+    """
+    CRAFT가 처음부터 붙여서 낸 다음절 박스를 분할하는 후처리 (7단계).
+
+    행 높이(ref_h) 대비 폭이 _SPLIT_W_TRIGGER를 넘는 박스는 N음절 병합으로 보고,
+    N등분 지점 근처에서 잉크 수직 투영이 최소가 되는 열을 찾아 그곳에서 자른다.
+    잘린 조각은 잉크 기준 tight bbox로 재계산하며, 과하게 잘렸다면 뒤따르는
+    merge_jaso_boxes가 음절 기하 제약 안에서 다시 붙인다.
+    """
+    if not chars:
+        return chars
+
+    img_h, img_w = binary.shape[:2]
+    out: List[Dict] = []
+    for row in _group_rows(chars):
+        members = [chars[i] for i in row]
+        n = len(members)
+        y0s = sorted(c["y"] for c in members)
+        y1s = sorted(c["y"] + c["h"] for c in members)
+        ref_h = y1s[min(n - 1, int(n * 0.9))] - y0s[int(n * 0.1)]
+
+        for c in members:
+            if ref_h <= 0 or c["w"] <= ref_h * _SPLIT_W_TRIGGER:
+                out.append(c)
+                continue
+            k = max(2, int(round(c["w"] / ref_h)))
+            x0, y0 = int(c["x"]), int(c["y"])
+            x1, y1 = min(img_w, int(c["x"] + c["w"]) + 1), min(img_h, int(c["y"] + c["h"]) + 1)
+            roi = binary[y0:y1, x0:x1]
+            if roi.size == 0 or not np.any(roi > 0):
+                out.append(c)
+                continue
+            col_ink = (roi > 0).sum(axis=0)
+
+            # k-1개의 분할 열: 등분 지점 근처에서 잉크가 가장 적은 열
+            piece_w = (x1 - x0) / k
+            search = max(1, int(piece_w * _SPLIT_SEARCH_RATIO))
+            cuts = []
+            for i in range(1, k):
+                center = int(i * piece_w)
+                lo = max(1, center - search)
+                hi = min(len(col_ink) - 1, center + search)
+                if lo >= hi:
+                    continue
+                cuts.append(lo + int(np.argmin(col_ink[lo:hi])))
+            cuts = sorted(set(cuts))
+            if not cuts:
+                out.append(c)
+                continue
+
+            # 조각별 잉크 tight bbox 재계산
+            bounds = [0] + cuts + [x1 - x0]
+            pieces = []
+            for b0, b1 in zip(bounds[:-1], bounds[1:]):
+                part = roi[:, b0:b1]
+                ys, xs = np.where(part > 0)
+                if len(xs) == 0:
+                    continue
+                pieces.append({
+                    "x": float(x0 + b0 + xs.min()),
+                    "y": float(y0 + ys.min()),
+                    "w": float(xs.max() - xs.min() + 1),
+                    "h": float(ys.max() - ys.min() + 1),
+                    "angle": c["angle"], "conf": c["conf"],
+                })
+            if len(pieces) >= 2:
+                out.extend(pieces)
+            else:
+                out.append(c)
+    return out
+
+
 def merge_jaso_boxes(chars: List[Dict]) -> List[Dict]:
     """
     자소 수준으로 과분할된 박스들을 음절 단위로 병합하는 후처리.
@@ -172,11 +250,17 @@ class CraftDetector:
         link_threshold: float = 1.0,
         low_text: float = 0.4,
         use_dist_transform: bool = True,
+        adaptive_scale: bool = True,
     ):
         # long_size=960: 실사용 시나리오(연습장의 중대형 손글씨) 평가에서 1280보다
         # 정확도가 높고(글자가 CRAFT 수용영역의 적정 크기에 가까워짐) 추론도
         # ~1.8배 빠름. 단 소형 밀집 글씨(양식지 등)는 더 나빠짐 — 알려진 한계.
         # (평가 근거: DETECTION_IMPROVEMENT_PLAN.md 3·4단계)
+        #
+        # adaptive_scale=True면 이미지별 잉크 blob 크기로 음절 크기를 추정해
+        # long_size를 자동 결정(위 고정값 대신). CRAFT는 글자가 입력에서 특정
+        # 픽셀 크기 범위일 때만 잘 반응하므로, 글씨가 작은 이미지는 확대하고
+        # 큰 이미지는 그대로/축소해 스케일 트레이드오프를 해소한다 (6단계).
         # link_threshold=1.0: affinity(link) score를 디코딩에서 사실상 제외해
         # region score 단독으로 박스를 만든다. affinity는 "인접 글자를 단어로
         # 묶는" 신호라서 글자 단위 분리가 목표인 이 프로젝트에서는 켜두면
@@ -194,6 +278,8 @@ class CraftDetector:
             craft_weight, text_threshold, link_threshold, low_text, cuda, long_size,
         )
         self._use_dist = use_dist_transform
+        self._adaptive_scale = adaptive_scale
+        self._base_long_size = long_size
 
     @staticmethod
     def _load_craft(craft_weight, text_threshold, link_threshold, low_text, cuda, long_size) -> Craft:
@@ -251,6 +337,7 @@ class CraftDetector:
         """
         pred  = self._craft_prediction(binary_image)
         chars = self._process_boxes(pred, binary_image)
+        chars = split_wide_boxes(chars, binary_image)
         chars = merge_jaso_boxes(chars)
         chars = self._sort_reading_order(chars, binary_image.shape)
         print(f"    → {len(chars)} chars detected")
@@ -263,6 +350,28 @@ class CraftDetector:
     # 핵심 파이프라인
     # ------------------------------------------------------------------ #
 
+    # 적응형 스케일: CRAFT 입력에서의 목표 음절 높이(px)와 long_size 허용 범위.
+    # 평가 근거: 음절이 입력에서 ~77-135px일 때 F1 최고, ~25px에서는 미반응.
+    _TARGET_SYLLABLE_PX = 90.0
+    _LONG_SIZE_MIN = 768
+    _LONG_SIZE_MAX = 2560
+    _BLOB_TO_SYLLABLE = 1.8   # 잉크 blob(자소 조각) 높이 중앙값 → 음절 높이 근사 계수
+
+    def _choose_long_size(self, binary: np.ndarray) -> int:
+        """잉크 blob 크기로 음절 높이를 추정해 CRAFT 입력 long_size를 결정."""
+        n, _, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+        heights = [
+            int(stats[i, cv2.CC_STAT_HEIGHT]) for i in range(1, n)
+            if stats[i, cv2.CC_STAT_AREA] >= 40 and stats[i, cv2.CC_STAT_HEIGHT] >= 8
+        ]
+        if not heights:
+            return self._base_long_size
+        heights.sort()
+        est_syllable = heights[len(heights) // 2] * self._BLOB_TO_SYLLABLE
+        img_long = max(binary.shape[:2])
+        long_size = int(round(img_long * self._TARGET_SYLLABLE_PX / est_syllable / 32) * 32)
+        return max(self._LONG_SIZE_MIN, min(self._LONG_SIZE_MAX, long_size))
+
     def _craft_prediction(self, binary: np.ndarray) -> dict:
         """
         binary → CRAFT 추론.
@@ -272,6 +381,10 @@ class CraftDetector:
           CRAFT가 텍스처/그레디언트를 기반으로 학습됐으므로 순수 binary보다
           탐지율이 높아짐.
         """
+        if self._adaptive_scale:
+            chosen = self._choose_long_size(binary)
+            self._craft.long_size = chosen
+            print(f"  [scale] long_size={chosen} (adaptive)")
         if self._use_dist:
             dist      = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
             dist_norm = cv2.normalize(dist, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)

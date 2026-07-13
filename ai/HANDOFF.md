@@ -109,7 +109,7 @@ ai/
 | 구성요소 | 상태 |
 |---|---|
 | 이미지 전처리 (SFR-003I) | ✅ 완성, 정상 동작 |
-| CRAFT 글자 탐지 (SFR-004I) | ✅ 완성, **pretrained + region단독 디코딩(link=1.0) + 자소→음절 병합 후처리 + long_size=960**. 실사용 유사 3장 평균 F1@0.3=0.935. 소형 밀집 글씨는 알려진 한계. 정량 평가셋/과정은 `DETECTION_IMPROVEMENT_PLAN.md` 참고 |
+| CRAFT 글자 탐지 (SFR-004I) | ✅ 완성 — **pretrained + region단독 디코딩(link=1.0) + 적응형 long_size + 과폭 분할 + 자소→음절 병합**. 실사용 유사 3장 평균 F1@0.3=0.960 (test.jpg 10/10 완벽). 소형 밀집 글씨는 개선됐으나 한계 잔존. 정량 평가셋/전 과정은 `DETECTION_IMPROVEMENT_PLAN.md` 참고 |
 | 손글씨 도메인 CRAFT 파인튜닝 | ❌ 세 차례 시도(도메인 일치 → OHEM → peak-weighted OHEM) 전부 pretrained보다 낮은 성능. **최종 롤백, 미배포** |
 | 크기·기울기 판단 (SFR-005I) | ✅ 완성. `craft_detect_chars()` 출력을 그대로 받아 행 분류, 크기 균일성, 기울기, baseline 정렬 분석 |
 
