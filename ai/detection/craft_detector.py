@@ -34,10 +34,15 @@ class CraftDetector:
         cuda: bool = False,
         long_size: int = 1280,
         text_threshold: float = 0.7,
-        link_threshold: float = 0.4,
+        link_threshold: float = 1.0,
         low_text: float = 0.4,
         use_dist_transform: bool = True,
     ):
+        # link_threshold=1.0: affinity(link) score를 디코딩에서 사실상 제외해
+        # region score 단독으로 박스를 만든다. affinity는 "인접 글자를 단어로
+        # 묶는" 신호라서 글자 단위 분리가 목표인 이 프로젝트에서는 켜두면
+        # 인접 음절이 한 박스로 병합된다 (평가 근거: DETECTION_IMPROVEMENT_PLAN.md
+        # 2단계 — 평균 F1@0.3 0.378→0.574, 폰트 텍스트 25/25 정확 일치).
         weight_path = os.path.normpath(_FINETUNED_WEIGHT)
         craft_weight = weight_path if os.path.exists(weight_path) else None
         if craft_weight is None:
