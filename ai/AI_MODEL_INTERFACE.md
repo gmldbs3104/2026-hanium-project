@@ -65,9 +65,12 @@ List[List[Dict]]  # 입력과 동일한 구조
 
 | 항목 | 내용 |
 |------|------|
-| 현재 | 1차 규칙 기반 결과를 그대로 반환 |
-| 교체 | 획의 공간·시간 특징을 LSTM에 입력해 재분류 |
+| 현재 | `ai/canvas/stroke_grouping.py`의 1차 규칙 기반 결과(`group_strokes_by_rules`)를 그대로 반환하는 placeholder |
+| 교체 | 획의 공간·시간 특징을 LSTM에 입력해 재분류 — 실사용자 캔버스 데이터 확보 후 진행 (`CANVAS_DATA_PLAN.md` 참고) |
 | 기대 효과 | 복잡한 자음/모음 조합에서 그룹핑 정확도 향상 |
+
+> 캔버스 모드 전체 현황(어떤 파일이 뭘 하는지, 데이터 없이도 동작하는 규칙 기반 부분이
+> 어디까지인지)은 `HANDOFF.md` 4절에 종합 정리되어 있습니다.
 
 ---
 
@@ -125,9 +128,10 @@ Dict
 
 | 항목 | 내용 |
 |------|------|
-| 현재 | stroke 개수 비교만 수행 |
-| 교체 | 각 stroke의 방향 벡터 시퀀스 → LSTM → 획 레이블 분류 |
-| 기대 효과 | 실제 획순 오류 감지 및 구체적 교정 메시지 제공 |
+| 현재 | `ai/canvas/stroke_standards.py`의 `lstm_analyze_stroke_order`는 stroke 개수 비교만 수행하는 placeholder(백엔드 계약 시그니처 유지용) |
+| **실질적으로 동작하는 대안** | `ai/canvas/canvas_quality_analyzer.py`의 `analyze_stroke_order_by_position()`이 위치+모양 기하 비교로 **학습 데이터 없이도 실제 획순 오류를 감지**함 (SFR-005C 종합 함수 `analyze_canvas_writing()`이 이쪽을 사용). 상세는 `HANDOFF.md` 4.5절 |
+| 교체 목표 | 각 stroke의 방향 벡터 시퀀스 → LSTM → 획 레이블 분류로, 실사용자 데이터 확보 후 이 인터페이스 함수 내부만 교체 |
+| 기대 효과 | 실제 획순 오류 감지 및 구체적 교정 메시지 제공 (현재도 근사치로는 달성됨) |
 
 ---
 
@@ -186,9 +190,14 @@ List[Dict]
 
 | 항목 | 내용 |
 |------|------|
-| 현재 | OpenCV contour 기반 탐지, `angle=0` 고정 |
-| 교체 | CRAFT 모델 추론 결과 (회전 bbox + 기울기 포함) |
-| 기대 효과 | 기울어진 글씨, 겹친 문자 영역 정확 탐지 + 실제 기울기 값 제공 |
+| 현재 | **CRAFT 모델(pretrained, craft_mlt_25k.pth) 추론 기반 탐지, 회전 bbox + minAreaRect 기울기 포함 — 이미 구현 완료** (2026-07-09 변경, 아래 참고) |
+| 파인튜닝 시도 | 손글씨 도메인(AI Hub 053)으로 파인튜닝을 3차례 시도했으나 전부 pretrained보다 낮은 성능으로 확인되어 롤백. 현재 pretrained로 배포 확정. 상세 경위는 `IMPLEMENTATION_HISTORY.md` Phase 5~12 참고 |
+| 기대 효과(달성됨) | 기울어진 글씨, 겹친 문자 영역 정확 탐지 + 실제 기울기 값 제공 |
+
+> **2026-07-13 정정**: 이 표는 한동안 "OpenCV contour 기반, angle=0 고정"이라는 초기
+> 구현 상태를 그대로 남겨두고 있었으나, 실제로는 훨씬 이전(Phase 3, `IMPLEMENTATION_HISTORY.md`
+> 참고)에 CRAFT 기반으로 전면 교체되었습니다. 문서가 실제 코드 상태를 못 따라간 사례이니,
+> 이 문서를 신뢰하기 전에 항상 `ai/detection/craft_detector.py`를 직접 확인하세요.
 
 ---
 
