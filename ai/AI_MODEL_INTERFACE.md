@@ -7,6 +7,12 @@
 AI 모델이 완성되면 아래 3개 함수의 **내부 구현만 교체**하면 된다.  
 함수 이름, 파라미터, 반환 형식은 변경하지 않는다.
 
+> **2026-07-18 교체 완료**: feature/ai-setup 브랜치의 `backend/app/services/ai_adapters.py`에
+> 3개 함수가 전부 `ai/` 패키지 실구현으로 연결됨 (+ AI 전처리 드롭인 `preprocess_image`,
+> `preprocess_image_full`, `analyze_size_angle` 추가 제공). feature/backend-setup의 스텁
+> 버전과 병합 시 충돌하면 **ai-setup 쪽을 채택**할 것. 연동 잔여 항목(라우트 반영,
+> 좌표계, torch 의존성)은 `HANDOFF.md` 5.1절 참고.
+
 ---
 
 ## 1. LSTM 획 그룹핑 보정 (SFR-004C)

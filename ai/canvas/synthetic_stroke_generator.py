@@ -20,7 +20,7 @@ import math
 import random
 from typing import Dict, List, Tuple
 
-from stroke_standards import (
+from .stroke_standards import (
     CHOSUNG, JUNGSUNG, JONGSUNG,
     _DOUBLE_CONSONANT_BASE, _COMPOUND_VOWEL_PARTS, _JONGSUNG_CLUSTER_PARTS,
     decompose_syllable,

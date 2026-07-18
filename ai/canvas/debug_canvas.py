@@ -5,12 +5,12 @@
 2. 합성 stroke 시퀀스(공간/시간적으로 가까운 것 vs 먼 것)로 규칙 기반 그룹핑이
    기대대로 동작하는지 확인.
 """
+import os
 import sys
-sys.path.insert(0, ".")
-sys.path.insert(0, "..")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from stroke_standards import get_expected_sequence
-from stroke_grouping import group_strokes_into_chars
+from canvas.stroke_standards import get_expected_sequence
+from canvas.stroke_grouping import group_strokes_into_chars
 
 
 def check_stroke_standards():

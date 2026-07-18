@@ -43,8 +43,9 @@
 
 AI 모듈은 백엔드와 **3개의 함수 계약**으로만 연결됩니다(`AI_MODEL_INTERFACE.md`):
 `craft_detect_chars`, `lstm_refine_grouping`, `lstm_analyze_stroke_order`.
-백엔드(`backend/app/services/ai_adapters.py`)는 **아직 존재하지 않습니다** — AI 모듈은
-지금까지 독립 함수/스크립트로만 개발·검증됐고, 실제 연동은 안 된 상태입니다.
+**2026-07-18: 이 브랜치(feature/ai-setup)에 `backend/app/services/ai_adapters.py` 실구현
+연결본을 작성 완료** — 3개 계약 함수가 `ai/` 패키지의 실제 구현으로 연결되고, AI 전처리
+드롭인(`preprocess_image`)과 `analyze_size_angle`도 함께 제공됩니다 (상세는 5.1절).
 
 ---
 
@@ -109,7 +110,7 @@ ai/
 | 구성요소 | 상태 |
 |---|---|
 | 이미지 전처리 (SFR-003I) | ✅ 완성, 정상 동작 |
-| CRAFT 글자 탐지 (SFR-004I) | ✅ 완성 — **pretrained + region단독 디코딩(link=1.0) + 적응형 long_size + 과폭 분할 + 자소→음절 병합**. 실사용 유사 3장 평균 F1@0.3=0.960 (test.jpg 10/10 완벽). 소형 밀집 글씨는 개선됐으나 한계 잔존. 정량 평가셋/전 과정은 `DETECTION_IMPROVEMENT_PLAN.md` 참고 |
+| CRAFT 글자 탐지 (SFR-004I) | ✅ 완성 — **pretrained + region단독 디코딩(link=1.0) + 적응형 long_size + 과폭 분할 + 자소→음절 병합**. 실사용 유사 3장 평균 F1@0.3=**0.970** (test.jpg 10/10 완벽, 2026-07-18 11단계에서 행 그룹핑·병합 오작동 3건 수정으로 0.960→0.970, 밀집 다행 텍스트의 문단 통짜 박스 문제도 해소). 소형 밀집 글씨는 개선됐으나 한계 잔존. 정량 평가셋/전 과정은 `DETECTION_IMPROVEMENT_PLAN.md` 참고 |
 | 손글씨 도메인 CRAFT 파인튜닝 | ❌ 세 차례 시도(도메인 일치 → OHEM → peak-weighted OHEM) 전부 pretrained보다 낮은 성능. **최종 롤백, 미배포** |
 | 크기·기울기 판단 (SFR-005I) | ✅ 완성. `craft_detect_chars()` 출력을 그대로 받아 행 분류, 크기 균일성, 기울기, baseline 정렬 분석 |
 
@@ -241,16 +242,25 @@ SFR-004C(획 그룹핑) → SFR-005C(획순/자간/크기 분석) 흐름입니�
 
 ### 5.1 아직 안 된 것
 
-- **AI↔백엔드 실제 연동이 안 됨** — 단, `ai_adapters.py`가 "없다"는 게 아니라
-  **`origin/feature/backend-setup` 브랜치에 placeholder 상태로 이미 존재**함 (2026-07-13
-  확인). 백엔드 트랙은 그 브랜치에서 라우트/DB/Redis 세션 캐시까지 상당히 진행했고,
-  `ai_adapters.py`의 3개 함수는 전부 스텁(craft_detect_chars는 OpenCV contour,
-  lstm_*은 개수 비교/passthrough) 상태로 AI 구현 교체를 기다리는 중. **현재 브랜치
-  (feature/ai-setup)에는 백엔드 코드가 초기 스켈레톤만 보이므로, 백엔드 상태를 확인할
-  때는 반드시 `git show origin/feature/backend-setup:backend/...`로 볼 것.** 주의:
-  백엔드가 자체 전처리(`image_preprocessing.py`, 단순 Otsu)와 자체 분석
-  (`image_analysis.py`)을 이미 구현해뒀는데 이게 AI 파트의 전처리/분석과 다름 —
-  연동 시 그대로 두면 입력 도메인 불일치가 서비스에서 재현될 위험이 있음.
+- **AI↔백엔드 연동 — 어댑터 구현은 완료(2026-07-18), 백엔드측 반영이 남음.**
+  이 브랜치(feature/ai-setup)의 `backend/app/services/ai_adapters.py`에 실구현 연결본이
+  있음: 3개 계약 함수(craft_detect_chars → CRAFT 싱글턴 / lstm_* → ai/canvas 구현) +
+  `preprocess_image`(백엔드 `image_preprocessing.preprocess_image`와 동일 반환 계약의
+  AI 전처리 드롭인, Otsu 도메인 불일치 해소용) + `preprocess_image_full`(REQ-003I-4
+  품질/재촬영 판정 포함) + `analyze_size_angle`. 이를 위해 `ai/`를 패키지화(`ai/__init__.py`
+  추가, canvas 상대 import 전환)하고 CraftDetector를 프로세스당 1회 로드 싱글턴+Lock으로
+  전환함(1차 호출 10.4s → 2차 1.9s 실측). 남은 것:
+  1. **브랜치 병합**: `origin/feature/backend-setup`에도 같은 경로에 스텁 버전이 있어
+     병합 시 충돌 발생 — **ai-setup 쪽(실구현)을 채택**하면 됨 (계약 문서에 명시된
+     의도된 교체).
+  2. **백엔드 라우트 반영(백엔드 트랙 결정)**: `image_preprocessing.preprocess_image`를
+     어댑터의 AI 전처리로 교체할지, `image_analysis.py`(자체 SFR-005I 구현)를
+     `analyze_size_angle`로 교체할지. **탐지 정확도 평가(F1@0.3=0.960)는 전부 AI 전처리
+     전제이므로 Otsu 입력과 섞으면 성능 보장 안 됨.**
+  3. **좌표계 논의**: AI 전처리는 deskew+리사이즈를 하므로 bbox가 "전처리 후" 좌표계 —
+     원본 사진 오버레이(SFR-007)를 위해 역변환 또는 전처리 이미지 기준 오버레이 필요.
+  4. **의존성**: 백엔드 requirements.txt에 torch/craft_text_detector 추가 필요
+     (canvas 경로는 torch 없이 동작하도록 lazy import 처리돼 있음).
 - **캔버스 모드 2단계(실사용자 데이터 fine-tuning)** — 데이터 수집 방법은
   `CANVAS_DATA_PLAN.md`에 제안돼 있으나 팀 논의/구현 전.
 - **이미지 모드 CRAFT 파인튜닝** — 3차 시도까지 실패, 근본 원인 미확정(아래 5.2 참고).
@@ -287,9 +297,10 @@ SFR-004C(획 그룹핑) → SFR-005C(획순/자간/크기 분석) 흐름입니�
 
 ## 6. 다음에 할 일 우선순위 제안
 
-1. **`backend/app/services/ai_adapters.py` 연동** — 지금까지 만든 3개 함수를 실제로
-   백엔드에 연결하는 게 지금 시점에서 가장 가치가 큰 다음 작업. AI 쪽은 함수 시그니처가
-   전부 확정돼 있어 바로 시작 가능.
+1. ~~**`backend/app/services/ai_adapters.py` 연동**~~ → **완료(2026-07-18, 5.1절 참고).**
+   다음 단계는 백엔드 트랙과 함께: 브랜치 병합(충돌 시 ai-setup 실구현 채택), 라우트가
+   AI 전처리/분석을 쓰도록 교체 결정, bbox 좌표계(전처리 후 기준) 프론트 오버레이 방식
+   합의, requirements.txt에 torch 추가.
 2. 여유가 되면 캔버스 모드 2단계(실사용자 데이터 수집)를 프론트엔드 팀과 논의
    (`CANVAS_DATA_PLAN.md` 공유).
 3. CRAFT 파인튜닝은 지금 당장 재시도할 필요는 없음(pretrained로 서비스 가능한 수준) —

@@ -23,9 +23,9 @@ stroke_grouping.py(SFR-004C)의 char_groups 출력 + 각 글자의 목표 텍스
 import math
 from typing import Dict, List, Optional, Tuple
 
-from stroke_grouping import _stroke_bbox
-from stroke_standards import get_expected_sequence, lstm_analyze_stroke_order, decompose_syllable
-from synthetic_stroke_generator import _syllable_layout
+from .stroke_grouping import _stroke_bbox
+from .stroke_standards import get_expected_sequence, lstm_analyze_stroke_order, decompose_syllable
+from .synthetic_stroke_generator import _syllable_layout
 
 # 크기/간격 판정 임계값 (handwriting_analyzer.py와 동일한 CV 기반 설계)
 SIZE_SCORE_MAX_CV = 0.30

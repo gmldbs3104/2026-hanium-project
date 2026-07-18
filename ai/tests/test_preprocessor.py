@@ -12,6 +12,27 @@ import numpy as np
 import base64
 
 from preprocessing import ImagePreprocessor, QualityScorer
+from preprocessing.image_preprocessor import OUTPUT_MIN_SIDE, OUTPUT_MAX_SIDE
+
+
+def assert_valid_output_size(result, orig_w, orig_h):
+    """
+    현재 SFR-003I 구현 스펙: 비율 유지 리사이즈, 장축이 OUTPUT_MIN_SIDE~OUTPUT_MAX_SIDE.
+    (초기 스펙이던 '1280×960 고정'은 CRAFT 탐지 정확도를 위해 비율 유지 방식으로
+    변경됨 — IMPLEMENTATION_HISTORY.md 참고. 원본 장축이 범위 안이면 그대로 유지.)
+
+    deskew 회전이 적용된 경우(skew_angle ≥ 0.5°) 캔버스가 확장되어 종횡비가
+    정당하게 달라지므로, 종횡비 검사는 회전이 없을 때만 수행한다.
+    """
+    out_h, out_w = result.binary_image.shape
+    long_side = max(out_h, out_w)
+    assert OUTPUT_MIN_SIDE <= long_side <= OUTPUT_MAX_SIDE, \
+        f"장축 {long_side}px가 {OUTPUT_MIN_SIDE}~{OUTPUT_MAX_SIDE} 범위를 벗어남"
+    if abs(result.skew_angle) < 0.5:
+        orig_ratio = orig_w / orig_h
+        out_ratio = out_w / out_h
+        assert abs(orig_ratio - out_ratio) < 0.05, \
+            f"종횡비 훼손: 원본 {orig_ratio:.3f} vs 출력 {out_ratio:.3f}"
 
 
 def make_handwriting_image(width=800, height=600, skew_deg=5.0) -> np.ndarray:
@@ -59,7 +80,7 @@ def test_pipeline_runs_without_error():
     result = preprocessor.preprocess_from_bytes(raw_bytes)
 
     assert result.binary_image is not None
-    assert result.binary_image.shape == (960, 1280)
+    assert_valid_output_size(result, gray.shape[1], gray.shape[0])
     assert result.binary_image.dtype == np.uint8
     print(f"  [PASS] 파이프라인 정상 실행")
     print(f"         출력 크기: {result.binary_image.shape}")
@@ -67,17 +88,17 @@ def test_pipeline_runs_without_error():
 
 
 def test_output_resolution():
-    """출력 해상도가 반드시 1280×960이어야 한다. (SFR-003I 스펙)"""
+    """출력 해상도: 비율 유지, 장축 800~1280px 범위. (현행 SFR-003I 구현 스펙)"""
     preprocessor = ImagePreprocessor()
 
-    # 다양한 원본 해상도 테스트
-    for (w, h) in [(640, 480), (1920, 1080), (400, 300)]:
+    # 업스케일(작은 원본) / 다운스케일(큰 원본) / 범위 내 유지 케이스
+    for (w, h) in [(640, 480), (1920, 1080), (400, 300), (1000, 750)]:
         bgr = np.random.randint(0, 255, (h, w, 3), dtype=np.uint8)
         _, encoded = cv2.imencode(".jpg", bgr)
         result = preprocessor.preprocess_from_bytes(encoded.tobytes())
-        assert result.binary_image.shape == (960, 1280), f"해상도 불일치: {result.binary_image.shape}"
+        assert_valid_output_size(result, w, h)
 
-    print(f"  [PASS] 출력 해상도 1280×960 고정 확인")
+    print(f"  [PASS] 출력 해상도 스펙(비율 유지, 장축 {OUTPUT_MIN_SIDE}~{OUTPUT_MAX_SIDE}px) 확인")
 
 
 def test_quality_score_range():
@@ -141,7 +162,7 @@ def test_base64_input():
     b64 = base64.b64encode(encoded.tobytes()).decode("utf-8")
 
     result = preprocessor.preprocess_from_base64(b64)
-    assert result.binary_image.shape == (960, 1280)
+    assert_valid_output_size(result, gray.shape[1], gray.shape[0])
     print(f"  [PASS] Base64 입력 처리 확인")
 
 

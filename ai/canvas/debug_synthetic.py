@@ -9,13 +9,13 @@
 import os
 import sys
 
-sys.path.insert(0, ".")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import cv2
 import numpy as np
 
-from synthetic_stroke_generator import generate_synthetic_strokes, generate_synthetic_line
-from stroke_grouping import group_strokes_into_chars
-from stroke_standards import get_expected_sequence
+from canvas.synthetic_stroke_generator import generate_synthetic_strokes, generate_synthetic_line
+from canvas.stroke_grouping import group_strokes_into_chars
+from canvas.stroke_standards import get_expected_sequence
 
 
 def render_strokes(strokes, out_path, canvas_size=(300, 200), margin=20):
