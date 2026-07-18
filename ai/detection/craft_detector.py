@@ -244,8 +244,87 @@ _SPLIT_VALLEY_MAX = 0.25
 # 트리거 하향(1.25)으로 인한 과분할을 억제
 _SPLIT_MIN_PIECE = 0.30
 
+# ── 좁게 붙은 2음절 분할 (13단계) ────────────────────────────────────────
+# '오른'·'급한'처럼 자간 없이 붙여 쓴 2음절은 폭이 정상 음절 범위(w/h 1.0~1.3)에
+# 들어와 위의 과폭 트리거로는 잡히지 않는다. 잉크 골짜기만으로는 자모 사이
+# 세로 여백(예: '젝'의 ㅈ|ㅔ — 잉크 0)과 음절 경계를 구분할 수 없음을 실측으로
+# 확인('젝' 오분할). 대신 CRAFT region score map을 판정 신호로 사용한다 —
+# region score는 "문자 중심 확률"이므로 2음절 박스에는 피크가 2개, 단일 음절에는
+# 1개 나타난다. 모델이 이미 제공하는 신호라 글씨체/크기 도메인에 무관하다.
+_NSPLIT_W_MIN = 0.95         # 후보 최소 폭 (행 ref_h 대비)
+_NSPLIT_ASPECT_MIN = 1.05    # 후보 최소 w/h — 정사각 이하(정상 음절)는 제외
+_NSPLIT_PEAK_MIN = 0.35      # 피크로 인정할 최소 region score (low_text 근방)
+_NSPLIT_PEAK_DIST = 0.50     # 두 피크의 최소 간격 (행 ref_h 대비) — 자소 피크 배제
+_NSPLIT_VALLEY_RATIO = 0.65  # 계곡 score ≤ 낮은 피크 × 이 비율일 때만 "두 중심" 인정
+_NSPLIT_MIN_PIECE_W = 0.40   # 두 조각 각각의 최소 폭 (행 ref_h 대비)
+_NSPLIT_PIECE_ASPECT = 1.5   # 조각 w/h 상한 (조각이 음절 모양이어야 함)
 
-def split_wide_boxes(chars: List[Dict], binary: np.ndarray) -> List[Dict]:
+
+def _try_narrow_split(c: Dict, roi: np.ndarray, x0: int, y0: int, ref_h: float,
+                      score: Optional[np.ndarray], scale: float) -> Optional[List[Dict]]:
+    """
+    좁게 붙은 2음절 후보를 region score 피크 증거로 2분할 시도. 실패 시 None.
+
+    score : CRAFT score_text_raw (이미지 좌표 = score 좌표 × scale)
+    """
+    if score is None or ref_h <= 0:
+        return None
+    sh, sw = score.shape[:2]
+    sx0 = max(0, int(c["x"] / scale))
+    sx1 = min(sw, int((c["x"] + c["w"]) / scale) + 1)
+    sy0 = max(0, int(c["y"] / scale))
+    sy1 = min(sh, int((c["y"] + c["h"]) / scale) + 1)
+    if sx1 - sx0 < 6 or sy1 - sy0 < 2:
+        return None
+
+    prof = score[sy0:sy1, sx0:sx1].max(axis=0).astype(np.float32)
+    k = 3
+    prof_s = np.convolve(prof, np.ones(k, dtype=np.float32) / k, mode="same")
+
+    # 국소 최대(피크) 탐색 — 최소 간격은 행 높이의 절반 (자소 단위 피크 배제)
+    min_dist = max(2, int(ref_h * _NSPLIT_PEAK_DIST / scale))
+    peaks: List[int] = []
+    for i in range(len(prof_s)):
+        lo = max(0, i - min_dist)
+        hi = min(len(prof_s), i + min_dist + 1)
+        if prof_s[i] >= _NSPLIT_PEAK_MIN and prof_s[i] >= prof_s[lo:hi].max():
+            if not peaks or i - peaks[-1] >= min_dist:
+                peaks.append(i)
+    if len(peaks) != 2:
+        return None  # 문자 중심이 2개일 때만 — 1개(단일 음절)/3개+(불확실)는 보류
+
+    valley_rel = peaks[0] + int(np.argmin(prof_s[peaks[0]:peaks[1] + 1]))
+    valley_val = prof_s[valley_rel]
+    if valley_val > min(prof_s[peaks[0]], prof_s[peaks[1]]) * _NSPLIT_VALLEY_RATIO:
+        return None  # 두 피크가 한 덩어리로 이어짐 — 복합 자모일 가능성
+
+    cut = int((sx0 + valley_rel) * scale) - x0  # roi 내 x좌표
+    if cut < 2 or cut > roi.shape[1] - 2:
+        return None
+
+    pieces = []
+    for b0, b1 in ((0, cut), (cut, roi.shape[1])):
+        part = roi[:, b0:b1]
+        ys, xs = np.where(part > 0)
+        if len(xs) == 0:
+            return None
+        pw = float(xs.max() - xs.min() + 1)
+        ph = float(ys.max() - ys.min() + 1)
+        if pw < ref_h * _NSPLIT_MIN_PIECE_W:
+            return None
+        if ph <= 0 or pw / ph > _NSPLIT_PIECE_ASPECT:
+            return None
+        pieces.append({
+            "x": float(x0 + b0 + xs.min()), "y": float(y0 + ys.min()),
+            "w": pw, "h": ph,
+            "angle": c["angle"], "conf": c["conf"], "split_from": id(c),
+        })
+    return pieces
+
+
+def split_wide_boxes(chars: List[Dict], binary: np.ndarray,
+                     score: Optional[np.ndarray] = None,
+                     scale: float = 1.0) -> List[Dict]:
     """
     CRAFT가 처음부터 붙여서 낸 다음절 박스를 분할하는 후처리 (7단계).
 
@@ -264,7 +343,22 @@ def split_wide_boxes(chars: List[Dict], binary: np.ndarray) -> List[Dict]:
         ref_h = _row_ref_height(members)
 
         for c in members:
-            if ref_h <= 0 or c["w"] <= ref_h * _SPLIT_W_TRIGGER:
+            if ref_h <= 0:
+                out.append(c)
+                continue
+            if c["w"] <= ref_h * _SPLIT_W_TRIGGER:
+                # 과폭 미달 — 좁게 붙은 2음절 후보인지 검사 (잉크 증거 기반)
+                if (c["w"] >= ref_h * _NSPLIT_W_MIN and c["h"] > 0
+                        and c["w"] / c["h"] >= _NSPLIT_ASPECT_MIN):
+                    nx0, ny0 = max(0, int(c["x"])), max(0, int(c["y"]))
+                    nx1 = min(img_w, int(c["x"] + c["w"]) + 1)
+                    ny1 = min(img_h, int(c["y"] + c["h"]) + 1)
+                    n_roi = binary[ny0:ny1, nx0:nx1]
+                    if n_roi.size:
+                        pieces = _try_narrow_split(c, n_roi, nx0, ny0, ref_h, score, scale)
+                        if pieces:
+                            out.extend(pieces)
+                            continue
                 out.append(c)
                 continue
             k = max(2, int(round(c["w"] / ref_h)))
@@ -537,8 +631,10 @@ class CraftDetector:
         # 점 노이즈 제거본은 박스 기하 연산(tight bbox·분할 투영·완성)에만 사용.
         clean = _remove_specks(binary_image)
         pred  = self._craft_prediction(binary_image)
+        score = pred.get("score_text_raw")
+        scale = 2.0 / pred.get("target_ratio", 1.0)
         chars = self._process_boxes(pred, clean)
-        chars = split_wide_boxes(chars, clean)
+        chars = split_wide_boxes(chars, clean, score=score, scale=scale)
         chars = merge_jaso_boxes(chars)
         chars = complete_boxes(chars, clean)
         chars = self._sort_reading_order(chars, binary_image.shape)
