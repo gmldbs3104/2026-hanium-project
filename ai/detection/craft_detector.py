@@ -14,6 +14,7 @@ SFR-004I: CRAFT 기본 출력 기반 글자 탐지
 """
 import logging
 import os
+import threading
 import cv2
 import numpy as np
 from typing import List, Dict, Tuple, Optional
@@ -36,20 +37,44 @@ _MERGE_X_OVERLAP_MIN = 0.40  # 세로 병합 시 요구되는 x 겹침 비율 (�
 _MERGE_Y_OVERLAP_MIN = 0.40  # 가로 병합 시 요구되는 y 겹침 비율 (낮은 쪽 기준)
 # 병합 폭주 방지 (음절 기하 제약):
 _MERGE_W_CAP_REF = 1.35      # 클러스터 폭 ≤ 1.35 × 행 ref_h
-_MERGE_W_CAP_ASPECT = 1.6    # 클러스터 폭 ≤ 1.6 × 클러스터 높이 (음절은 대략 정사각형)
+_MERGE_W_CAP_ASPECT = 1.4    # 클러스터 폭 ≤ 1.4 × 클러스터 높이 (음절은 대략 정사각형)
+# 1.6 → 1.4 하향(2026-07-18): 실측에서 잘못된 2음절 병합 박스는 전부 w/h
+# 1.42~1.58 구간이었고, 자소 병합으로 만들어지는 정상 음절은 ~1.2 이하였음.
+# 완성 음절 판정 (fragment gate): 높이가 행 ref_h의 이 비율 이상이고 폭이
+# _SYLLABLE_W_RATIO 이상이면 "이미 완성된 음절"로 보고, 완성 음절끼리의
+# 가로 병합을 금지한다. 병합 후처리는 자소 파편 복구용인데, 자간이 좁은
+# 중대형 글씨에서 멀쩡한 인접 음절 두 개를 붙이는 오작동이 있었음(2026-07-18
+# 실측: test6 raw 22개(정답)가 병합 후 18개). 파편(낮은 조각·세로획 등)은
+# 이 판정에 안 걸려 기존처럼 병합된다.
+_SYLLABLE_H_RATIO = 0.70
+_SYLLABLE_W_RATIO = 0.50
 _MERGE_H_CAP_REF = 1.10      # 클러스터 높이 ≤ 1.10 × 행 ref_h (행 넘는 세로 병합 차단)
 
 
+# 행 편입에 요구되는 최소 y겹침 (박스 자신 높이 대비 비율).
+# 1px만 겹쳐도 같은 행으로 묶던 기존 방식은 밀집 다행 텍스트에서 행끼리 연쇄
+# 결합(transitive chaining)되는 문제가 있었음 — 실측: test3에서 실제 5~6개 행이
+# 하나의 "행"(y범위 238px)으로 묶여 ref_h가 폭주, 병합 제약이 무력화되어
+# 문단 크기 통짜 박스가 생성됨 (2026-07-18 진단).
+_ROW_OVERLAP_MIN = 0.40
+
+
 def _group_rows(chars: List[Dict]) -> List[List[int]]:
-    """y구간이 겹치는 박스들을 같은 행으로 묶는다 (파편이어도 키 큰 자소와 겹침)."""
+    """y구간이 겹치는 박스들을 같은 행으로 묶는다 (파편이어도 키 큰 자소와 겹침).
+
+    편입 조건: 박스 y구간이 행 span과 "박스 자신 높이의 40% 이상" 겹칠 것.
+    파편(h≈14px)은 5~6px만 걸쳐도 편입되므로 소형 밀집 파편 행은 기존처럼
+    묶이고, 행 사이에 1~2px 걸친 이웃 행 박스의 연쇄 결합만 차단된다.
+    """
     order = sorted(range(len(chars)), key=lambda i: chars[i]["y"])
     rows: List[List[int]] = []
     spans: List[List[float]] = []  # 행별 [y0, y1]
     for i in order:
         y0, y1 = chars[i]["y"], chars[i]["y"] + chars[i]["h"]
+        need = max(1.0, (y1 - y0) * _ROW_OVERLAP_MIN)
         placed = False
         for row, span in zip(rows, spans):
-            if min(y1, span[1]) - max(y0, span[0]) > 0:  # y 겹침
+            if min(y1, span[1]) - max(y0, span[0]) >= need:
                 row.append(i)
                 span[0], span[1] = min(span[0], y0), max(span[1], y1)
                 placed = True
@@ -60,17 +85,164 @@ def _group_rows(chars: List[Dict]) -> List[List[int]]:
     return rows
 
 
-# 세로 잉크 확장: CRAFT region score는 글자 중심에서만 강하게 반응해 소형 글씨의
-# 박스가 세로 중앙 띠만 덮는 경우가 많다(실측: 음절 높이 30px에 박스 높이 14px).
-# 박스의 x창 안에서 잉크가 연속되는 세로 구간까지 박스를 늘려 원래 높이를 복원한다.
-# [기록] "세로 잉크 확장" 후처리(박스를 잉크 범위까지 늘려 소형 글씨의 잘린 박스를
-# 복원)는 행 투영/노이즈 차단/CC 기반 세 가지 변형을 전부 실측했으나 모두 순효과가
-# 음수여서 미채택 — 상세는 DETECTION_IMPROVEMENT_PLAN.md 8단계, 코드는 git 히스토리.
+def _row_ref_height(members: List[Dict]) -> float:
+    """
+    행 기준 높이(ref_h) — 병합/분할 제약의 스케일 기준.
+
+    - 행 y범위(10~90분위) 단독(기존 v2)은 baseline 출렁임·받침 유무 때문에 실제
+      음절 높이보다 1.4~2배 과대해져(실측: test6 h중앙 81 vs ref 122) 인접 음절
+      병합을 허용하는 원인이었음.
+    - 박스 높이 90분위 단독(v1)은 전부 파편인 행(소형 밀집)에서 과소해져 병합을
+      봉쇄했던 실패 이력이 있음 (DETECTION_IMPROVEMENT_PLAN.md 3단계).
+    - 절충: y범위를 상한 h90×1.3으로 클램프 — 정상 행에서는 h90 근처로 내려와
+      과대를 막고, 파편 행에서는 y범위(≈음절 높이)가 h90×1.3보다 작아 그대로
+      유지된다.
+    """
+    n = len(members)
+    y0s = sorted(c["y"] for c in members)
+    y1s = sorted(c["y"] + c["h"] for c in members)
+    y_range = y1s[min(n - 1, int(n * 0.9))] - y0s[int(n * 0.1)]
+    hs = sorted(c["h"] for c in members)
+    h90 = hs[min(n - 1, int(n * 0.9))]
+    return min(y_range, h90 * 1.3)
+
+
+# [기록] 8단계의 "세로 잉크 확장" 세 변형은 전부 순효과 음수로 미채택됐으나, 당시
+# 실패 원인이던 행 그룹핑 연쇄결합 버그가 11단계에서 수정된 뒤 12단계에서
+# 안전장치(과반 소속 기준 + 행 ref 상한)를 갖춘 CC 기반 박스 완성(complete_boxes)
+# 으로 재도전해 채택됨. 상세는 DETECTION_IMPROVEMENT_PLAN.md 8·12단계.
+
+# ── 박스 완성 파라미터 (12단계) ─────────────────────────────────────────
+_SPECK_MAX_AREA = 12         # 이 면적(px²) 미만 잉크 CC는 점 노이즈로 보고 제거
+_COMPLETE_CC_MIN_AREA = 40   # 완성/흡수 대상이 되는 CC 최소 면적 (label_helper와 동일)
+_COMPLETE_OWN_RATIO = 0.5    # CC 픽셀의 이 비율 이상을 덮는 박스가 그 CC를 소유
+_ORPHAN_X_OVERLAP = 0.6      # 고아 CC 흡수에 요구되는 x겹침 (CC 폭 대비)
+_ORPHAN_Y_GAP_RATIO = 0.35   # 고아 CC 흡수 허용 세로 간격 (행 ref_h 대비)
+_COMPLETE_H_CAP = 1.15       # 완성 후 박스 높이 ≤ 1.15 × 행 ref_h (이웃 행 침범 차단)
+_COMPLETE_W_CAP = 1.35       # 완성 후 박스 폭 상한 배수 (기존 폭보다 좁아지진 않음)
+_COMPLETE_X_GROW = 1.20      # 가로 확장은 기존 폭의 1.2배까지만 — 흘림으로 이웃 음절과
+                             # 이어진 CC를 물면 가로로 통째 확장되는 것 차단(세로 복원만 수행)
+
+
+def _remove_specks(binary: np.ndarray, max_area: int = _SPECK_MAX_AREA) -> np.ndarray:
+    """점 노이즈(초소형 CC) 제거 — 스캔/이진화 잡점이 tight bbox와 잉크 투영을
+    오염시키는 것을 막는다 (실측: test6 '아' 박스가 주변 잡점 때문에 GT 대비
+    세로 1.9배로 부풀었음)."""
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    small = np.where(stats[:, cv2.CC_STAT_AREA] < max_area)[0]
+    small = small[small != 0]
+    if len(small) == 0:
+        return binary
+    cleaned = binary.copy()
+    cleaned[np.isin(labels, small)] = 0
+    return cleaned
+
+
+def complete_boxes(chars: List[Dict], binary: np.ndarray) -> List[Dict]:
+    """
+    CC(연결요소) 기반 박스 완성 후처리 (12단계).
+
+    CRAFT region score는 글자 중심부에서만 강하게 반응해 박스가 음절의 위/아래
+    자소를 잘라먹는 경우가 있다 (실측: test.jpg '음'의 ㅇ, '트'의 아래 ㅡ,
+    '젝'의 ㄱ받침이 박스 밖 — IoU 0.40~0.66).
+
+    1) 소유 CC 확장: 어떤 박스가 잉크 CC 픽셀의 과반을 덮으면 그 CC는 이 글자의
+       획으로 보고 박스를 CC 전체 bbox까지 확장 (잘린 획 복원, x/y 양방향).
+    2) 고아 CC 흡수: 어느 박스도 과반을 덮지 못한 CC(떨어져 있는 자소 — 예: '음'
+       위의 ㅇ)는 x겹침이 크고 세로로 인접한 박스에 흡수.
+
+    두 경우 모두 행 기준높이(ref_h) 상한을 넘는 확장은 거부한다 — 이웃 행의
+    획이나 흘림으로 여러 음절에 걸친 CC로의 폭주를 차단 (8단계 실패 교훈).
+    """
+    if not chars:
+        return chars
+
+    n_cc, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    if n_cc <= 1:
+        return chars
+
+    img_h, img_w = binary.shape[:2]
+    areas = stats[:, cv2.CC_STAT_AREA]
+
+    # 행별 ref_h (박스 인덱스 → 소속 행 ref_h)
+    ref_of = [0.0] * len(chars)
+    for row in _group_rows(chars):
+        ref = _row_ref_height([chars[i] for i in row])
+        for i in row:
+            ref_of[i] = ref
+
+    # 박스별 CC 픽셀 수 집계 + CC별 최대 커버 박스 추적
+    own: List[Dict[int, int]] = []          # box idx → {cc: pixel count}
+    covered = np.zeros(n_cc, dtype=np.int64)  # CC별 "소유된" 픽셀 수(최대 박스 기준)
+    for c in chars:
+        x0, y0 = max(0, int(c["x"])), max(0, int(c["y"]))
+        x1 = min(img_w, int(c["x"] + c["w"]) + 1)
+        y1 = min(img_h, int(c["y"] + c["h"]) + 1)
+        cnt = np.bincount(labels[y0:y1, x0:x1].ravel(), minlength=n_cc)
+        cnt[0] = 0
+        own.append({int(cc): int(cnt[cc]) for cc in np.nonzero(cnt)[0]})
+        np.maximum(covered, cnt, out=covered)
+
+    def _try_extend(c: Dict, cc: int, ref: float) -> None:
+        gx, gy = stats[cc, cv2.CC_STAT_LEFT], stats[cc, cv2.CC_STAT_TOP]
+        gw, gh = stats[cc, cv2.CC_STAT_WIDTH], stats[cc, cv2.CC_STAT_HEIGHT]
+        nx0, ny0 = min(c["x"], float(gx)), min(c["y"], float(gy))
+        nx1 = max(c["x"] + c["w"], float(gx + gw))
+        ny1 = max(c["y"] + c["h"], float(gy + gh))
+        nw, nh = nx1 - nx0, ny1 - ny0
+        # 가로 과확장(흘림으로 이어진 이웃 음절 CC)이면 x는 유지하고 세로만 복원
+        if nw > c["w"] * _COMPLETE_X_GROW or (ref > 0 and nw > ref * _COMPLETE_W_CAP):
+            nx0, nx1 = c["x"], c["x"] + c["w"]
+            nw = c["w"]
+        if ref > 0 and nh > max(c["h"], ref * _COMPLETE_H_CAP):
+            return
+        c["x"], c["y"], c["w"], c["h"] = nx0, ny0, nw, nh
+
+    # 1) 소유 CC로 확장
+    for i, c in enumerate(chars):
+        for cc, cnt in own[i].items():
+            if areas[cc] >= _COMPLETE_CC_MIN_AREA and cnt >= areas[cc] * _COMPLETE_OWN_RATIO:
+                _try_extend(c, cc, ref_of[i])
+
+    # 2) 고아 CC 흡수 (어느 박스도 과반 소유하지 못한 CC)
+    for cc in range(1, n_cc):
+        if areas[cc] < _COMPLETE_CC_MIN_AREA or covered[cc] >= areas[cc] * _COMPLETE_OWN_RATIO:
+            continue
+        gx, gy = float(stats[cc, cv2.CC_STAT_LEFT]), float(stats[cc, cv2.CC_STAT_TOP])
+        gw, gh = float(stats[cc, cv2.CC_STAT_WIDTH]), float(stats[cc, cv2.CC_STAT_HEIGHT])
+        best_i, best_key = -1, None
+        for i, c in enumerate(chars):
+            x_ov = max(0.0, min(c["x"] + c["w"], gx + gw) - max(c["x"], gx))
+            if gw <= 0 or x_ov / gw < _ORPHAN_X_OVERLAP:
+                continue
+            y_gap = max(gy - (c["y"] + c["h"]), c["y"] - (gy + gh))
+            if ref_of[i] <= 0 or y_gap > ref_of[i] * _ORPHAN_Y_GAP_RATIO:
+                continue
+            key = (max(0.0, y_gap), -x_ov)
+            if best_key is None or key < best_key:
+                best_i, best_key = i, key
+        if best_i >= 0:
+            _try_extend(chars[best_i], cc, ref_of[best_i])
+
+    return chars
 
 # 과폭 박스 분할: 행 높이 대비 이 배수보다 넓으면 다음절 병합으로 보고 분할 시도
-_SPLIT_W_TRIGGER = 1.35
+# 1.35 → 1.30 → 1.25 (2026-07-18): test6의 CRAFT 원출력 2음절 박스(쉬운)가 폭
+# 150~159 vs 행 ref 118~122 = 1.27~1.30배로 트리거 경계에 걸쳐 있었음. 아래
+# 골짜기 검증(_SPLIT_VALLEY_MAX)이 추가되어 정상 단일 음절은 골짜기가 없어
+# 잘리지 않으므로 트리거를 공격적으로 낮출 수 있다.
+_SPLIT_W_TRIGGER = 1.25
 # 분할 경계 탐색 창: 등분 지점 기준 ± (조각 폭 × 이 비율) 안에서 잉크 최소 열을 찾음
 _SPLIT_SEARCH_RATIO = 0.25
+# 골짜기 검증: 분할 열의 잉크 픽셀 수가 (박스높이 × 이 비율) 이하일 때만 유효한
+# 음절 경계로 인정 — 글자 내부(획이 지나가는 곳)를 억지로 자르는 것을 방지.
+# 0.25: 세로획 관통부(잉크 ≈ 박스높이의 50~100%)는 확실히 거부하면서, 소형
+# 글씨(박스높이 30px → 허용 7.5px)의 정당한 음절 경계는 통과하는 수준
+_SPLIT_VALLEY_MAX = 0.25
+# 분할 조각 최소 폭 (행 ref_h 대비): 이보다 좁은 조각이 나오는 분할은 음절 경계가
+# 아니라 자소/획 조각을 떼어낸 것으로 보고 분할 전체를 포기 — 소형 밀집 글씨에서
+# 트리거 하향(1.25)으로 인한 과분할을 억제
+_SPLIT_MIN_PIECE = 0.30
 
 
 def split_wide_boxes(chars: List[Dict], binary: np.ndarray) -> List[Dict]:
@@ -89,10 +261,7 @@ def split_wide_boxes(chars: List[Dict], binary: np.ndarray) -> List[Dict]:
     out: List[Dict] = []
     for row in _group_rows(chars):
         members = [chars[i] for i in row]
-        n = len(members)
-        y0s = sorted(c["y"] for c in members)
-        y1s = sorted(c["y"] + c["h"] for c in members)
-        ref_h = y1s[min(n - 1, int(n * 0.9))] - y0s[int(n * 0.1)]
+        ref_h = _row_ref_height(members)
 
         for c in members:
             if ref_h <= 0 or c["w"] <= ref_h * _SPLIT_W_TRIGGER:
@@ -111,13 +280,16 @@ def split_wide_boxes(chars: List[Dict], binary: np.ndarray) -> List[Dict]:
             piece_w = (x1 - x0) / k
             search = max(1, int(piece_w * _SPLIT_SEARCH_RATIO))
             cuts = []
+            valley_cap = max(2.0, (y1 - y0) * _SPLIT_VALLEY_MAX)
             for i in range(1, k):
                 center = int(i * piece_w)
                 lo = max(1, center - search)
                 hi = min(len(col_ink) - 1, center + search)
                 if lo >= hi:
                     continue
-                cuts.append(lo + int(np.argmin(col_ink[lo:hi])))
+                cut = lo + int(np.argmin(col_ink[lo:hi]))
+                if col_ink[cut] <= valley_cap:  # 진짜 골짜기일 때만 자름
+                    cuts.append(cut)
             cuts = sorted(set(cuts))
             if not cuts:
                 out.append(c)
@@ -137,8 +309,12 @@ def split_wide_boxes(chars: List[Dict], binary: np.ndarray) -> List[Dict]:
                     "w": float(xs.max() - xs.min() + 1),
                     "h": float(ys.max() - ys.min() + 1),
                     "angle": c["angle"], "conf": c["conf"],
+                    # 같은 원본 박스에서 잘려 나온 조각끼리는 merge_jaso_boxes가
+                    # 가로로 도로 붙이지 않도록 원본 id를 기록 (분할 취지 보존).
+                    # 세로 병합(잘린 조각과 위/아래 받침 파편)은 허용된다.
+                    "split_from": id(c),
                 })
-            if len(pieces) >= 2:
+            if len(pieces) >= 2 and all(p["w"] >= ref_h * _SPLIT_MIN_PIECE for p in pieces):
                 out.extend(pieces)
             else:
                 out.append(c)
@@ -168,10 +344,7 @@ def _merge_row(chars: List[Dict]) -> List[Dict]:
     if n == 1:
         return chars
 
-    # 행 기준 높이: 극단값에 덜 민감하도록 y0의 10분위 ~ y1의 90분위 범위 사용
-    y0s = sorted(c["y"] for c in chars)
-    y1s = sorted(c["y"] + c["h"] for c in chars)
-    ref_h = y1s[min(n - 1, int(n * 0.9))] - y0s[int(n * 0.1)]
+    ref_h = _row_ref_height(chars)
     if ref_h <= 0:
         return chars
 
@@ -206,17 +379,34 @@ def _merge_row(chars: List[Dict]) -> List[Dict]:
 
             horizontal_ok = (x_gap <= h_gap_max
                              and min_h > 0 and y_ov / min_h >= _MERGE_Y_OVERLAP_MIN)
+            # split_wide_boxes가 같은 원본에서 자른 조각끼리의 가로 재결합은 금지
+            # (분할 결정을 병합이 되돌리는 순환 방지). 세로 결합은 허용.
+            if horizontal_ok and chars[i].get("split_from") is not None \
+                    and chars[i].get("split_from") == chars[j].get("split_from"):
+                horizontal_ok = False
             vertical_ok = (y_gap <= v_gap_max
                            and min_w > 0 and x_ov / min_w >= _MERGE_X_OVERLAP_MIN)
             if horizontal_ok or vertical_ok:
                 pairs.append((max(x_gap, y_gap), i, j))
     pairs.sort()
 
+    syl_h = ref_h * _SYLLABLE_H_RATIO
+    syl_w = ref_h * _SYLLABLE_W_RATIO
+
+    def _is_syllable(box) -> bool:
+        return (box[3] - box[1]) >= syl_h and (box[2] - box[0]) >= syl_w
+
     for _, i, j in pairs:
         ri, rj = find(i), find(j)
         if ri == rj:
             continue
         bi, bj = cluster[ri], cluster[rj]
+        # fragment gate: 두 클러스터 모두 이미 완성 음절 크기이고 가로로 나란하면
+        # (y겹침 존재) 붙일 이유가 없다 — 인접 음절 병합 오작동 차단.
+        # 세로 결합(받침 등)은 y겹침이 없어 이 조건에 걸리지 않는다.
+        if _is_syllable(bi) and _is_syllable(bj) \
+                and _ov(bi[1], bi[3], bj[1], bj[3]) > 0:
+            continue
         mx0, my0 = min(bi[0], bj[0]), min(bi[1], bj[1])
         mx1, my1 = max(bi[2], bj[2]), max(bi[3], bj[3])
         mw, mh = mx1 - mx0, my1 - my0
@@ -342,12 +532,17 @@ class CraftDetector:
         ----------
         binary_image : (H, W) uint8, 값 0(배경) or 255(획)
         """
+        # CRAFT 추론 입력은 원본 그대로 유지 (노이즈 제거가 distance-transform을
+        # 바꾸면 region 출력 자체가 흔들림 — 실측: '한' 과분할, '음' 박스 소멸).
+        # 점 노이즈 제거본은 박스 기하 연산(tight bbox·분할 투영·완성)에만 사용.
+        clean = _remove_specks(binary_image)
         pred  = self._craft_prediction(binary_image)
-        chars = self._process_boxes(pred, binary_image)
-        chars = split_wide_boxes(chars, binary_image)
+        chars = self._process_boxes(pred, clean)
+        chars = split_wide_boxes(chars, clean)
         chars = merge_jaso_boxes(chars)
+        chars = complete_boxes(chars, clean)
         chars = self._sort_reading_order(chars, binary_image.shape)
-        print(f"    → {len(chars)} chars detected")
+        logger.debug("→ %d chars detected", len(chars))
         return self._format_output(chars)
 
     def unload(self):
@@ -391,7 +586,7 @@ class CraftDetector:
         if self._adaptive_scale:
             chosen = self._choose_long_size(binary)
             self._craft.long_size = chosen
-            print(f"  [scale] long_size={chosen} (adaptive)")
+            logger.debug("[scale] long_size=%d (adaptive)", chosen)
         if self._use_dist:
             dist      = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
             dist_norm = cv2.normalize(dist, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
@@ -410,7 +605,7 @@ class CraftDetector:
         score_h = score.shape[0] if score is not None else 1
         score_w = score.shape[1] if score is not None else 1
 
-        print(f"  [craft] {len(boxes)} boxes")
+        logger.debug("[craft] %d boxes", len(boxes))
 
         chars: List[Dict] = []
         for box in boxes:
@@ -549,6 +744,25 @@ class CraftDetector:
 # SFR-004I 인터페이스 함수 (백엔드 연동용)
 # ------------------------------------------------------------------ #
 
+# 서버 환경에서는 요청마다 모델을 새로 로드하면 안 되므로(로드 ~4s) 프로세스당
+# 1개의 CraftDetector를 공유한다. detect()가 adaptive long_size로 공유 인스턴스
+# 상태를 바꾸므로 동시 호출은 lock으로 직렬화한다 — CPU 추론은 어차피 코어를
+# 다 쓰는 단일 작업이라 직렬화로 인한 추가 손해는 사실상 없다.
+_shared_lock = threading.Lock()
+_shared_detector: Optional["CraftDetector"] = None
+
+
+def get_shared_detector(cuda: bool = False) -> "CraftDetector":
+    """프로세스 전역 CraftDetector 싱글턴 (최초 호출 시 1회 로드)."""
+    global _shared_detector
+    if _shared_detector is None:
+        with _shared_lock:
+            if _shared_detector is None:
+                logger.info("CraftDetector 최초 로드 (프로세스당 1회)")
+                _shared_detector = CraftDetector(cuda=cuda)
+    return _shared_detector
+
+
 def craft_detect_chars(
     binary_image_list: List[List[int]],
     image_width: int,
@@ -563,6 +777,7 @@ def craft_detect_chars(
     binary_image_list : 2D list (rows × cols), 값 0 또는 255
     image_width       : 이미지 너비 (px)
     image_height      : 이미지 높이 (px)
+    cuda              : 최초 로드 시에만 반영됨 (싱글턴 재사용)
     """
     image = np.array(binary_image_list, dtype=np.uint8)
     if image.shape != (image_height, image_width):
@@ -570,7 +785,6 @@ def craft_detect_chars(
             image, (image_width, image_height),
             interpolation=cv2.INTER_NEAREST,
         )
-    detector = CraftDetector(cuda=cuda)
-    result   = detector.detect(image)
-    detector.unload()
-    return result
+    detector = get_shared_detector(cuda=cuda)
+    with _shared_lock:
+        return detector.detect(image)

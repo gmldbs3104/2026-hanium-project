@@ -124,12 +124,17 @@ def aihub_gt_boxes(label_path):
 
 
 def main():
+    # 기본값은 반드시 CraftDetector 배포 기본값과 일치시킬 것 — 과거 이 기본값이
+    # 1단계 기준선 시점(link=0.4, long=1280)에 머물러 있어서, 인자 없이 돌리면
+    # 배포 설정(link=1.0, long=960+adaptive)이 아닌 옛 설정을 평가하는 함정이
+    # 있었다 (2026-07-18 발견·수정). "자체 설정으로 검증하다 배포 경로와 어긋나는"
+    # Phase 12의 실수와 같은 유형이므로, CraftDetector 기본값을 바꾸면 여기도 갱신.
     ap = argparse.ArgumentParser()
     ap.add_argument("--tag", default="current")
     ap.add_argument("--text-th", type=float, default=0.7)
-    ap.add_argument("--link-th", type=float, default=0.4)
+    ap.add_argument("--link-th", type=float, default=1.0)
     ap.add_argument("--low-text", type=float, default=0.4)
-    ap.add_argument("--long-size", type=int, default=1280)
+    ap.add_argument("--long-size", type=int, default=960)
     args = ap.parse_args()
 
     pre = ImagePreprocessor()
