@@ -168,14 +168,16 @@ List[Dict]
   {
     "char_id":      "char_0",
     "bounding_box": { "x": 50.0, "y": 80.0, "width": 90.0, "height": 100.0 },
-    "angle":        -2.5,
-    "confidence":   0.97
+    "angle":          -2.5,
+    "angle_reliable": true,
+    "confidence":     0.97
   },
   {
-    "char_id":      "char_1",
-    "bounding_box": { "x": 180.0, "y": 78.0, "width": 88.0, "height": 105.0 },
-    "angle":        -1.8,
-    "confidence":   0.95
+    "char_id":        "char_1",
+    "bounding_box":   { "x": 180.0, "y": 78.0, "width": 88.0, "height": 105.0 },
+    "angle":          0.0,
+    "angle_reliable": false,
+    "confidence":     0.95
   }
 ]
 ```
@@ -187,7 +189,8 @@ List[Dict]
 | `bounding_box.y` | `float` | 좌상단 y (px) |
 | `bounding_box.width` | `float` | 너비 (px) |
 | `bounding_box.height` | `float` | 높이 (px) |
-| `angle` | `float` | 기울기 (degree, 시계방향 양수) |
+| `angle` | `float` | 세로획 slant 기울기 (degree, 양수=시계방향=글자 상단이 오른쪽). `angle_reliable=false`면 `0.0` |
+| `angle_reliable` | `bool` | 세로획이 충분히 검출돼 기울기를 신뢰할 수 있는지. ㅇ 위주 글자 등은 `false` — 기울기 평가에서 제외할 것 |
 | `confidence` | `float` | 탐지 신뢰도 `0.0 ~ 1.0` |
 
 **정렬 규칙**: 좌상단 → 우하단 순서 (줄 단위 y, 줄 내 x)
@@ -196,7 +199,7 @@ List[Dict]
 
 | 항목 | 내용 |
 |------|------|
-| 현재 | **CRAFT 모델(pretrained, craft_mlt_25k.pth) 추론 기반 탐지, 회전 bbox + minAreaRect 기울기 포함 — 이미 구현 완료** (2026-07-09 변경, 아래 참고) |
+| 현재 | **CRAFT 모델(pretrained, craft_mlt_25k.pth) 추론 기반 탐지 — 이미 구현 완료** (2026-07-09 변경, 아래 참고). `angle`은 2026-07-19부터 minAreaRect가 아니라 **세로획 slant**(HoughLinesP 근수직 선분의 길이가중 평균, `craft_detector.py` docstring 참고)로 산출하며 `angle_reliable` 필드가 추가됨 |
 | 파인튜닝 시도 | 손글씨 도메인(AI Hub 053)으로 파인튜닝을 3차례 시도했으나 전부 pretrained보다 낮은 성능으로 확인되어 롤백. 현재 pretrained로 배포 확정. 상세 경위는 `IMPLEMENTATION_HISTORY.md` Phase 5~12 참고 |
 | 기대 효과(달성됨) | 기울어진 글씨, 겹친 문자 영역 정확 탐지 + 실제 기울기 값 제공 |
 
@@ -213,9 +216,15 @@ List[Dict]
 **역할**: 탐지된 글자 bounding box를 분석해 크기 균일성·기울기·기준선 정렬을 반환한다.
 
 > **2026-07-09 변경**: 기존에는 `binary_image_list`를 다시 잘라 기울기를 자체
-> 재계산했으나, `craft_detect_chars()`가 이미 requirement.md 스펙(`minAreaRect`)대로
-> 계산한 `angle` 필드를 제공하므로 그 값을 그대로 재사용하도록 변경. 이미지 파라미터가
-> 더 이상 필요 없어져 시그니처에서 제거함.
+> 재계산했으나, `craft_detect_chars()`가 계산한 `angle` 필드를 그대로 재사용하도록
+> 변경. 이미지 파라미터가 더 이상 필요 없어져 시그니처에서 제거함.
+>
+> **2026-07-19 변경 (기울기 평가 개편)**: `angle`이 minAreaRect에서 세로획 slant로
+> 교체되면서(3절 참고) 기울기 평가를 **문서 단위**로 전환 — `angle_reliable=true`인
+> 글자만 집계해 전체 평균 기울기와 **일관성 점수(`tilt_consistency_score`)**를 내고,
+> "오른쪽으로 기운 글자: char_7" 같은 개별 글자 지적 문구는 제거함 (측정 노이즈에
+> 민감하고 서비스 목적이 글 전체 평가이기 때문). 신뢰 글자 3자 미만이면 기울기
+> 평가를 생략함.
 
 ### Input
 
@@ -234,9 +243,10 @@ Dict
   "size_uniformity_score": 87.4,
   "mean_angle": 2.1,
   "angle_std": 3.5,
+  "tilt_consistency_score": 82.5,
   "overall_tilt": "straight",
   "line_alignment_score": 91.2,
-  "issues": ["글자가 오른쪽으로 약간(2.1°) 기울어져 있습니다"],
+  "issues": ["글씨가 전체적으로 오른쪽으로 약간(2.1°) 기울어져 있습니다"],
   "chars": [
     {
       "char_id": "char_0",
@@ -252,21 +262,22 @@ Dict
 | 필드 | 타입 | 설명 |
 |------|------|------|
 | `size_uniformity_score` | `float` | 크기 균일성 0~100점 (100=완전균일) |
-| `mean_angle` | `float` | 전체 글자 평균 기울기 (degrees, 양수=시계방향) |
-| `angle_std` | `float` | 기울기 표준편차 |
+| `mean_angle` | `float` | 전체 평균 기울기 (degrees, 양수=시계방향; `angle_reliable` 글자만 집계) |
+| `angle_std` | `float` | 기울기 표준편차 (신뢰 글자만 집계) |
+| `tilt_consistency_score` | `float` | 기울기 일관성 0~100점 (std 0°=100, 12°+=0; 신뢰 글자 3자 미만이면 100) |
 | `overall_tilt` | `str` | `"straight"` \| `"leaning_right"` \| `"leaning_left"` |
 | `line_alignment_score` | `float` | 행 내 기준선(baseline) 정렬도 0~100점 |
 | `issues` | `List[str]` | SFR-007에 전달할 피드백 메시지 목록 |
 | `chars[].size_ratio` | `float` | 행 내 중앙값 대비 높이 비율 (1.0=정상) |
-| `chars[].angle` | `float` | 글자 개별 기울기 (degrees, `craft_detect_chars()`의 `angle` 그대로) |
+| `chars[].angle` | `float` | 글자 개별 slant (degrees, `craft_detect_chars()`의 `angle` 그대로) |
 | `chars[].size_flag` | `str` | `"normal"` \| `"large"` \| `"small"` |
-| `chars[].angle_flag` | `str` | `"normal"` \| `"tilted_cw"` \| `"tilted_ccw"` |
+| `chars[].angle_flag` | `str` | `"normal"` \| `"tilted_cw"` \| `"tilted_ccw"` \| `"unmeasured"` (`angle_reliable=false`) |
 
 ### 현재 상태 / 교체 목표
 
 | 항목 | 내용 |
 |------|------|
-| 현재 | `craft_detect_chars()`가 제공하는 `angle`(minAreaRect 기반) 재사용, CV 기반 크기 균일성 점수, 행 내 바닥 y좌표 편차 기반 기준선 정렬 점수 |
+| 현재 | `craft_detect_chars()`가 제공하는 `angle`(세로획 slant) 재사용 + 문서 단위 기울기 평가(일관성 점수), CV 기반 크기 균일성 점수, 행 내 바닥 y좌표 편차 기반 기준선 정렬 점수 |
 | 교체 목표 | 필요 시 딥러닝 기반 기울기 추정으로 교체 가능 |
 
 ---

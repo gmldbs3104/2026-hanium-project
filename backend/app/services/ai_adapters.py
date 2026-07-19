@@ -65,7 +65,9 @@ def craft_detect_chars(
     로드되는 싱글턴이며 동시 호출은 내부 lock으로 직렬화된다.
 
     Input/Output 형식은 AI_MODEL_INTERFACE.md 3절 스펙 그대로:
-      → [{"char_id", "bounding_box": {x, y, width, height}, "angle", "confidence"}]
+      → [{"char_id", "bounding_box": {x, y, width, height}, "angle",
+          "angle_reliable", "confidence"}]
+      (angle은 세로획 slant, angle_reliable=False면 측정 불가 글자 — 2026-07-19 개편)
       (좌상단→우하단 읽기 순서 정렬)
     """
     from ai.detection.craft_detector import craft_detect_chars as _impl

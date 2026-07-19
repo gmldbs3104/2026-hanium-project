@@ -9,12 +9,17 @@ SFR-005I가 요구하는 행 정렬(line_alignment_score) 추가.
 
 설계 노트
 --------
-각 글자의 기울기는 craft_detect_chars()가 이미 requirement.md 스펙대로
-(각 문자 bbox의 잉크 픽셀에 cv2.minAreaRect를 적용해) 계산해 `angle` 필드로
-제공한다. 이 모듈은 그 값을 그대로 재사용하며, 별도로 이미지를 다시 잘라
-기울기를 재계산하지 않는다 — 탐지 단계 결과와 분석 단계 결과가 서로 다른
-기준으로 각도를 매길 위험을 없애기 위함. 따라서 이 모듈은 binary_image 없이
-chars 리스트만으로 동작한다.
+각 글자의 기울기는 craft_detect_chars()가 세로획 slant 방식으로 계산해
+`angle`(+`angle_reliable`) 필드로 제공한다 (과거 minAreaRect 방식은 둥근/대각
+글자에서 곧은 글씨도 ±30~45°로 튀어 2026-07-19 교체 — craft_detector.py
+docstring 참고). 이 모듈은 그 값을 그대로 재사용하며, 별도로 이미지를 다시
+잘라 기울기를 재계산하지 않는다. 따라서 binary_image 없이 chars 리스트만으로
+동작한다.
+
+기울기 평가는 문서 단위다: 필자의 slant는 글 전체에서 대체로 일정하므로,
+angle_reliable=True인 글자들만 모아 (1) 전체 평균 기울기(방향·정도),
+(2) 일관성 점수(tilt_consistency_score, 표준편차 기반)를 산출하고 개별 글자
+지적 문구는 내지 않는다. 신뢰 글자가 TILT_MIN_RELIABLE 미만이면 평가 생략.
 """
 import numpy as np
 from dataclasses import dataclass
@@ -24,9 +29,13 @@ from typing import List, Dict
 SIZE_LARGE_THRESH = 1.5   # 50% 초과 크면 large
 SIZE_SMALL_THRESH = 0.65  # 35% 이상 작으면 small
 
-# 기울기 판정 임계값 (craft_detect_chars()가 제공하는 minAreaRect 각도 기준)
+# 기울기 판정 임계값 (craft_detect_chars()가 제공하는 세로획 slant 기준)
 ANGLE_WARN_DEG = 3.0   # 경미
 ANGLE_FLAG_DEG = 7.0   # 명확
+
+# 문서 단위 기울기 평가 (2026-07-19 개편 — 개별 글자 지적 대신 전체 평가)
+TILT_MIN_RELIABLE = 3        # slant 신뢰 글자가 이보다 적으면 기울기 평가 생략
+TILT_STD_MAX = 12.0          # slant 표준편차 0° → 100점, 12°+ → 0점 (일관성 점수)
 
 # CV(변동계수) 0% → 100점, 30%+ → 0점
 SIZE_SCORE_MAX_CV = 0.30
@@ -39,17 +48,18 @@ BASELINE_STD_MAX = 0.20
 class CharAnalysis:
     char_id: str
     size_ratio: float    # char_height / 행_median_height  (1.0 = 정상)
-    angle: float          # craft_detect_chars()가 제공한 minAreaRect 각도 그대로 사용
+    angle: float          # craft_detect_chars()가 제공한 세로획 slant (unmeasured면 0.0)
     size_flag: str        # "normal" | "large" | "small"
-    angle_flag: str       # "normal" | "tilted_cw" | "tilted_ccw"
+    angle_flag: str       # "normal" | "tilted_cw" | "tilted_ccw" | "unmeasured"
 
 
 @dataclass
 class SizeAngleResult:
     chars: List[CharAnalysis]
     size_uniformity_score: float    # 0 ~ 100
-    mean_angle: float               # degrees
-    angle_std: float                # degrees
+    mean_angle: float               # degrees (slant 신뢰 글자들의 평균)
+    angle_std: float                # degrees (slant 신뢰 글자들의 표준편차)
+    tilt_consistency_score: float   # 0 ~ 100 (기울기 일관성 — 문서 단위 평가)
     overall_tilt: str               # "straight" | "leaning_right" | "leaning_left"
     line_alignment_score: float     # 0 ~ 100 (행 내 기준선 정렬도)
     issues: List[str]               # SFR-007 피드백 재료
@@ -61,8 +71,8 @@ class SizeAngleAnalyzer:
         if not chars:
             return SizeAngleResult(
                 chars=[], size_uniformity_score=100.0,
-                mean_angle=0.0, angle_std=0.0, overall_tilt="straight",
-                line_alignment_score=100.0, issues=[],
+                mean_angle=0.0, angle_std=0.0, tilt_consistency_score=100.0,
+                overall_tilt="straight", line_alignment_score=100.0, issues=[],
             )
 
         rows = self._group_by_row(chars)
@@ -85,7 +95,9 @@ class SizeAngleAnalyzer:
                     size_flag = "normal"
 
                 angle = float(c.get("angle", 0.0))
-                if angle > ANGLE_FLAG_DEG:
+                if not c.get("angle_reliable", True):
+                    angle_flag = "unmeasured"   # 세로획 없음 — 기울기 평가에서 제외
+                elif angle > ANGLE_FLAG_DEG:
                     angle_flag = "tilted_cw"
                 elif angle < -ANGLE_FLAG_DEG:
                     angle_flag = "tilted_ccw"
@@ -111,9 +123,21 @@ class SizeAngleAnalyzer:
         size_cv = float(np.std(all_heights) / np.mean(all_heights)) if np.mean(all_heights) > 0 else 0.0
         size_uniformity_score = float(max(0.0, 100.0 * (1.0 - size_cv / SIZE_SCORE_MAX_CV)))
 
-        all_angles = np.array([c.get("angle", 0.0) for c in chars], dtype=np.float32)
-        mean_angle = float(np.mean(all_angles))
-        angle_std  = float(np.std(all_angles))
+        # ── 문서 단위 기울기 평가 (slant 신뢰 글자만 집계) ──────────────
+        # 사람 손글씨는 필자 고유의 slant가 전체적으로 일정하므로, 개별 글자
+        # 지적 대신 (1) 전체 평균 기울기 방향·정도, (2) 일관성 점수를 낸다.
+        reliable = np.array([c.get("angle", 0.0) for c in chars
+                             if c.get("angle_reliable", True)], dtype=np.float32)
+        n_reliable = len(reliable)
+        if n_reliable >= TILT_MIN_RELIABLE:
+            mean_angle = float(np.mean(reliable))
+            angle_std  = float(np.std(reliable))
+            tilt_consistency_score = float(
+                max(0.0, 100.0 * (1.0 - angle_std / TILT_STD_MAX)))
+        else:
+            # 세로획이 있는 글자가 너무 적으면 기울기 평가 자체를 생략
+            mean_angle, angle_std = 0.0, 0.0
+            tilt_consistency_score = 100.0
 
         if mean_angle > ANGLE_WARN_DEG:
             overall_tilt = "leaning_right"
@@ -125,7 +149,8 @@ class SizeAngleAnalyzer:
         line_alignment_score = float(np.mean(row_baseline_scores)) if row_baseline_scores else 100.0
 
         issues = self._generate_issues(
-            char_analyses, size_uniformity_score, mean_angle, angle_std, line_alignment_score,
+            char_analyses, size_uniformity_score, mean_angle,
+            tilt_consistency_score, n_reliable, line_alignment_score,
         )
 
         return SizeAngleResult(
@@ -133,6 +158,7 @@ class SizeAngleAnalyzer:
             size_uniformity_score=round(size_uniformity_score, 1),
             mean_angle=round(mean_angle, 2),
             angle_std=round(angle_std, 2),
+            tilt_consistency_score=round(tilt_consistency_score, 1),
             overall_tilt=overall_tilt,
             line_alignment_score=round(line_alignment_score, 1),
             issues=issues,
@@ -169,7 +195,8 @@ class SizeAngleAnalyzer:
         chars: List[CharAnalysis],
         size_score: float,
         mean_angle: float,
-        angle_std: float,
+        tilt_consistency_score: float,
+        n_reliable: int,
         line_alignment_score: float,
     ) -> List[str]:
         issues: List[str] = []
@@ -187,23 +214,24 @@ class SizeAngleAnalyzer:
         if small_ids:
             issues.append(f"작게 쓴 글자: {', '.join(small_ids)}")
 
-        # 전체 기울기
-        if abs(mean_angle) > ANGLE_FLAG_DEG:
-            direction = "오른쪽" if mean_angle > 0 else "왼쪽"
-            issues.append(f"글자 전체가 {direction}으로 {abs(mean_angle):.1f}° 기울어져 있습니다")
-        elif abs(mean_angle) > ANGLE_WARN_DEG:
-            direction = "오른쪽" if mean_angle > 0 else "왼쪽"
-            issues.append(f"글자가 {direction}으로 약간({abs(mean_angle):.1f}°) 기울어져 있습니다")
+        # 전체 기울기 — 문서 단위 평가만 제공 (개별 글자 나열은 slant 측정
+        # 노이즈에 민감하고, 서비스 목적도 "글 전체 평가"이므로 제거함)
+        if n_reliable >= TILT_MIN_RELIABLE:
+            if abs(mean_angle) > ANGLE_FLAG_DEG:
+                direction = "오른쪽" if mean_angle > 0 else "왼쪽"
+                issues.append(
+                    f"글씨 전체가 {direction}으로 {abs(mean_angle):.1f}° 기울어져 있습니다")
+            elif abs(mean_angle) > ANGLE_WARN_DEG:
+                direction = "오른쪽" if mean_angle > 0 else "왼쪽"
+                issues.append(
+                    f"글씨가 전체적으로 {direction}으로 약간({abs(mean_angle):.1f}°) 기울어져 있습니다")
 
-        if angle_std > 8.0:
-            issues.append(f"글자마다 기울기 방향이 다릅니다 (편차 {angle_std:.1f}°)")
-
-        tilted_cw  = [c.char_id for c in chars if c.angle_flag == "tilted_cw"]
-        tilted_ccw = [c.char_id for c in chars if c.angle_flag == "tilted_ccw"]
-        if tilted_cw:
-            issues.append(f"오른쪽으로 기운 글자: {', '.join(tilted_cw)}")
-        if tilted_ccw:
-            issues.append(f"왼쪽으로 기운 글자: {', '.join(tilted_ccw)}")
+            if tilt_consistency_score < 60:
+                issues.append(
+                    f"글자들의 기울기가 들쭉날쭉합니다 (일관성 {tilt_consistency_score:.0f}/100)")
+            elif tilt_consistency_score < 80:
+                issues.append(
+                    f"기울기를 조금 더 일정하게 써보세요 (일관성 {tilt_consistency_score:.0f}/100)")
 
         # 기준선 정렬
         if line_alignment_score < 60:
@@ -233,10 +261,11 @@ def analyze_size_angle(chars: List[Dict]) -> Dict:
     """
     result = SizeAngleAnalyzer().analyze(chars)
     return {
-        "size_uniformity_score": result.size_uniformity_score,
-        "mean_angle":            result.mean_angle,
-        "angle_std":             result.angle_std,
-        "overall_tilt":          result.overall_tilt,
+        "size_uniformity_score":  result.size_uniformity_score,
+        "mean_angle":             result.mean_angle,
+        "angle_std":              result.angle_std,
+        "tilt_consistency_score": result.tilt_consistency_score,
+        "overall_tilt":           result.overall_tilt,
         "line_alignment_score":  result.line_alignment_score,
         "issues":                result.issues,
         "chars": [

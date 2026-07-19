@@ -60,6 +60,7 @@ def main():
                 "overall_tilt": ana["overall_tilt"],
                 "size_flags": flags_size,
                 "angle_flags": flags_angle,
+                "tilt_consistency_score": round(ana["tilt_consistency_score"], 1),
                 "issues": ana["issues"],
             },
             "시간(s)": {

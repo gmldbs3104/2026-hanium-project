@@ -5,12 +5,24 @@ SFR-004I: CRAFT 기본 출력 기반 글자 탐지
 ---------
 1. CRAFT 추론 → boxes (4점 다각형), score_text_raw
 2. 각 박스 내 binary image 잉크 픽셀로 tight bbox 재계산
-3. 잉크 픽셀로 angle 계산 (cv2.minAreaRect)
-4. score map 평균으로 confidence 계산
-5. 읽기 순서 정렬
+3. score map 평균으로 confidence 계산
+4. 읽기 순서 정렬
+5. 최종 박스별 세로획 기반 slant 각도 측정 (angle, angle_reliable)
 
 반환: AI_MODEL_INTERFACE.md SFR-004I 스펙 준수
-  char_id, bounding_box(x/y/width/height), angle, confidence
+  char_id, bounding_box(x/y/width/height), angle, angle_reliable, confidence
+
+angle 산출 방식 (2026-07-19 교체)
+--------------------------------
+과거에는 잉크 픽셀 전체의 cv2.minAreaRect 방향을 angle로 썼으나, 이는 글자
+외곽 형태가 결정하는 값이라 둥근 글자('둥')·대각획 글자('한')에서 곧게 쓴
+글씨도 ±30~45°로 튀는 구조적 오류가 있었다 (E2E 실측). 현재는 사람이 체감하는
+"글씨 기울임"에 해당하는 **세로획 slant**를 측정한다:
+  - 글자 ROI에 HoughLinesP로 선분 추출 → 수직 ±25° 이내 선분만 채택
+  - 선분 길이 가중 평균 slant (양수 = 시계방향 = 글자 상단이 오른쪽으로 기움)
+  - 채택된 세로획 총 길이가 글자 높이의 60% 미만이면 측정 불가로 판정하고
+    angle=0.0, angle_reliable=False 반환 (ㅇ 위주 글자 등) — 후단 분석기는
+    reliable한 글자만 모아 문서 단위 기울기를 평가한다.
 """
 import logging
 import os
@@ -136,6 +148,55 @@ def _remove_specks(binary: np.ndarray, max_area: int = _SPECK_MAX_AREA) -> np.nd
     cleaned = binary.copy()
     cleaned[np.isin(labels, small)] = 0
     return cleaned
+
+
+# ── 세로획 slant 측정 파라미터 (모듈 docstring 'angle 산출 방식' 참고) ────────
+_SLANT_MAX_DEG = 25.0        # 수직에서 이 각도 이내인 선분만 "세로획"으로 채택
+_SLANT_MIN_COVER = 0.60      # 채택된 세로획 총 길이 ≥ 글자 높이 × 이 값 → 신뢰
+_SLANT_MIN_LINE_RATIO = 0.35  # HoughLinesP minLineLength = 글자 높이 × 이 값
+
+
+def _measure_slant(binary: np.ndarray, x: float, y: float,
+                   w: float, h: float) -> Tuple[float, bool]:
+    """글자 박스 내 세로획 기울임(slant)을 측정한다.
+
+    Returns
+    -------
+    (slant_deg, reliable)
+      slant_deg : 수직 기준 기울임(도). 양수 = 시계방향(글자 상단이 오른쪽).
+                  reliable=False면 0.0.
+      reliable  : 세로획이 충분히 검출됐는지. ㅇ 위주 글자·둥근 흘림처럼
+                  수직 성분이 없는 글자는 False (측정 불가 — 평가에서 제외).
+    """
+    H, W = binary.shape[:2]
+    x0, y0 = max(0, int(x)), max(0, int(y))
+    x1, y1 = min(W, int(x + w) + 1), min(H, int(y + h) + 1)
+    if x1 - x0 < 4 or y1 - y0 < 8:
+        return 0.0, False
+    roi = binary[y0:y1, x0:x1]
+    ch = y1 - y0
+    min_len = max(6, int(ch * _SLANT_MIN_LINE_RATIO))
+    lines = cv2.HoughLinesP(roi, 1, np.pi / 180.0,
+                            threshold=max(6, min_len // 2),
+                            minLineLength=min_len, maxLineGap=3)
+    if lines is None:
+        return 0.0, False
+    num = den = 0.0
+    for lx0, ly0, lx1, ly1 in lines[:, 0]:
+        dx, dy = float(lx1 - lx0), float(ly1 - ly0)
+        if dy > 0:                       # 아래→위 방향으로 정규화 (dy ≤ 0)
+            dx, dy = -dx, -dy
+        if dy == 0:
+            continue
+        slant = float(np.degrees(np.arctan2(dx, -dy)))  # 0=수직, +=상단 오른쪽
+        if abs(slant) > _SLANT_MAX_DEG:
+            continue
+        length = float(np.hypot(dx, dy))
+        num += slant * length
+        den += length
+    if den < ch * _SLANT_MIN_COVER:
+        return 0.0, False
+    return round(num / den, 2), True
 
 
 def complete_boxes(chars: List[Dict], binary: np.ndarray) -> List[Dict]:
@@ -317,7 +378,7 @@ def _try_narrow_split(c: Dict, roi: np.ndarray, x0: int, y0: int, ref_h: float,
         pieces.append({
             "x": float(x0 + b0 + xs.min()), "y": float(y0 + ys.min()),
             "w": pw, "h": ph,
-            "angle": c["angle"], "conf": c["conf"], "split_from": id(c),
+            "conf": c["conf"], "split_from": id(c),
         })
     return pieces
 
@@ -402,7 +463,7 @@ def split_wide_boxes(chars: List[Dict], binary: np.ndarray,
                     "y": float(y0 + ys.min()),
                     "w": float(xs.max() - xs.min() + 1),
                     "h": float(ys.max() - ys.min() + 1),
-                    "angle": c["angle"], "conf": c["conf"],
+                    "conf": c["conf"],
                     # 같은 원본 박스에서 잘려 나온 조각끼리는 merge_jaso_boxes가
                     # 가로로 도로 붙이지 않도록 원본 id를 기록 (분할 취지 보존).
                     # 세로 병합(잘린 조각과 위/아래 받침 파편)은 허용된다.
@@ -526,7 +587,7 @@ def _merge_row(chars: List[Dict]) -> List[Dict]:
         merged.append({
             "x": float(x0), "y": float(y0),
             "w": float(x1 - x0), "h": float(y1 - y0),
-            "angle": chars[biggest]["angle"], "conf": float(conf),
+            "conf": float(conf),
         })
     return merged
 
@@ -639,7 +700,7 @@ class CraftDetector:
         chars = complete_boxes(chars, clean)
         chars = self._sort_reading_order(chars, binary_image.shape)
         logger.debug("→ %d chars detected", len(chars))
-        return self._format_output(chars)
+        return self._format_output(chars, clean)
 
     def unload(self):
         del self._craft
@@ -713,14 +774,6 @@ class CraftDetector:
                 continue
             tx, ty, tw, th, ink_pts_xy = result
 
-            # angle: 잉크 픽셀 minAreaRect
-            angle = 0.0
-            if len(ink_pts_xy) >= 5:
-                rect  = cv2.minAreaRect(ink_pts_xy)
-                angle = float(rect[2])
-                if angle < -45:
-                    angle += 90
-
             # confidence: score map 해당 영역 평균
             if score is not None:
                 sx0  = max(0,       int(tx / scale))
@@ -735,7 +788,7 @@ class CraftDetector:
             chars.append({
                 "x": float(tx), "y": float(ty),
                 "w": float(tw), "h": float(th),
-                "angle": angle, "conf": conf,
+                "conf": conf,
             })
 
         return chars
@@ -818,10 +871,12 @@ class CraftDetector:
             result.extend(sorted(row, key=lambda c: c["x"]))
         return result
 
-    def _format_output(self, chars: List[Dict]) -> List[Dict]:
-        """AI_MODEL_INTERFACE.md SFR-004I 스펙 형식."""
-        return [
-            {
+    def _format_output(self, chars: List[Dict], binary: np.ndarray) -> List[Dict]:
+        """AI_MODEL_INTERFACE.md SFR-004I 스펙 형식. angle은 최종 박스의 세로획 slant."""
+        out = []
+        for i, c in enumerate(chars):
+            slant, reliable = _measure_slant(binary, c["x"], c["y"], c["w"], c["h"])
+            out.append({
                 "char_id": f"char_{i}",
                 "bounding_box": {
                     "x":      c["x"],
@@ -829,11 +884,11 @@ class CraftDetector:
                     "width":  c["w"],
                     "height": c["h"],
                 },
-                "angle":      float(c["angle"]),
-                "confidence": float(c["conf"]),
-            }
-            for i, c in enumerate(chars)
-        ]
+                "angle":          slant,
+                "angle_reliable": reliable,
+                "confidence":     float(c["conf"]),
+            })
+        return out
 
 
 # ------------------------------------------------------------------ #
