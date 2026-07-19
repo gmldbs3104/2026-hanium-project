@@ -36,6 +36,12 @@ ANGLE_FLAG_DEG = 7.0   # 명확
 # 문서 단위 기울기 평가 (2026-07-19 개편 — 개별 글자 지적 대신 전체 평가)
 TILT_MIN_RELIABLE = 3        # slant 신뢰 글자가 이보다 적으면 기울기 평가 생략
 TILT_STD_MAX = 12.0          # slant 표준편차 0° → 100점, 12°+ → 0점 (일관성 점수)
+# 이상치 조정: 필자의 slant는 습관적으로 일정하므로, 전체 중앙값에서 이 이상
+# 벗어난 측정값은 (흘림·측정 노이즈로 보고) 통계에서 제외한다.
+TILT_OUTLIER_DEG = 10.0
+# 기울기 일관성 등급 경계 (handwriting_evaluation.md 지표 2: σ<3 우수 / 3~7 보통 / ≥7 불량)
+TILT_STD_GOOD = 3.0
+TILT_STD_FAIR = 7.0
 
 # CV(변동계수) 0% → 100점, 30%+ → 0점
 SIZE_SCORE_MAX_CV = 0.30
@@ -129,9 +135,15 @@ class SizeAngleAnalyzer:
         reliable = np.array([c.get("angle", 0.0) for c in chars
                              if c.get("angle_reliable", True)], dtype=np.float32)
         n_reliable = len(reliable)
+        n_outlier = 0
         if n_reliable >= TILT_MIN_RELIABLE:
-            mean_angle = float(np.mean(reliable))
-            angle_std  = float(np.std(reliable))
+            # 이상치 조정: 개별 측정값(A)을 전체 중앙값(C)과 비교해, 습관적
+            # slant에서 동떨어진 값은 흘림/측정 노이즈로 보고 통계에서 제외.
+            med = float(np.median(reliable))
+            inliers = reliable[np.abs(reliable - med) <= TILT_OUTLIER_DEG]
+            n_outlier = n_reliable - len(inliers)
+            mean_angle = float(np.mean(inliers))
+            angle_std  = float(np.std(inliers))
             tilt_consistency_score = float(
                 max(0.0, 100.0 * (1.0 - angle_std / TILT_STD_MAX)))
         else:
@@ -149,8 +161,8 @@ class SizeAngleAnalyzer:
         line_alignment_score = float(np.mean(row_baseline_scores)) if row_baseline_scores else 100.0
 
         issues = self._generate_issues(
-            char_analyses, size_uniformity_score, mean_angle,
-            tilt_consistency_score, n_reliable, line_alignment_score,
+            char_analyses, size_uniformity_score, mean_angle, angle_std,
+            tilt_consistency_score, n_reliable, n_outlier, line_alignment_score,
         )
 
         return SizeAngleResult(
@@ -195,8 +207,10 @@ class SizeAngleAnalyzer:
         chars: List[CharAnalysis],
         size_score: float,
         mean_angle: float,
+        angle_std: float,
         tilt_consistency_score: float,
         n_reliable: int,
+        n_outlier: int,
         line_alignment_score: float,
     ) -> List[str]:
         issues: List[str] = []
@@ -226,12 +240,17 @@ class SizeAngleAnalyzer:
                 issues.append(
                     f"글씨가 전체적으로 {direction}으로 약간({abs(mean_angle):.1f}°) 기울어져 있습니다")
 
-            if tilt_consistency_score < 60:
+            # 일관성 등급은 handwriting_evaluation.md 지표 2의 σ 경계를 따른다
+            if angle_std >= TILT_STD_FAIR:
                 issues.append(
-                    f"글자들의 기울기가 들쭉날쭉합니다 (일관성 {tilt_consistency_score:.0f}/100)")
-            elif tilt_consistency_score < 80:
+                    f"글자들의 기울기가 들쭉날쭉합니다 (편차 {angle_std:.1f}°, 7° 이상은 불량)")
+            elif angle_std >= TILT_STD_GOOD:
                 issues.append(
-                    f"기울기를 조금 더 일정하게 써보세요 (일관성 {tilt_consistency_score:.0f}/100)")
+                    f"기울기를 조금 더 일정하게 써보세요 (편차 {angle_std:.1f}°)")
+
+            if n_outlier > 0:
+                issues.append(
+                    f"기울기가 유난히 다른 {n_outlier}자는 흘려 쓴 것으로 보고 통계에서 제외했습니다")
 
         # 기준선 정렬
         if line_alignment_score < 60:
