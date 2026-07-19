@@ -283,12 +283,15 @@ Dict
 | `total_score` | `float` | 종합 점수 — 측정된 지표(skipped 제외)의 평균 |
 | `metrics` | `Dict` | 지표별 상세 (handwriting_evaluation.md ①~⑥ + clarity). 각 항목 `{value, unit, grade(우수/보통/불량), score}` 또는 측정 불가 시 `{"skipped": 사유}` |
 | `overall_tilt` | `str` | `"straight"` \| `"leaning_right"` \| `"leaning_left"` |
-| `line_alignment_score` | `float` | 행 내 기준선(baseline) 정렬도 0~100점 |
+| `line_alignment_score` | `float` | 기준선 이탈도 점수 0~100 (행별 **회귀선** 잔차 기반 — 지표 5) |
+| `total_score` | `float` | 측정된 지표들의 평균 (skipped 지표는 제외) |
+| `metrics` | `Dict` | handwriting_evaluation.md 지표 1~6 + `clarity`(명료도). 각 항목은 `{value, unit, grade(우수/보통/불량), score}` 또는 측정 불가 시 `{skipped: 사유}` |
 | `issues` | `List[str]` | SFR-007에 전달할 피드백 메시지 목록 |
 | `chars[].size_ratio` | `float` | 행 내 중앙값 대비 높이 비율 (1.0=정상) |
 | `chars[].angle` | `float` | 글자 개별 slant (degrees, `craft_detect_chars()`의 `angle` 그대로) |
 | `chars[].size_flag` | `str` | `"normal"` \| `"large"` \| `"small"` |
 | `chars[].angle_flag` | `str` | `"normal"` \| `"tilted_cw"` \| `"tilted_ccw"` \| `"unmeasured"` (`angle_reliable=false`) |
+| `chars[].clarity_flag` | `str` | `"clear"` \| `"merged_suspect"`(과폭 — 옆 글자와 이어 씀 의심) \| `"tilt_outlier"`(습관 slant 이탈) \| `"low_confidence"`. clear가 아니면 명료도 감점 대상이자 통계 지표 집계 제외 |
 | `chars[].clarity_flag` | `str` | `"clear"` \| `"merged_suspect"`(병합 의심 과폭) \| `"tilt_outlier"`(습관 slant 이탈) \| `"low_confidence"` — clear가 아니면 명료도 감점 대상이며 다른 지표 통계에서 제외 |
 
 ### 현재 상태 / 교체 목표
