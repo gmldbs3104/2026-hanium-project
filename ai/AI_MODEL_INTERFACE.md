@@ -229,7 +229,9 @@ List[Dict]
 ### Input
 
 ```python
-chars: List[Dict]   # craft_detect_chars() 반환값 그대로
+chars: List[Dict]                                  # craft_detect_chars() 반환값 그대로
+binary_image: Optional[np.ndarray] = None          # 전처리 binary — 지표 6(획 굵기)에만
+                                                   # 사용. 생략하면 해당 지표만 skipped.
 ```
 
 ### Output
@@ -245,6 +247,18 @@ Dict
   "angle_std": 3.5,
   "tilt_consistency_score": 82.5,
   "overall_tilt": "straight",
+  "total_score": 78.9,
+  "metrics": {
+    "height_uniformity":       {"value": 8.9,  "unit": "%", "grade": "우수", "score": 82.2},
+    "tilt_consistency":        {"value": 3.5,  "unit": "°", "grade": "보통", "score": 75.0,
+                                "n_outlier": 2, "n_unmeasured": 5},
+    "spacing_uniformity":      {"value": 8.2,  "unit": "%", "grade": "우수", "score": 89.0, "n_gaps": 14},
+    "line_spacing_uniformity": {"value": 2.8,  "unit": "%", "grade": "우수", "score": 94.4, "n_rows": 3},
+    "baseline_deviation":      {"value": 5.6,  "unit": "%", "grade": "보통", "score": 77.6},
+    "stroke_width_uniformity": {"value": 17.7, "unit": "%", "grade": "보통", "score": 59.5,
+                                "mean_width_px": 5.3},
+    "clarity":                 {"value": 8.3,  "unit": "%", "grade": "우수", "score": 83.3, "n_flagged": 2}
+  },
   "line_alignment_score": 91.2,
   "issues": ["글씨가 전체적으로 오른쪽으로 약간(2.1°) 기울어져 있습니다"],
   "chars": [
@@ -253,7 +267,8 @@ Dict
       "size_ratio": 1.05,
       "angle": 1.8,
       "size_flag": "normal",
-      "angle_flag": "normal"
+      "angle_flag": "normal",
+      "clarity_flag": "clear"
     }
   ]
 }
@@ -264,7 +279,9 @@ Dict
 | `size_uniformity_score` | `float` | 크기 균일성 0~100점 (100=완전균일) |
 | `mean_angle` | `float` | 전체 평균 기울기 (degrees, 양수=시계방향; `angle_reliable` 글자만 집계) |
 | `angle_std` | `float` | 기울기 표준편차 (신뢰 글자만 집계) |
-| `tilt_consistency_score` | `float` | 기울기 일관성 0~100점 (std 0°=100, 12°+=0; 신뢰 글자 3자 미만이면 100) |
+| `tilt_consistency_score` | `float` | 기울기 일관성 0~100점 (신뢰 글자 3자 미만이면 100) |
+| `total_score` | `float` | 종합 점수 — 측정된 지표(skipped 제외)의 평균 |
+| `metrics` | `Dict` | 지표별 상세 (handwriting_evaluation.md ①~⑥ + clarity). 각 항목 `{value, unit, grade(우수/보통/불량), score}` 또는 측정 불가 시 `{"skipped": 사유}` |
 | `overall_tilt` | `str` | `"straight"` \| `"leaning_right"` \| `"leaning_left"` |
 | `line_alignment_score` | `float` | 행 내 기준선(baseline) 정렬도 0~100점 |
 | `issues` | `List[str]` | SFR-007에 전달할 피드백 메시지 목록 |
@@ -272,12 +289,13 @@ Dict
 | `chars[].angle` | `float` | 글자 개별 slant (degrees, `craft_detect_chars()`의 `angle` 그대로) |
 | `chars[].size_flag` | `str` | `"normal"` \| `"large"` \| `"small"` |
 | `chars[].angle_flag` | `str` | `"normal"` \| `"tilted_cw"` \| `"tilted_ccw"` \| `"unmeasured"` (`angle_reliable=false`) |
+| `chars[].clarity_flag` | `str` | `"clear"` \| `"merged_suspect"`(병합 의심 과폭) \| `"tilt_outlier"`(습관 slant 이탈) \| `"low_confidence"` — clear가 아니면 명료도 감점 대상이며 다른 지표 통계에서 제외 |
 
 ### 현재 상태 / 교체 목표
 
 | 항목 | 내용 |
 |------|------|
-| 현재 | `craft_detect_chars()`가 제공하는 `angle`(세로획 slant) 재사용 + 문서 단위 기울기 평가(일관성 점수), CV 기반 크기 균일성 점수, 행 내 바닥 y좌표 편차 기반 기준선 정렬 점수 |
+| 현재 | **handwriting_evaluation.md 지표 ①~⑥ 전면 구현 (2026-07-19)**: 높이 CV·기울기 slant σ(이상치 조정)·자간 pitch CV·행간 CV·회귀선 기준선 이탈도·획 굵기 CV + 명료도(탐지 이상 글자 감점, "탐지가 안 된 글자 = 또렷하지 않은 글자" 팀 결정). 지표 ⑦(자소 비율)은 제외 확정 |
 | 교체 목표 | 필요 시 딥러닝 기반 기울기 추정으로 교체 가능 |
 
 ---

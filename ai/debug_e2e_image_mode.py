@@ -36,7 +36,7 @@ def main():
         t1 = time.perf_counter()
         chars = craft_detect_chars(pre["binary_image"], pre["width"], pre["height"])
         t2 = time.perf_counter()
-        ana = analyze_size_angle(chars)
+        ana = analyze_size_angle(chars, pre["binary_image"])
         t3 = time.perf_counter()
 
         flags_size, flags_angle = {}, {}
@@ -61,6 +61,8 @@ def main():
                 "size_flags": flags_size,
                 "angle_flags": flags_angle,
                 "tilt_consistency_score": round(ana["tilt_consistency_score"], 1),
+                "total_score": ana["total_score"],
+                "metrics": ana["metrics"],
                 "issues": ana["issues"],
             },
             "시간(s)": {
