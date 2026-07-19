@@ -135,6 +135,10 @@ def main():
     ap.add_argument("--link-th", type=float, default=1.0)
     ap.add_argument("--low-text", type=float, default=0.4)
     ap.add_argument("--long-size", type=int, default=960)
+    # 팀 결정(2026-07-18): 손글씨 평가는 test_images 수동 GT만 사용. AI Hub 양식지
+    # 3장(인쇄 텍스트 FP·도메인 불일치로 참고 가치만 있음)은 --aihub 지정 시에만 포함.
+    ap.add_argument("--aihub", action="store_true",
+                    help="AI Hub 양식지 3장(참고용 자동 GT)도 평가에 포함")
     args = ap.parse_args()
 
     pre = ImagePreprocessor()
@@ -156,16 +160,17 @@ def main():
         name = os.path.basename(gt["image"])
         rows[name] = evaluate_image(detector, pre, image_path, gt["syllable_boxes"])
 
-    # 2) AI Hub 자동 GT
-    manifest = _load_manifest()
-    for stem in AIHUB_STEMS:
-        entry = manifest.get(stem)
-        if entry is None or not os.path.exists(entry["image"]):
-            print(f"(스킵) {stem}: 이미지/라벨 없음")
-            continue
-        gt_boxes = aihub_gt_boxes(entry["label"])
-        rows[stem] = evaluate_image(detector, pre, entry["image"], gt_boxes,
-                                    gt_in_original_coords=True)
+    # 2) AI Hub 자동 GT (--aihub 지정 시에만 — 기본 평가는 손글씨 test_images만)
+    if args.aihub:
+        manifest = _load_manifest()
+        for stem in AIHUB_STEMS:
+            entry = manifest.get(stem)
+            if entry is None or not os.path.exists(entry["image"]):
+                print(f"(스킵) {stem}: 이미지/라벨 없음")
+                continue
+            gt_boxes = aihub_gt_boxes(entry["label"])
+            rows[stem] = evaluate_image(detector, pre, entry["image"], gt_boxes,
+                                        gt_in_original_coords=True)
 
     detector.unload()
 
