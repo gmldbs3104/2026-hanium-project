@@ -58,27 +58,27 @@ class ImagePreprocessor:
     # 공개 API
     # ------------------------------------------------------------------
 
-    def preprocess_from_base64(self, b64_string: str) -> PreprocessResult:
+    def preprocess_from_base64(self, b64_string: str, apply_resize: bool = True) -> PreprocessResult:
         raw_bytes = base64.b64decode(b64_string)
-        return self.preprocess_from_bytes(raw_bytes)
+        return self.preprocess_from_bytes(raw_bytes, apply_resize=apply_resize)
 
-    def preprocess_from_bytes(self, raw_bytes: bytes) -> PreprocessResult:
+    def preprocess_from_bytes(self, raw_bytes: bytes, apply_resize: bool = True) -> PreprocessResult:
         if len(raw_bytes) > MAX_FILE_BYTES:
             raise ValueError(f"이미지 파일이 10MB를 초과합니다 ({len(raw_bytes) / 1e6:.1f}MB)")
         bgr = self._decode_bytes(raw_bytes)
-        return self._run_pipeline(bgr)
+        return self._run_pipeline(bgr, apply_resize=apply_resize)
 
-    def preprocess_from_file(self, file_path: str) -> PreprocessResult:
+    def preprocess_from_file(self, file_path: str, apply_resize: bool = True) -> PreprocessResult:
         """cv2.imread()는 Windows 한글 경로 미지원 → 바이트로 직접 로드"""
         with open(file_path, "rb") as f:
             raw = f.read()
-        return self.preprocess_from_bytes(raw)
+        return self.preprocess_from_bytes(raw, apply_resize=apply_resize)
 
     # ------------------------------------------------------------------
     # 파이프라인 실행
     # ------------------------------------------------------------------
 
-    def _run_pipeline(self, bgr: np.ndarray) -> PreprocessResult:
+    def _run_pipeline(self, bgr: np.ndarray, apply_resize: bool = True) -> PreprocessResult:
         applied = []
         h, w = bgr.shape[:2]
 
@@ -105,9 +105,14 @@ class ImagePreprocessor:
             applied.append(f"deskew({skew_angle:+.1f}deg)")
 
         # Step 6: 최대 해상도 리사이즈 (비율 유지, 긴 변 ≤ OUTPUT_MAX_SIDE)
-        resized = self._resize(binary)
-        rh, rw = resized.shape[:2]
-        applied.append(f"resize({rw}x{rh})")
+        # apply_resize=False면 이 단계를 건너뛴다 (3.1 리사이즈 on/off 측정용).
+        if apply_resize:
+            resized = self._resize(binary)
+            rh, rw = resized.shape[:2]
+            applied.append(f"resize({rw}x{rh})")
+        else:
+            resized = binary
+            rh, rw = resized.shape[:2]
 
         return PreprocessResult(
             binary_image=resized,

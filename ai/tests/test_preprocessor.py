@@ -10,9 +10,18 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import cv2
 import numpy as np
 import base64
+import pytest
 
 from preprocessing import ImagePreprocessor, QualityScorer
 from preprocessing.image_preprocessor import OUTPUT_MIN_SIDE, OUTPUT_MAX_SIDE
+
+
+@pytest.fixture(autouse=True)
+def _deterministic_seed():
+    """랜덤 노이즈로 생성한 모의 이미지가 실행마다 달라지면 deskew가 간헐적으로
+    미세 각도를 잡아 종횡비 검사가 불안정하게 실패한다(test_output_resolution).
+    각 테스트를 결정적으로 만들기 위해 numpy 시드를 고정한다."""
+    np.random.seed(20260721)
 
 
 def assert_valid_output_size(result, orig_w, orig_h):
@@ -99,6 +108,23 @@ def test_output_resolution():
         assert_valid_output_size(result, w, h)
 
     print(f"  [PASS] 출력 해상도 스펙(비율 유지, 장축 {OUTPUT_MIN_SIDE}~{OUTPUT_MAX_SIDE}px) 확인")
+
+
+def test_apply_resize_false_skips_resize_step():
+    """apply_resize=False면 Step6 리사이즈를 건너뛴다 (3.1 측정용 토글).
+    장축이 OUTPUT_MAX_SIDE를 넘는 큰 이미지로, on은 축소되고 off는 유지됨을 확인."""
+    preprocessor = ImagePreprocessor()
+    big = np.random.randint(0, 255, (900, 2000, 3), dtype=np.uint8)
+    _, enc = cv2.imencode(".png", big)
+    raw = enc.tobytes()
+
+    on = preprocessor.preprocess_from_bytes(raw)                    # 기본: 리사이즈 적용
+    off = preprocessor.preprocess_from_bytes(raw, apply_resize=False)
+
+    assert max(on.binary_image.shape) <= OUTPUT_MAX_SIDE
+    assert max(off.binary_image.shape) > OUTPUT_MAX_SIDE            # 리사이즈 안 됨
+    assert not any("resize" in f for f in off.applied_filters)
+    print(f"  [PASS] apply_resize 토글: on={on.binary_image.shape} off={off.binary_image.shape}")
 
 
 def test_quality_score_range():

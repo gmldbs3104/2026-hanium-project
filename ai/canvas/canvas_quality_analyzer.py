@@ -24,7 +24,10 @@ import math
 from typing import Dict, List, Optional, Tuple
 
 from .stroke_grouping import _stroke_bbox
-from .stroke_standards import get_expected_sequence, lstm_analyze_stroke_order, decompose_syllable
+from .stroke_standards import (
+    get_expected_sequence, lstm_analyze_stroke_order, decompose_syllable,
+    ALTERNATIVE_STROKE_ORDERS, standard_order_note,
+)
 from .synthetic_stroke_generator import _syllable_layout
 
 # 크기/간격 판정 임계값 (handwriting_analyzer.py와 동일한 CV 기반 설계)
@@ -85,6 +88,53 @@ def _actual_stroke_centroid(stroke: Dict, bbox: Dict) -> Tuple[float, float, flo
     return (cx, cy, w, h)
 
 
+def _acceptable_orders(target_char: str) -> List[Tuple[List[int], frozenset]]:
+    """목표 글자에 대해 감점 없이 허용되는 전체 획 순서 목록.
+
+    각 항목은 (draw-position별 기대 canonical 인덱스 시퀀스, 사용된 대안 자모 집합).
+    표준(identity)은 항상 첫 번째로 포함하며, 대안이 있는 자모는 표준+대안 후보를
+    갖고 자모 블록별 데카르트 곱으로 전체 순서를 만든다. 대안이 없으면 표준 하나뿐.
+    """
+    decomposed = decompose_syllable(target_char)
+    if decomposed is None:
+        return [([], frozenset())]
+    cho, jung, jong = decomposed
+    layout = _syllable_layout(cho, jung, jong)
+
+    # 자모 블록별 canonical 인덱스 범위
+    blocks: List[Tuple[str, List[int]]] = []
+    idx = 0
+    for jamo_label, paths in layout:
+        n = len(paths)
+        blocks.append((jamo_label, list(range(idx, idx + n))))
+        idx += n
+
+    results: List[Tuple[List[int], frozenset]] = [([], frozenset())]
+    for jamo, indices in blocks:
+        # 이 블록의 후보: 표준(첫 번째) + 유효한 대안 순열
+        block_options: List[Tuple[List[int], object]] = [(indices, None)]
+        for perm in ALTERNATIVE_STROKE_ORDERS.get(jamo, []):
+            if len(perm) == len(indices):
+                block_options.append(([indices[p] for p in perm], jamo))
+        results = [
+            (seq + reordered, alts | ({alt} if alt else frozenset()))
+            for seq, alts in results
+            for reordered, alt in block_options
+        ]
+    return results
+
+
+def _order_mismatches(matched: List[int], target: List[int]) -> int:
+    """draw-position별 매칭 canonical 인덱스가 기대 순서와 다른 개수.
+    target 길이를 넘는 draw 위치(여분 획)는 무조건 불일치로 센다(기존 동작 보존)."""
+    total = 0
+    for i, m in enumerate(matched):
+        t = target[i] if i < len(target) else None
+        if m != t:
+            total += 1
+    return total
+
+
 def analyze_stroke_order_by_position(strokes: List[Dict], bbox: Dict, target_char: str) -> Dict:
     """
     ML 분류 모델 없이 순서 오류를 감지하는 위치 기반 획순 분석.
@@ -101,6 +151,8 @@ def analyze_stroke_order_by_position(strokes: List[Dict], bbox: Dict, target_cha
             "expected_sequence": [c[0] for c in canonical],
             "actual_sequence": [],
             "error_count": 0,
+            "used_alternative_order": False,
+            "notes": [],
             "corrections": [],
         }
 
@@ -138,14 +190,22 @@ def analyze_stroke_order_by_position(strokes: List[Dict], bbox: Dict, target_cha
             "actual_sequence": [canonical[m][0] if m != -1 else "unknown" for m in matched_indices],
             "error_count": len(canonical),
             "likely_wrong_character": True,
+            "used_alternative_order": False,
+            "notes": [],
             "corrections": [f"목표 글자('{target_char}')와 많이 달라 보입니다. 다시 확인해주세요."],
         }
 
-    # matched_indices[i] == i  →  i번째로 그린 획이 표준 순서상으로도 i번째 위치가 맞음
-    error_count = sum(1 for i, m in enumerate(matched_indices) if m != i)
+    # 감점 없이 허용되는 순서(표준 + 논쟁 자모의 대안 필순) 중 오류가 가장 적은 것을 채택.
+    # best[i] = i번째로 그린 획이 있어야 할 canonical 인덱스. matched_indices[i]가 이와
+    # 다르면 순서 오류. _acceptable_orders는 표준을 먼저 넣으므로 동점이면 표준을 택한다.
+    acceptable = _acceptable_orders(target_char)
+    best_seq, best_alts = min(acceptable, key=lambda t: _order_mismatches(matched_indices, t[0]))
+
+    error_count = _order_mismatches(matched_indices, best_seq)
     corrections: List[str] = []
     for i, m in enumerate(matched_indices):
-        if m not in (i, -1):
+        expected = best_seq[i] if i < len(best_seq) else None
+        if m not in (expected, -1):
             corrections.append(
                 f"{i + 1}번째로 그린 획은 표준 순서상 {m + 1}번째({canonical[m][0]}) "
                 f"위치에 그려야 합니다."
@@ -156,11 +216,15 @@ def analyze_stroke_order_by_position(strokes: List[Dict], bbox: Dict, target_cha
             f"(작성 {len(strokes)}개 / 표준 {len(canonical)}개)"
         )
 
+    notes = [standard_order_note(jamo) for jamo in sorted(best_alts)]
+
     return {
         "expected_sequence": [c[0] for c in canonical],
         "actual_sequence": [canonical[m][0] if m != -1 else "unknown" for m in matched_indices],
         "error_count": error_count,
         "likely_wrong_character": False,
+        "used_alternative_order": bool(best_alts),
+        "notes": notes,
         "corrections": corrections,
     }
 

@@ -50,6 +50,33 @@ _JONGSUNG_CLUSTER_PARTS = {
 }
 
 
+# ── 획순 복수 정본 (IMPLEMENTATION_PLAN 2.1 / NORM_STROKE_RESEARCH §2) ──────
+# 한글 필순은 어문 규범상 미규정이라 단일 정답을 강제할 근거가 없다. 논쟁이 흔하고
+# 근거가 명확한 자모에 한해, 표준(canonical) 대비 '대안 순열'을 감점 없이 허용한다.
+# 순열은 각 자모의 표준 획 순서 인덱스(synthetic_stroke_generator._BASE_CONSONANT_PATHS
+# 경로 순서)에 대한 재배열이다.
+#
+#   ㅌ: canonical = [위가로(0), 가운데가로(1), ㄴ자(2)]. 논쟁점은 '가운데 가로획을
+#       2번째 vs 마지막'(NORM_STROKE_RESEARCH §2) → 대안 [0,2,1] = 가운데 가로를 마지막에.
+#   ※ ㅋ·ㅂ·ㄹ·ㅅ·ㅎ 등은 교과서 실물 근거가 확보되면 여기에 한 줄씩 추가한다(§3 미결).
+ALTERNATIVE_STROKE_ORDERS = {
+    "ㅌ": [[0, 2, 1]],
+}
+
+# 대안 순서를 감점 없이 수용할 때 함께 보여줄 '표준 필순' 안내 문구(안내 병기).
+_STANDARD_ORDER_NOTES = {
+    "ㅌ": "'ㅌ'을(를) 통용되는 순서로 썼습니다(감점 없음). "
+          "표준 필순은 가운데 가로획을 위 가로획 다음(두 번째)에 씁니다.",
+}
+
+
+def standard_order_note(jamo: str) -> str:
+    """대안 순서 수용 시 함께 안내할 표준 필순 문구. 별도 문구가 없으면 일반 문구."""
+    return _STANDARD_ORDER_NOTES.get(
+        jamo, f"'{jamo}'을(를) 통용되는 순서로 썼습니다(감점 없음)."
+    )
+
+
 def _consonant_sequence(jamo: str) -> List[str]:
     if jamo in _DOUBLE_CONSONANT_BASE:
         base = _DOUBLE_CONSONANT_BASE[jamo]
