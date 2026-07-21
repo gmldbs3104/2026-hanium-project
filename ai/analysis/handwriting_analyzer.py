@@ -62,7 +62,12 @@ LINESPACE_MIN_ROWS = 3    # 행간 CV에 필요한 최소 행 수
 CLARITY_MIN_H = 16.0      # 행 중앙 높이가 이보다 작으면 명료도 감점 생략 (모델 한계 보호)
 CLARITY_WIDE_RATIO = 1.6  # 폭 > 행 중앙 높이 × 이 값 → 병합 의심(잘못 이어 씀)
 CLARITY_MIN_CONF = 0.35   # confidence가 이보다 낮으면 불명료 의심
-CLARITY_PENALTY = 2.0     # 명료도 점수 = 100 - 감점비율×100×이 배수
+
+# ── 절대 규범 축 임계값 (1.3, 근거: NORM_STROKE_RESEARCH.md 3.3 문헌 조사) ──
+#    자기 일관성(종합점수)과 별개 축. 점수 미반영·경고만. 실사용 데이터로 튜닝.
+TILT_NORM_DEG = 7.0          # |세로획 평균 slant|가 이 값 초과 → 수직(0°) 이탈 경고
+LINE_NORM_MIN_RATIO = 1.0    # 인접 행 baseline 간격 / 평균 글자 높이 하한(미만=겹침)
+SPACING_NORM_MIN_CHARS = 15  # 이 미만이면 띄어쓰기 규범 판정 생략(짧은 단어 촬영 보호)
 
 
 def _grade(value: float, good: float, fair: float) -> str:
@@ -84,6 +89,38 @@ def _band_score(value: float, good: float, fair: float) -> float:
     return max(0.0, 40.0 * (1.0 - (value - fair) / fair))
 
 
+# ── 종합점수 교육적 가중 (정렬·균일 우선 3:2:1, clarity 제외) ──────────
+#    2026-07-20 결정. 초기값이며 실사용 데이터로 조정 가능.
+WEIGHTS = {
+    "height_uniformity":       3,
+    "baseline_deviation":      3,
+    "line_spacing_uniformity": 3,
+    "tilt_consistency":        2,
+    "spacing_uniformity":      2,
+    "stroke_width_uniformity": 1,
+}
+
+
+def _weighted_total(metrics: Dict) -> float:
+    """측정된 지표(score 보유)만 가중 평균. skipped·clarity는 제외."""
+    num = den = 0.0
+    for key, w in WEIGHTS.items():
+        m = metrics.get(key)
+        if m and "score" in m:
+            num += m["score"] * w
+            den += w
+    return round(num / den, 1) if den else 100.0
+
+
+def _total_grade(score: float) -> str:
+    """종합점수(높을수록 좋음) 등급 — _band_score 앵커(80/40)와 정합."""
+    if score >= 80.0:
+        return "우수"
+    if score >= 40.0:
+        return "보통"
+    return "불량"
+
+
 @dataclass
 class CharAnalysis:
     char_id: str
@@ -103,9 +140,12 @@ class SizeAngleResult:
     tilt_consistency_score: float   # 0~100 (지표 2)
     overall_tilt: str               # "straight" | "leaning_right" | "leaning_left"
     line_alignment_score: float     # 0~100 (지표 5 — 회귀선 잔차 기반)
-    total_score: float              # 측정된 지표들의 평균 (skipped 제외)
+    total_score: float              # 교육적 가중(3:2:1) 평균, clarity 제외 (skipped 제외)
+    total_grade: str                # 종합점수 등급 (우수/보통/불량)
     metrics: Dict = field(default_factory=dict)  # 지표별 {value, grade, score, ...}
     issues: List[str] = field(default_factory=list)
+    clarity_warnings: List[str] = field(default_factory=list)  # 명료도 경고 (점수 미반영)
+    norm_deviations: Dict = field(default_factory=dict)  # 절대 규범 축 (점수 미반영, 경고만)
 
 
 class SizeAngleAnalyzer:
@@ -117,7 +157,13 @@ class SizeAngleAnalyzer:
                 chars=[], size_uniformity_score=100.0, mean_angle=0.0,
                 angle_std=0.0, tilt_consistency_score=100.0,
                 overall_tilt="straight", line_alignment_score=100.0,
-                total_score=100.0, metrics={}, issues=[],
+                total_score=100.0, total_grade="우수", metrics={}, issues=[],
+                clarity_warnings=[],
+                norm_deviations={
+                    "tilt":         {"violated": False, "evaluated": False},
+                    "spacing":      {"violated": False, "evaluated": False},
+                    "line_spacing": {"violated": False, "evaluated": False},
+                },
             )
 
         rows = self._group_by_row(chars)
@@ -158,23 +204,24 @@ class SizeAngleAnalyzer:
         # ── 지표 6: 획 굵기 (binary 필요) ────────────────────────────
         metrics["stroke_width_uniformity"] = self._stroke_width(binary_image)
 
-        # ── 명료도 점수 ──────────────────────────────────────────────
-        # 주의: clarity에는 "__gated__" 메타키(bool)가 섞여 있으므로 제외하고 집계
+        # ── 명료도: 경고만 (점수 미반영, 2026-07-20 결정) ────────────
+        # clarity_flag는 위 지표들의 통계 오염 방지 게이트로만 쓰고, 종합점수엔
+        # 반영하지 않는다(모델 탐지 한계를 사용자 필체 탓으로 돌리는 것 방지).
+        # "__gated__" 메타키(bool)는 집계에서 제외.
         n_flag = sum(1 for k, f in clarity.items()
                      if k != "__gated__" and f != "clear")
         gated = clarity.get("__gated__", False)
-        if gated:
-            metrics["clarity"] = {"skipped": "글자가 작아 명료도 판정 생략(모델 한계 보호)"}
-        else:
-            ratio = n_flag / len(chars)
-            score = max(0.0, 100.0 * (1.0 - CLARITY_PENALTY * ratio))
-            metrics["clarity"] = {"value": round(ratio * 100, 1), "unit": "%",
-                                  "grade": _grade(ratio * 100, 10.0, 25.0),
-                                  "score": round(score, 1), "n_flagged": n_flag}
+        clarity_warnings: List[str] = []
+        if not gated and n_flag > 0:
+            clarity_warnings.append(
+                f"또렷하게 구분되지 않는 글자가 {n_flag}자 있습니다 "
+                f"(흘려 쓰거나 옆 글자와 이어 쓴 것으로 보임)")
 
-        # ── 종합 점수 (측정된 지표 평균) ─────────────────────────────
-        scores = [m["score"] for m in metrics.values() if "score" in m]
-        total = float(np.mean(scores)) if scores else 100.0
+        # ── 종합 점수 (교육적 가중 3:2:1, clarity 제외, skipped 제외) ──
+        total = _weighted_total(metrics)
+
+        # ── 절대 규범 축 (1.3) — 종합점수와 별개, 경고만 ─────────────
+        norm_deviations = self._norm_deviations(rows, tilt, baselines, clear_ids)
 
         # ── 피드백 문구 ──────────────────────────────────────────────
         issues += self._issues_size(metrics["height_uniformity"], char_analyses)
@@ -191,11 +238,12 @@ class SizeAngleAnalyzer:
         issues += self._issues_generic(
             metrics["stroke_width_uniformity"], "획 굵기가 고르지 않습니다",
             "획 굵기를 조금 더 일정하게 써보세요", "굵기 CV")
-        if not gated and n_flag > 0:
-            issues.append(
-                f"또렷하게 구분되지 않는 글자가 {n_flag}자 있습니다 "
-                f"(흘려 쓰거나 옆 글자와 이어 쓴 것으로 보임 — 명료도 "
-                f"{metrics['clarity']['score']:.0f}/100)")
+        # 규범 이탈 경고도 issues에 노출(자간·행간). 기울기 규범은 위 tilt issues와
+        # 중복되므로 구조화된 norm_deviations에만 담는다.
+        for axis in ("spacing", "line_spacing"):
+            msg = norm_deviations[axis].get("message")
+            if msg:
+                issues.append(msg)
 
         return SizeAngleResult(
             chars=char_analyses,
@@ -204,7 +252,9 @@ class SizeAngleAnalyzer:
             tilt_consistency_score=tilt["metric"].get("score", 100.0),
             overall_tilt=tilt["overall"],
             line_alignment_score=metrics["baseline_deviation"].get("score", 100.0),
-            total_score=round(total, 1), metrics=metrics, issues=issues,
+            total_score=total, total_grade=_total_grade(total),
+            metrics=metrics, issues=issues, clarity_warnings=clarity_warnings,
+            norm_deviations=norm_deviations,
         )
 
     # ------------------------------------------------------------------
@@ -374,6 +424,79 @@ class SizeAngleAnalyzer:
         cv = float(np.std(gaps) / mean * 100)
         return self._metric(cv, "line_spacing_uniformity", "%", n_rows=len(baselines))
 
+    def _norm_deviations(self, rows: List[List[Dict]], tilt: Dict,
+                         baselines: List[float], clear_ids: set) -> Dict:
+        """절대 규범 축 — 자기 일관성과 별개. **점수 미반영, 경고만.**
+
+        ① 기울기: 세로획 평균 slant의 절대값이 수직(0°)에서 TILT_NORM_DEG 초과 이탈.
+        ② 자간: 충분히 긴 글에서 띄어쓰기(어간, 넓은 gap) 군집이 완전히 소실(붙여 씀).
+        ③ 행간: 인접 행 baseline 간격 / 평균 글자 높이 < LINE_NORM_MIN_RATIO(줄 겹침).
+
+        각 축: {"violated": bool, "evaluated": bool, "value"?, "message"?}.
+        게이트 미충족(짧은 텍스트 등)이면 evaluated=False, violated=False.
+        """
+        # ── ① 기울기 규범 (세로획 수직 이탈) ──
+        if "skipped" in tilt["metric"]:
+            tilt_norm = {"violated": False, "evaluated": False,
+                         "reason": "세로획이 있는 글자가 부족"}
+        else:
+            mean_a = tilt["mean"]
+            violated = abs(mean_a) > TILT_NORM_DEG
+            tilt_norm = {"violated": violated, "evaluated": True,
+                         "value": round(abs(mean_a), 1)}
+            if violated:
+                d = "오른쪽" if mean_a > 0 else "왼쪽"
+                tilt_norm["message"] = (
+                    f"글씨가 전체적으로 {d}으로 {abs(mean_a):.0f}° 기울어 "
+                    f"곧은 형식에서 벗어납니다")
+
+        # ── ② 자간 규범 (띄어쓰기 뭉개짐 — 넓은 gap 군집 소실) ──
+        n_clear = n_pairs = n_word = 0
+        for row in rows:
+            row_h = float(np.median([c["bounding_box"]["height"] for c in row]))
+            word_gap = row_h * WORD_GAP_RATIO
+            n_clear += sum(1 for c in row if c["char_id"] in clear_ids)
+            for a, b in zip(row, row[1:]):
+                if a["char_id"] not in clear_ids or b["char_id"] not in clear_ids:
+                    continue
+                n_pairs += 1
+                edge_gap = b["bounding_box"]["x"] - (
+                    a["bounding_box"]["x"] + a["bounding_box"]["width"])
+                if edge_gap > word_gap:
+                    n_word += 1
+        if n_clear < SPACING_NORM_MIN_CHARS or n_pairs < SPACING_MIN_GAPS:
+            spacing_norm = {"violated": False, "evaluated": False,
+                            "reason": "글자·간격 수가 부족(짧은 단어 촬영 등)"}
+        else:
+            violated = (n_word == 0)
+            spacing_norm = {"violated": violated, "evaluated": True,
+                            "value": n_word}
+            if violated:
+                spacing_norm["message"] = (
+                    "단어 사이 띄어쓰기가 거의 없어 글이 뭉쳐 보입니다")
+
+        # ── ③ 행간 규범 (줄 겹침) ──
+        if len(baselines) < LINESPACE_MIN_ROWS:
+            line_norm = {"violated": False, "evaluated": False,
+                         "reason": "행이 부족(3행 이상 필요)"}
+        else:
+            clear_h = [c["bounding_box"]["height"] for row in rows for c in row
+                       if c["char_id"] in clear_ids]
+            if len(clear_h) < 3:
+                clear_h = [c["bounding_box"]["height"] for row in rows for c in row]
+            mean_h = float(np.mean(clear_h)) if clear_h else 0.0
+            gaps = np.diff(sorted(baselines))
+            min_ratio = float(np.min(gaps) / mean_h) if mean_h > 0 else 999.0
+            violated = min_ratio < LINE_NORM_MIN_RATIO
+            line_norm = {"violated": violated, "evaluated": True,
+                         "value": round(min_ratio, 2)}
+            if violated:
+                line_norm["message"] = (
+                    "줄 간격이 좁아 윗줄과 아랫줄이 겹쳐 보입니다")
+
+        return {"tilt": tilt_norm, "spacing": spacing_norm,
+                "line_spacing": line_norm}
+
     def _stroke_width(self, binary: Optional[np.ndarray]) -> Dict:
         if binary is None:
             return {"skipped": "binary 이미지 미제공으로 획 굵기 평가 생략"}
@@ -467,8 +590,11 @@ def analyze_size_angle(chars: List[Dict],
         "overall_tilt":           result.overall_tilt,
         "line_alignment_score":   result.line_alignment_score,
         "total_score":            result.total_score,
+        "total_grade":            result.total_grade,
         "metrics":                result.metrics,
         "issues":                 result.issues,
+        "clarity_warnings":       result.clarity_warnings,
+        "norm_deviations":        result.norm_deviations,
         "chars": [
             {
                 "char_id":      c.char_id,

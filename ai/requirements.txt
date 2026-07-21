@@ -1,0 +1,45 @@
+# ai/requirements.txt — AI 파트(이미지 + 캔버스 모드) 런타임·개발 의존성
+# 2026-07-21 Python 3.14.4 (Linux/WSL)에서 실제 검증된 버전 조합.
+# (탐지 eval F1@0.3 0.966 / 전체 테스트 23개 통과 확인)
+#
+# 아래 --extra-index-url 줄 덕분에 torch CPU 휠(+cpu)이 자동 해결된다.
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+# ── 이미지 모드: 전처리 · CRAFT 탐지 · 분석 ──
+numpy==2.5.1
+opencv-python-headless==4.11.0.86    # ⚠️ 5.x 금지 (아래 주의 1)
+torch==2.13.0+cpu                     # CPU 휠 (위 --extra-index-url로 해결)
+torchvision==0.28.0+cpu
+scipy==1.18.0                         # craft_text_detector 런타임 의존
+gdown==6.1.0                          # CRAFT 사전학습 가중치(craft_mlt_25k.pth) 다운로드
+Pillow==12.3.0
+
+# ── 개발 · 테스트 ──
+pytest==9.1.1
+
+# ─────────────────────────────────────────────────────────────────────────
+# ── 설치 절차 ──
+#   python3 -m venv venv
+#   P=./venv/bin/python
+#   $P -m pip install --upgrade pip
+#   $P -m pip install -r requirements.txt
+#   # craft-text-detector는 위 목록에 없다 — 아래 "주의 2"대로 --no-deps로 따로 설치 + 패치
+#   $P -m pip install --no-deps craft-text-detector==0.4.3
+#   # 그 다음 vgg16_bn.py 1줄 패치 (주의 2)
+#
+# ── ⚠️ Python 3.14 환경 주의사항 (2026-07-21 셋업 중 발견) ──
+# 1. opencv는 반드시 4.x 유지. opencv 5.x(현재 cp314 최신)는 cv2.HoughLinesP 반환 shape와
+#    connectedComponents 채널 assertion이 바뀌어 detection/craft_detector.py가 깨진다.
+#    4.11.0.86은 cp37-abi3 휠이라 py3.14에서도 설치된다.
+# 2. craft-text-detector 0.4.3은 여기 목록에서 뺐다 — 이 패키지가 잘못된 핀
+#    (opencv-python<4.5.4.62)을 걸어, 함께 두면 pip가 py3.14 휠 없는 구버전 opencv sdist
+#    빌드를 시도하다 실패하기 때문. 반드시 `--no-deps`로 따로 설치한다.
+#    설치 후에는 torchvision 0.28에서 제거된 `models.vgg.model_urls` import 때문에 로드가
+#    안 되므로 아래 파일을 1줄 패치한다 (CraftNet은 생성 직후 craft_mlt_25k.pth 전체
+#    가중치로 덮어써지므로 VGG 백본 ImageNet 사전학습은 불필요):
+#      venv/lib/python3.*/site-packages/craft_text_detector/models/basenet/vgg16_bn.py
+#        - `from torchvision.models.vgg import model_urls`   ← 삭제
+#        - `models.vgg16_bn(pretrained=pretrained)`          → `models.vgg16_bn(weights=None)`
+#        - `model_urls["vgg16_bn"] = ...` 재할당 줄           ← 삭제
+#
+# 캔버스 모드(canvas/)는 torch 없이 동작한다(torch는 이미지 모드 CRAFT 경로만 사용, lazy import).

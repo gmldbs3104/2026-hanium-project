@@ -248,6 +248,7 @@ Dict
   "tilt_consistency_score": 82.5,
   "overall_tilt": "straight",
   "total_score": 78.9,
+  "total_grade": "보통",
   "metrics": {
     "height_uniformity":       {"value": 8.9,  "unit": "%", "grade": "우수", "score": 82.2},
     "tilt_consistency":        {"value": 3.5,  "unit": "°", "grade": "보통", "score": 75.0,
@@ -256,11 +257,16 @@ Dict
     "line_spacing_uniformity": {"value": 2.8,  "unit": "%", "grade": "우수", "score": 94.4, "n_rows": 3},
     "baseline_deviation":      {"value": 5.6,  "unit": "%", "grade": "보통", "score": 77.6},
     "stroke_width_uniformity": {"value": 17.7, "unit": "%", "grade": "보통", "score": 59.5,
-                                "mean_width_px": 5.3},
-    "clarity":                 {"value": 8.3,  "unit": "%", "grade": "우수", "score": 83.3, "n_flagged": 2}
+                                "mean_width_px": 5.3}
   },
   "line_alignment_score": 91.2,
   "issues": ["글씨가 전체적으로 오른쪽으로 약간(2.1°) 기울어져 있습니다"],
+  "clarity_warnings": ["또렷하게 구분되지 않는 글자가 2자 있습니다 (흘려 쓰거나 옆 글자와 이어 쓴 것으로 보임)"],
+  "norm_deviations": {
+    "tilt":         {"violated": false, "evaluated": true, "value": 2.1},
+    "spacing":      {"violated": false, "evaluated": true, "value": 4},
+    "line_spacing": {"violated": false, "evaluated": true, "value": 1.77}
+  },
   "chars": [
     {
       "char_id": "char_0",
@@ -287,6 +293,9 @@ Dict
 | `total_score` | `float` | 측정된 지표들의 평균 (skipped 지표는 제외) |
 | `metrics` | `Dict` | handwriting_evaluation.md 지표 1~6 + `clarity`(명료도). 각 항목은 `{value, unit, grade(우수/보통/불량), score}` 또는 측정 불가 시 `{skipped: 사유}` |
 | `issues` | `List[str]` | SFR-007에 전달할 피드백 메시지 목록 |
+| `total_grade` | `str` | 종합점수 등급 `"우수"`(≥80) \| `"보통"`(≥40) \| `"불량"` |
+| `clarity_warnings` | `List[str]` | 명료도 경고(점수 미반영). 탐지 이상 글자를 필체 탓으로 돌리지 않기 위해 점수 대신 경고로만 |
+| `norm_deviations` | `Dict` | **절대 규범 축**(자기 일관성과 별개, **점수 미반영·경고만**). `tilt`(세로획 수직 이탈) / `spacing`(띄어쓰기 뭉개짐) / `line_spacing`(줄 겹침) 3축. 각 축 `{violated: bool, evaluated: bool, value?, message?}`. 게이트 미충족 시 `evaluated=false`. 임계값 근거: `NORM_STROKE_RESEARCH.md` |
 | `chars[].size_ratio` | `float` | 행 내 중앙값 대비 높이 비율 (1.0=정상) |
 | `chars[].angle` | `float` | 글자 개별 slant (degrees, `craft_detect_chars()`의 `angle` 그대로) |
 | `chars[].size_flag` | `str` | `"normal"` \| `"large"` \| `"small"` |
@@ -300,6 +309,14 @@ Dict
 |------|------|
 | 현재 | **handwriting_evaluation.md 지표 ①~⑥ 전면 구현 (2026-07-19)**: 높이 CV·기울기 slant σ(이상치 조정)·자간 pitch CV·행간 CV·회귀선 기준선 이탈도·획 굵기 CV + 명료도(탐지 이상 글자 감점, "탐지가 안 된 글자 = 또렷하지 않은 글자" 팀 결정). 지표 ⑦(자소 비율)은 제외 확정 |
 | 교체 목표 | 필요 시 딥러닝 기반 기울기 추정으로 교체 가능 |
+
+> **2026-07-20 결정 → 구현 완료 (2026-07-21, 상세: `IMPLEMENTATION_PLAN.md`)**: 위 출력 계약이
+> 아래와 같이 반영됨 — ① `total_score`는 단순 평균이 아니라 **교육적 가중(정렬·균일 우선 3:2:1)**
+> 평균이며 **명료도(clarity)를 제외**한다(가중치는 `WEIGHTS` 상수). ② 명료도는 `metrics`에서 빠지고
+> `clarity_warnings`(경고 리스트)로만 반환한다(단, `chars[].clarity_flag`는 통계 오염 방지 게이트로 유지).
+> ③ **절대 규범 이탈**을 자기 일관성과 별개 축으로 담는 `norm_deviations`
+> (기울기=수직 이탈 / 자간=띄어쓰기 뭉개짐 / 행간=줄 겹침) 필드가 추가됨(점수 미반영). ④ 이미지 모드는
+> **자유 촬영** 전제라 목표 텍스트 대조는 없다.
 
 ---
 
