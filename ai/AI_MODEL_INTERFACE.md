@@ -200,11 +200,11 @@ List[Dict]
 | 항목 | 내용 |
 |------|------|
 | 현재 | **CRAFT 모델(pretrained, craft_mlt_25k.pth) 추론 기반 탐지 — 이미 구현 완료** (2026-07-09 변경, 아래 참고). `angle`은 2026-07-19부터 minAreaRect가 아니라 **세로획 slant**(HoughLinesP 근수직 선분의 길이가중 평균, `craft_detector.py` docstring 참고)로 산출하며 `angle_reliable` 필드가 추가됨 |
-| 파인튜닝 시도 | 손글씨 도메인(AI Hub 053)으로 파인튜닝을 3차례 시도했으나 전부 pretrained보다 낮은 성능으로 확인되어 롤백. 현재 pretrained로 배포 확정. 상세 경위는 `IMPLEMENTATION_HISTORY.md` Phase 5~12 참고 |
+| 파인튜닝 시도 | 손글씨 도메인(AI Hub 053)으로 파인튜닝을 3차례 시도했으나 전부 pretrained보다 낮은 성능으로 확인되어 롤백. 현재 pretrained로 배포 확정. 상세 경위는 `archive/IMPLEMENTATION_HISTORY.md` Phase 5~12 참고 |
 | 기대 효과(달성됨) | 기울어진 글씨, 겹친 문자 영역 정확 탐지 + 실제 기울기 값 제공 |
 
 > **2026-07-13 정정**: 이 표는 한동안 "OpenCV contour 기반, angle=0 고정"이라는 초기
-> 구현 상태를 그대로 남겨두고 있었으나, 실제로는 훨씬 이전(Phase 3, `IMPLEMENTATION_HISTORY.md`
+> 구현 상태를 그대로 남겨두고 있었으나, 실제로는 훨씬 이전(Phase 3, `archive/IMPLEMENTATION_HISTORY.md`
 > 참고)에 CRAFT 기반으로 전면 교체되었습니다. 문서가 실제 코드 상태를 못 따라간 사례이니,
 > 이 문서를 신뢰하기 전에 항상 `ai/detection/craft_detector.py`를 직접 확인하세요.
 

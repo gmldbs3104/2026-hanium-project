@@ -1,14 +1,14 @@
 # AI 모듈 인수인계 문서 (HANDOFF)
 
 > 2026 한이음 드림업 — AI 손글씨 교정 플랫폼
-> 최종 갱신: 2026-07-19
+> 최종 갱신: 2026-07-21 (문서 구조 재편 — 남은 일은 `STATUS.md`, 개발 서사는 `DEVLOG.md`)
 > **이 문서는 새로운 세션(계정 변경 등으로 이전 대화 기록이 없는 상태)이 처음 열었을 때
 > 가장 먼저 읽어야 할 문서입니다.** 아래 순서대로 읽으면 지금까지의 판단 근거와 현재
 > 상태를 처음부터 다시 조사하지 않고도 파악할 수 있습니다.
 
 ## ⚡ 최신 현황 요약 (2026-07-18 ~ 07-19)
 
-상세 경위는 `DETECTION_IMPROVEMENT_PLAN.md` 11~17단계 진행 기록 참고. 핵심만:
+상세 경위는 `archive/DETECTION_IMPROVEMENT_PLAN.md` 11~17단계 진행 기록 참고. 핵심만:
 
 1. **탐지 정확도** — 손글씨 공식 평가셋 4장(test/test2/test3_crop/test6, 수동 GT
    197음절, 2차 검수 완료): **평균 F1@0.3 0.968 / F1@0.5 0.946**. 평가 실행:
@@ -41,30 +41,50 @@
   백엔드 통합은 협의.
 - **범위**: 두 모드 + 학습 대시보드까지. 개인화·실시간 영상·OCR·자유필기 획순은 청사진(범위 밖).
 
+### 2026-07-21 — 2.1 획순 복수 정본 + 3.1 리사이즈 측정 구현 (상세: `IMPLEMENTATION_PLAN.md`)
+
+인터뷰 후 아래를 **구현·검증 완료**(커밋은 대기):
+1. **2.1 획순 복수 정본** — 근거 명확한 **ㅌ만** 대안 순열(`[0,2,1]`, 가운데 가로 마지막) 허용.
+   `canvas/stroke_standards.py`에 `ALTERNATIVE_STROKE_ORDERS`, 채점부(`canvas_quality_analyzer.
+   analyze_stroke_order_by_position`)가 자모 블록별 (표준+대안) 데카르트 곱 중 **최소 오류** 채택.
+   대안 수용 시 **감점 없음 + 안내 병기**(`used_alternative_order`, `notes` 필드, "표준 필순은 …").
+   ㅋ·ㅂ·ㄹ·ㅅ·ㅎ은 교과서 근거 확보 시 dict 한 줄로 확장(§3 미결). 테스트 5개(TDD) 통과.
+2. **3.1 리사이즈 on/off** — `eval/measure_resize.py`로 실측. **리사이즈 제거는 대형 원본에서
+   박스 손실+지연 급증** → **현행 유지(리사이즈 on) 확정**. `ImagePreprocessor(apply_resize=False)`
+   토글만 자산으로 남김(기본 True, 동작 불변).
+3. **검증 인프라** — `tests/test_preprocessor.py` 난수 시드 고정(간헐 실패 제거). 전체 29개 통과.
+- ⚠️ **현재 CRAFT는 pretrained**(이 sparse clone엔 `models/*.pth` 없음 → 무조건 pretrained 폴백).
+  파인튜닝은 여전히 미배포.
+
 ---
 
 ## 0. 문서 읽는 순서
 
+**살아있는 참조 (자주 읽음 — ai/ 최상위):**
 1. **이 문서(`HANDOFF.md`)** — 전체 지도. 무엇이 어디 있는지, 뭐가 되고 뭐가 안 되는지 요약.
-   그다음 `DETECTION_IMPROVEMENT_PLAN.md` — 2026-07-13 탐지 품질 재진단과 개선 4단계의
-   전 과정·정량 결과·남은 작업이 기록된 최신 작업 문서 (음절 단위 평가셋 `eval/` 포함).
-2. `requirement.md` — 전체 SFR(기능 요구사항) 목록. 지금 하는 작업이 어느 요구사항에
-   대응하는지 확인할 때 참고.
-3. `AI_MODEL_INTERFACE.md` — 백엔드와 약속한 함수 시그니처 3개. **함수 이름/파라미터/
+2. **`STATUS.md`** — 현재 상태·남은 일·미결·팀논의의 **단일 출처**. "지금 뭐 하면 되나"는 여기.
+3. `IMPLEMENTATION_PLAN.md` — 설계 결정 + 구현 계획(배경).
+4. `AI_MODEL_INTERFACE.md` — 백엔드와 약속한 함수 시그니처 3개. **함수 이름/파라미터/
    반환 형식은 절대 바꾸면 안 됨** — 내부 구현만 교체 가능.
-4. `IMPLEMENTATION_HISTORY.md` — 이미지 모드(SFR-003I/004I/005I) 개발 과정 전체 기록.
-   왜 이런 구조가 됐는지, 무슨 시행착오를 거쳤는지 매우 상세하게 기록되어 있음. **같은
-   실수를 반복하지 않으려면 반드시 읽을 것** (특히 Phase 12 — CRAFT 파인튜닝이 왜
-   최종적으로 실패 처리됐는지).
-5. `CANVAS_DATA_PLAN.md` (프로젝트 루트) — 캔버스 모드 실사용자 데이터 수집 전략, 팀
-   논의용 문서.
-6. `PROJECT_REPORT_AI.md` — 한이음 팀 공식 보고서 양식에 맞춰 정리한 버전(이미지 모드만,
-   캔버스 모드 제외). 발표/보고서용 요약이 필요하면 여기.
-7. `KEY_CODE_SUMMARY.md` — PPT 발표용으로 더 압축한 버전(전처리/CRAFT/파인튜닝 3개 항목).
+5. `requirement.md` — 전체 SFR(기능 요구사항) 목록.
+6. `handwriting_evaluation.md` — 이미지 모드 평가 지표 정의. `NORM_STROKE_RESEARCH.md` — 규범
+   임계값·획순 정본 문헌 근거.
+7. `CANVAS_DATA_PLAN.md` (프로젝트 루트) — 캔버스 모드 실사용자 데이터 수집 전략, 팀 논의용.
 
-이 문서(`HANDOFF.md`)는 **이미지 모드와 캔버스 모드 전체를 아우르는 현재 상태 요약**이고,
-`IMPLEMENTATION_HISTORY.md`는 이미지 모드의 "왜 이렇게 됐는가"를 시간순으로 상세히
-설명하는 문서입니다. 서로 대체하지 않고 보완합니다.
+**회고 (사람용):**
+- **`DEVLOG.md`** — 처음부터 지금까지의 개발일지/TIL/트러블슈팅. 왜 이렇게 됐는지 시간순 서사.
+
+**아카이브 (`ai/archive/` — 보존용, 드물게 참조):**
+- `archive/IMPLEMENTATION_HISTORY.md` — 이미지 모드 개발사 전체(Phase 1~15). **파인튜닝이 왜
+  실패했는지(Phase 12) 다시 시도 전 반드시 읽을 것.**
+- `archive/DETECTION_IMPROVEMENT_PLAN.md` — 탐지 개선 17단계 진행기록.
+- `archive/2026년_..._수행계획서.md` — 최초 기획서(청사진, 일부는 이제 범위 밖).
+
+**외부 제출용 (`ai/report/`):**
+- `report/PROJECT_REPORT_AI.md` (보고서 양식용) · `report/KEY_CODE_SUMMARY.md` (PPT용 압축).
+
+> 이 문서는 **현재 상태 요약(지도)**, `STATUS.md`는 **남은 일(트래커)**, `DEVLOG.md`는 **과거 서사**,
+> `archive/`는 **상세 원본**입니다. 서로 대체하지 않고 보완합니다.
 
 ---
 
@@ -89,13 +109,22 @@ AI 모듈은 백엔드와 **3개의 함수 계약**으로만 연결됩니다(`AI
 ```
 ai/
 ├── HANDOFF.md                        ← 지금 읽고 있는 문서 (전체 지도)
-├── IMPLEMENTATION_PLAN.md            ← 2026-07-20 설계 결정 + 구현 계획 (지금 할 일)
-├── IMPLEMENTATION_HISTORY.md         ← 이미지 모드 개발 히스토리 (매우 상세, Phase 1~12)
-├── AI_MODEL_INTERFACE.md             ← 백엔드 연동 함수 계약 3개 (일부 내용 최신화 필요, 3절 참고)
-├── PROJECT_REPORT_AI.md              ← 한이음 보고서 양식용 (이미지 모드만)
-├── KEY_CODE_SUMMARY.md               ← PPT용 압축 요약 (전처리/CRAFT/파인튜닝)
+├── STATUS.md                         ← 현재 상태·남은 일·미결 (단일 출처, 트래커)
+├── DEVLOG.md                         ← 개발일지/TIL/트러블슈팅 (회고·복기용)
+├── IMPLEMENTATION_PLAN.md            ← 2026-07-20 설계 결정 + 구현 계획
+├── AI_MODEL_INTERFACE.md             ← 백엔드 연동 함수 계약 3개 (절대 준수)
 ├── requirement.md                    ← 전체 SFR 요구사항 원문
-├── 2026년_한이음_드림업_프로젝트_수행계획서.md  ← 최초 프로젝트 기획서
+├── handwriting_evaluation.md         ← 이미지 모드 평가 지표 정의
+├── NORM_STROKE_RESEARCH.md           ← 규범 임계값·획순 정본 문헌 근거
+│
+├── archive/                          ← 보존용 상세 원본 (드물게 참조)
+│   ├── IMPLEMENTATION_HISTORY.md         ← 이미지 모드 개발사 (Phase 1~15, 파인튜닝 실패 경위)
+│   ├── DETECTION_IMPROVEMENT_PLAN.md     ← 탐지 개선 17단계 진행기록
+│   └── 2026년_..._수행계획서.md          ← 최초 프로젝트 기획서
+│
+├── report/                           ← 외부 제출용
+│   ├── PROJECT_REPORT_AI.md              ← 한이음 보고서 양식용 (이미지 모드만)
+│   └── KEY_CODE_SUMMARY.md               ← PPT용 압축 요약
 │
 ├── preprocessing/
 │   └── image_preprocessor.py         ← SFR-003I, 완성. 이진화/deskew/품질검사
@@ -141,16 +170,16 @@ ai/
 
 ## 3. 이미지 모드 — 현재 상태 요약
 
-**상세 서술은 `IMPLEMENTATION_HISTORY.md`에 있습니다. 여기서는 결론만.**
+**상세 서술은 `archive/IMPLEMENTATION_HISTORY.md`에 있습니다. 여기서는 결론만.**
 
 | 구성요소 | 상태 |
 |---|---|
 | 이미지 전처리 (SFR-003I) | ✅ 완성, 정상 동작 |
-| CRAFT 글자 탐지 (SFR-004I) | ✅ 완성 — **pretrained + region단독 디코딩(link=1.0) + 적응형 long_size + 과폭 분할 + 자소→음절 병합**. 실사용 유사 3장 평균 F1@0.3=**0.970** (test.jpg 10/10 완벽, 2026-07-18 11단계에서 행 그룹핑·병합 오작동 3건 수정으로 0.960→0.970, 밀집 다행 텍스트의 문단 통짜 박스 문제도 해소). 소형 밀집 글씨는 개선됐으나 한계 잔존. 정량 평가셋/전 과정은 `DETECTION_IMPROVEMENT_PLAN.md` 참고 |
+| CRAFT 글자 탐지 (SFR-004I) | ✅ 완성 — **pretrained + region단독 디코딩(link=1.0) + 적응형 long_size + 과폭 분할 + 자소→음절 병합**. 실사용 유사 3장 평균 F1@0.3=**0.970** (test.jpg 10/10 완벽, 2026-07-18 11단계에서 행 그룹핑·병합 오작동 3건 수정으로 0.960→0.970, 밀집 다행 텍스트의 문단 통짜 박스 문제도 해소). 소형 밀집 글씨는 개선됐으나 한계 잔존. 정량 평가셋/전 과정은 `archive/DETECTION_IMPROVEMENT_PLAN.md` 참고 |
 | 손글씨 도메인 CRAFT 파인튜닝 | ❌ 세 차례 시도(도메인 일치 → OHEM → peak-weighted OHEM) 전부 pretrained보다 낮은 성능. **최종 롤백, 미배포** |
 | 크기·기울기 판단 (SFR-005I) | ✅ 완성. `craft_detect_chars()` 출력을 그대로 받아 행 분류, 크기 균일성, 기울기, baseline 정렬 분석 |
 
-**CRAFT 파인튜닝이 왜 실패했는지, 무엇을 시도했는지는 `IMPLEMENTATION_HISTORY.md` Phase
+**CRAFT 파인튜닝이 왜 실패했는지, 무엇을 시도했는지는 `archive/IMPLEMENTATION_HISTORY.md` Phase
 5~12를 반드시 읽으세요.** 요약하면:
 
 1. 아키텍처 불일치(학습용 모델 클래스 vs 추론 패키지의 state_dict 키가 다름) → clovaai
@@ -304,17 +333,10 @@ SFR-004C(획 그룹핑) → SFR-005C(획순/자간/크기 분석) 흐름입니�
   해당하는 행(row) 그룹핑이 캔버스 모드에는 아직 없음. 한 글자씩 연습하는 화면이라면
   당장은 불필요할 수 있음.
 
-### 5.2 CRAFT 파인튜닝 재시도 시 검증해볼 만한 가설 (미검증, `IMPLEMENTATION_HISTORY.md` 14.6절과 동일)
-
-- 어절 단위 bbox를 글자 수로 기계적 등분한 pseudo-GT의 부정확성 — 실제 잉크 경계에 더
-  강하게 반응하도록 CRAFT 원 논문의 반복적 pseudo-GT 정제(watershed) 방식 시도 가능
-- distance-transform 전처리가 추론에는 도움이 됐지만 학습 시에는 오히려 신호를
-  약화시켰을 가능성 — 전처리 없이(또는 다른 방식으로) 학습해서 비교
-- 학습률/스케줄이 소규모 파인튜닝(15k장, 십수 epoch)에 비해 과도했을 가능성
-
-**다시 시도한다면 지켜야 할 것**: `debug_compare_production.py`로 매 체크포인트를 실제
-배포 threshold 기준으로 검증하면서 진행할 것. 자체 정의 지표(loss, 커스텀 threshold
-결과)만 보고 진행하다가 마지막에야 전부 무효였다는 걸 알게 되는 실수를 반복하지 말 것.
+### 5.2 CRAFT 파인튜닝 재시도 판단
+→ **`STATUS.md` §4(파인튜닝 재도전 판단 메모)** 로 통합. 예전 실패 이유 · 지금 달라진 점 ·
+다시 한다면 바꿔볼 가설 · 절대 규칙 · 재사용 자산이 한곳에 정리돼 있음. 상세 원본 경위는
+`archive/IMPLEMENTATION_HISTORY.md` §14.6.
 
 ### 5.3 개발 환경 관련 함정 (Windows 로컬 개발 시 반복 발생했던 문제)
 
@@ -331,16 +353,8 @@ SFR-004C(획 그룹핑) → SFR-005C(획순/자간/크기 분석) 흐름입니�
 
 ---
 
-## 6. 다음에 할 일 우선순위 제안
-
-1. ~~**`backend/app/services/ai_adapters.py` 연동**~~ → **완료(2026-07-18, 5.1절 참고).**
-   다음 단계는 백엔드 트랙과 함께: 브랜치 병합(충돌 시 ai-setup 실구현 채택), 라우트가
-   AI 전처리/분석을 쓰도록 교체 결정, bbox 좌표계(전처리 후 기준) 프론트 오버레이 방식
-   합의, requirements.txt에 torch 추가.
-2. 여유가 되면 캔버스 모드 2단계(실사용자 데이터 수집)를 프론트엔드 팀과 논의
-   (`CANVAS_DATA_PLAN.md` 공유).
-3. CRAFT 파인튜닝은 지금 당장 재시도할 필요는 없음(pretrained로 서비스 가능한 수준) —
-   시간 여유가 있고 위 5.2절 가설 중 하나를 시도해볼 의지가 있을 때만 재개.
+## 6. 다음에 할 일 · 우선순위
+→ **`STATUS.md`** 로 통합(단일 트래커). 현재 상태·남은 일·미결·팀논의·우선순위가 한곳에 있음.
 
 ---
 
