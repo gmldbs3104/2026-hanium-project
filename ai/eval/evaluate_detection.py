@@ -3,7 +3,8 @@
 
 평가셋
 ------
-1. 수동 GT (eval/gt/*.json): test.jpg(10), test2.png(25), test6.jpg(22)
+1. 수동 GT (eval/gt/*.json): test(10)·test2(25)·test3_crop(140)·test4(238)·
+   test5(39)·test6(22)·test7(62) — 총 7장 536음절.
    — label_helper.py로 blob을 음절 단위로 사람이 그룹핑해서 만든 정밀 GT.
    — 좌표계: 전처리(이진화+deskew) 후 이미지 기준.
 2. AI Hub 자동 GT: 3장 (531자) — 사람이 라벨링한 단어 박스를 글자 수로 등분
@@ -15,6 +16,10 @@
 - 예측 박스 ↔ GT 박스를 IoU 내림차순 그리디 1:1 매칭.
 - P/R/F1 @ IoU 0.5 (엄격) 및 @ IoU 0.3 (관대 — GT 근사치 감안)
 - count_ratio: 예측 수 / 정답 수 (1.0이 이상적; >1 과분할, <1 과병합)
+- split/merge: 과분할·과병합을 분리 카운트(count_merge_split). count_ratio는 둘이
+  상쇄돼 1.0처럼 보일 수 있어, F1 하나로는 안 보이는 오류 구성을 드러낸다.
+  후처리를 손볼 때 "병합을 줄였나 / 분할을 늘렸나"를 이 두 수로 확인한다.
+  split = 여러 pred가 겹친 GT 수, merge = 여러 GT를 덮은 pred 수.
 
 사용법
 ------
@@ -59,6 +64,45 @@ def _iou(a, b):
     return inter / union if union > 0 else 0.0
 
 
+def _iou_contain(a, b):
+    """(IoU, 포함비율) 반환. 포함비율 = 교집합 / 두 박스 중 작은 쪽 넓이."""
+    ax0, ay0, ax1, ay1 = a["x"], a["y"], a["x"] + a["width"], a["y"] + a["height"]
+    bx0, by0, bx1, by1 = b["x"], b["y"], b["x"] + b["width"], b["y"] + b["height"]
+    ix = max(0.0, min(ax1, bx1) - max(ax0, bx0))
+    iy = max(0.0, min(ay1, by1) - max(ay0, by0))
+    inter = ix * iy
+    if inter <= 0:
+        return 0.0, 0.0
+    aa = (ax1 - ax0) * (ay1 - ay0)
+    ab = (bx1 - bx0) * (by1 - by0)
+    iou = inter / (aa + ab - inter)
+    contain = inter / min(aa, ab)
+    return iou, contain
+
+
+def count_merge_split(pred_boxes, gt_boxes, iou_th=0.3, contain_th=0.6):
+    """과분할·과병합을 분리 측정. F1만 보면 둘이 상쇄돼 보이는 착시를 막는다.
+
+    겹침 성립 = IoU >= iou_th 또는 (작은 박스가) contain_th 이상 포함됨.
+    (작은 조각이 큰 박스에 들어가는 경우 IoU는 낮아도 병합/분할 신호이므로 포함비율 병용.)
+
+    반환 (split_gt, merge_pred):
+      split_gt   = 2개 이상의 pred가 겹친 GT 수  → 정답 글자가 여러 조각으로 쪼개짐(과분할)
+      merge_pred = 2개 이상의 GT를 덮은 pred 수  → 예측 박스 하나가 글자들을 뭉침(과병합)
+    """
+    gt_hits = [0] * len(gt_boxes)
+    pred_hits = [0] * len(pred_boxes)
+    for pi, p in enumerate(pred_boxes):
+        for gi, g in enumerate(gt_boxes):
+            iou, contain = _iou_contain(p, g)
+            if iou >= iou_th or contain >= contain_th:
+                gt_hits[gi] += 1
+                pred_hits[pi] += 1
+    split_gt = sum(1 for h in gt_hits if h >= 2)
+    merge_pred = sum(1 for h in pred_hits if h >= 2)
+    return split_gt, merge_pred
+
+
 def match_boxes(pred_boxes, gt_boxes, iou_thresh):
     """IoU 내림차순 그리디 1:1 매칭 → 매칭 수 반환."""
     pairs = []
@@ -100,8 +144,10 @@ def evaluate_image(detector, pre, image_path, gt_boxes, gt_in_original_coords=Fa
     pred_boxes = [c["bounding_box"] for c in chars]
 
     n_pred, n_gt = len(pred_boxes), len(gt_boxes)
+    split_gt, merge_pred = count_merge_split(pred_boxes, gt_boxes)
     row = {"pred": n_pred, "gt": n_gt,
-           "count_ratio": n_pred / n_gt if n_gt else 0.0}
+           "count_ratio": n_pred / n_gt if n_gt else 0.0,
+           "split_gt": split_gt, "merge_pred": merge_pred}
     for th in (0.5, 0.3):
         m = match_boxes(pred_boxes, gt_boxes, th)
         p = m / n_pred if n_pred else 0.0
@@ -178,18 +224,24 @@ def main():
     print(f"\n===== 평가 결과 [{args.tag}] "
           f"(text={args.text_th} link={args.link_th} low={args.low_text} "
           f"long={args.long_size}) =====")
-    hdr = f"{'이미지':<24} {'pred':>5} {'gt':>4} {'ratio':>6} {'F1@0.5':>7} {'F1@0.3':>7} {'R@0.3':>6}"
+    hdr = (f"{'이미지':<24} {'pred':>5} {'gt':>4} {'ratio':>6} "
+           f"{'F1@0.5':>7} {'F1@0.3':>7} {'R@0.3':>6} {'split':>6} {'merge':>6}")
     print(hdr)
     print("-" * len(hdr))
     f1_50, f1_30 = [], []
+    tot_split, tot_merge = 0, 0
     for name, r in rows.items():
         print(f"{name:<24} {r['pred']:>5} {r['gt']:>4} {r['count_ratio']:>6.2f} "
-              f"{r['F1@0.5']:>7.3f} {r['F1@0.3']:>7.3f} {r['R@0.3']:>6.3f}")
+              f"{r['F1@0.5']:>7.3f} {r['F1@0.3']:>7.3f} {r['R@0.3']:>6.3f} "
+              f"{r['split_gt']:>6} {r['merge_pred']:>6}")
         f1_50.append(r["F1@0.5"])
         f1_30.append(r["F1@0.3"])
+        tot_split += r["split_gt"]
+        tot_merge += r["merge_pred"]
     print("-" * len(hdr))
-    print(f"{'평균':<24} {'':>5} {'':>4} {'':>6} "
-          f"{sum(f1_50)/len(f1_50):>7.3f} {sum(f1_30)/len(f1_30):>7.3f}")
+    print(f"{'평균/합계':<24} {'':>5} {'':>4} {'':>6} "
+          f"{sum(f1_50)/len(f1_50):>7.3f} {sum(f1_30)/len(f1_30):>7.3f} {'':>6} "
+          f"{tot_split:>6} {tot_merge:>6}")
 
 
 if __name__ == "__main__":

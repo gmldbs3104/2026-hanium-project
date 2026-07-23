@@ -13,6 +13,17 @@
      eval/gt_work/test_groups.json 형식: {"syllables": [[0,1,2], [3,4], ...]}
    (리스트 순서는 읽기 순서 권장이나 평가에는 영향 없음)
 
+   흘림 등으로 한 blob이 두 음절에 걸쳐 이어진 경우, "splits"로 x좌표 세로 절단을
+   지정할 수 있다. 분할된 조각은 왼쪽부터 "<id>a", "<id>b", ... 이름으로 그룹에 쓴다.
+     {"splits": {"41": [366]},
+      "syllables": [[40, "41a", 42], ["41b", 43, 44, 45], ...]}
+   조각 bbox는 절단 구간 내 실제 잉크 픽셀의 tight bbox로 계산된다.
+   윗줄 글자 꼬리가 아랫줄에 닿은 경우처럼 가로 절단이 필요하면 {"y": [...]} 형식을
+   쓴다(조각은 위부터 a, b, ...). x·y를 함께 주면 격자 절단(조각 이름은 행 우선:
+   위 행의 왼쪽부터 a, b, ...; 잉크 없는 칸은 이름만 차지하고 생성되지 않음).
+   값이 리스트면 x 절단으로 해석한다(하위 호환).
+     {"splits": {"197": {"x": [138], "y": [970]}}}
+
 3. build 모드: 그룹 파일을 읽어 blob bbox들의 합집합으로 음절 GT bbox를 만들어 저장.
      python eval/label_helper.py build test_images/test.jpg
    → eval/gt/test.json  {"image": ..., "syllable_boxes": [{"x","y","width","height"}, ...]}
@@ -83,21 +94,70 @@ def mode_blobs(image_path: str):
     print(f"다음: {WORK_DIR}/{stem}_groups.json 에 음절별 blob id 그룹을 작성 후 build 실행")
 
 
+def _split_blob(binary: np.ndarray, blob: dict, x_cuts, y_cuts):
+    """blob bbox 영역의 잉크 픽셀을 x/y 절단선 격자로 나눠 칸별 tight bbox 반환.
+
+    칸 순서는 행 우선(위 행의 왼쪽부터). 잉크 없는 칸은 None.
+    connected component를 다시 돌리지 않고 bbox 내 픽셀만 쓴다 — 같은 bbox에
+    다른 blob의 픽셀이 섞이는 극단 케이스에선 조각이 약간 넓어질 수 있으나,
+    절단 대상은 사람이 지정하므로 실용상 충분하다.
+    """
+    x0, y0 = blob["x"], blob["y"]
+    x1, y1 = x0 + blob["width"], y0 + blob["height"]
+    region = binary[y0:y1, x0:x1]
+    xb = [x0] + sorted(x_cuts) + [x1]
+    yb = [y0] + sorted(y_cuts) + [y1]
+    parts = []
+    for ylo, yhi in zip(yb[:-1], yb[1:]):
+        for xlo, xhi in zip(xb[:-1], xb[1:]):
+            sub = region[max(0, ylo - y0):max(0, yhi - y0),
+                         max(0, xlo - x0):max(0, xhi - x0)]
+            ys, xs = np.nonzero(sub)
+            if len(xs) == 0:
+                parts.append(None)
+                continue
+            parts.append({"x": int(xlo + xs.min()), "y": int(ylo + ys.min()),
+                          "width": int(xs.max() - xs.min() + 1),
+                          "height": int(ys.max() - ys.min() + 1)})
+    if all(p is None for p in parts):
+        raise ValueError(f"blob {blob['id']} 절단 결과가 전부 비었습니다")
+    return parts
+
+
 def mode_build(image_path: str):
     os.makedirs(GT_DIR, exist_ok=True)
     stem = os.path.splitext(os.path.basename(image_path))[0]
     with open(os.path.join(WORK_DIR, f"{stem}_blobs.json"), encoding="utf-8") as f:
         blob_data = json.load(f)
     with open(os.path.join(WORK_DIR, f"{stem}_groups.json"), encoding="utf-8") as f:
-        groups = json.load(f)["syllables"]
+        group_data = json.load(f)
+    groups = group_data["syllables"]
+    splits = {int(k): v for k, v in group_data.get("splits", {}).items()}
 
     blob_by_id = {b["id"]: b for b in blob_data["blobs"]}
+
+    binary = _binary_for(image_path) if splits else None
+    for bid, spec in splits.items():
+        if isinstance(spec, dict):
+            x_cuts, y_cuts = spec.get("x", []), spec.get("y", [])
+        else:
+            x_cuts, y_cuts = spec, []
+        parts = _split_blob(binary, blob_by_id[bid], x_cuts, y_cuts)
+        for i, part in enumerate(parts):
+            if part is not None:
+                blob_by_id[f"{bid}{chr(ord('a') + i)}"] = part
+        del blob_by_id[bid]
+
     used = [bid for g in groups for bid in g]
     if len(used) != len(set(used)):
         raise ValueError("같은 blob id가 두 그룹에 들어있습니다")
+    unknown = [bid for bid in used if bid not in blob_by_id]
+    if unknown:
+        raise ValueError(f"blobs에 없는 id가 그룹에 있습니다: {unknown} "
+                         f"(분할된 blob은 조각 이름 '<id>a'/'<id>b'로 써야 합니다)")
     unused = set(blob_by_id) - set(used)
     if unused:
-        print(f"경고: 그룹에 안 들어간 blob {sorted(unused)} — 노이즈로 간주하고 무시합니다")
+        print(f"경고: 그룹에 안 들어간 blob {sorted(unused, key=str)} — 노이즈로 간주하고 무시합니다")
 
     boxes = []
     for g in groups:
