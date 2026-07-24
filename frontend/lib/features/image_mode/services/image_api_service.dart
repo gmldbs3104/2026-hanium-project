@@ -7,6 +7,7 @@ import '../../../shared/models/bounding_box.dart';
 import '../../../shared/models/feedback_item.dart';
 import '../../../shared/models/session_save_result.dart';
 import '../models/image_result.dart';
+import '../models/image_roi.dart';
 import '../models/detected_char.dart';
 import '../models/image_detect_response.dart';
 import '../models/image_feedback_response.dart';
@@ -22,8 +23,11 @@ import '../models/image_feedback_response.dart';
 class ImageApiService {
   /// 촬영된 이미지를 Base64로 인코딩해 서버로 전송
   /// (requirement Action ①: POST /api/v1/image/preprocess)
+  ///
+  /// [roi]: SFR-003I Inputs의 선택적 관심영역 좌표. null이면 전체 이미지를 대상으로 한다.
   static Future<ImagePreprocessResult> preprocess({
     required List<int> imageBytes,
+    ImageRoi? roi,
   }) async {
     if (AppConfig.useMockApi) {
       return _mockPreprocess(imageBytes);
@@ -35,6 +39,8 @@ class ImageApiService {
       {
         'image': base64Image,
         'input_type': 'camera',
+        // SFR-003I Inputs: 선택적 ROI 좌표 (원본 이미지 픽셀 기준). 있을 때만 포함.
+        if (roi != null) 'roi': roi.toJson(),
       },
     );
     return ImagePreprocessResult.fromJson(response);
