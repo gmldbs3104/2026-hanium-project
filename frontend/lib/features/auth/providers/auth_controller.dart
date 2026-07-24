@@ -1,4 +1,6 @@
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
@@ -29,18 +31,15 @@ class AuthController extends Notifier<AuthState> {
     state = const AuthLoading();
     try {
       if (AppConfig.useMockApi) {
-        final user = await AuthApiService.login(
-          provider: AuthProviderType.google,
-          idToken: 'mock-id-token',
-        );
-        state = AuthAuthenticated(user);
+        await _loginWithBackend(AuthProviderType.google, idToken: 'mock-id-token');
         return;
       }
 
       // ===== 실제 Firebase + Google 로그인 =====
       final googleUser = await _googleSignIn.signIn();
       if (googleUser == null) {
-        state = const AuthInitial(); // 사용자가 로그인 취소
+        // 사용자가 계정 선택 창을 닫아 취소함 → 에러가 아니므로 조용히 초기 상태로
+        state = const AuthInitial();
         return;
       }
       final googleAuth = await googleUser.authentication;
@@ -49,14 +48,30 @@ class AuthController extends Notifier<AuthState> {
         idToken: googleAuth.idToken,
       );
       final userCredential = await FirebaseAuth.instance.signInWithCredential(credential);
-      final firebaseIdToken = await userCredential.user!.getIdToken();
 
-      final user = await AuthApiService.login(
-        provider: AuthProviderType.google,
-        idToken: firebaseIdToken!,
-      );
-      state = AuthAuthenticated(user);
-    } catch (e) {
+      // REQ-001-1/2: Firebase ID Token 확보. 강제 언랩 대신 null을 명시적으로 처리한다.
+      final firebaseIdToken = await userCredential.user?.getIdToken();
+      if (firebaseIdToken == null) {
+        state = const AuthError('로그인 토큰을 발급받지 못했습니다. 잠시 후 다시 시도해주세요.');
+        return;
+      }
+
+      await _loginWithBackend(AuthProviderType.google, idToken: firebaseIdToken);
+    } on PlatformException catch (e) {
+      // google_sign_in 플러그인이 던지는 예외 (취소는 에러로 취급하지 않음)
+      if (_isCancellation(e)) {
+        state = const AuthInitial();
+        return;
+      }
+      debugPrint('[Auth] Google sign-in PlatformException(${e.code}): ${e.message}');
+      state = AuthError(_googleSignInErrorMessage(e));
+    } on FirebaseAuthException catch (e) {
+      // Firebase 자격 증명 교환 단계에서 발생하는 예외
+      debugPrint('[Auth] Google sign-in FirebaseAuthException(${e.code}): ${e.message}');
+      state = AuthError(_firebaseAuthErrorMessage(e));
+    } catch (e, st) {
+      // 그 외 예상치 못한 예외 — 원인을 로그로 남기고 일반 메시지로 안내
+      debugPrint('[Auth] Google sign-in unexpected error: $e\n$st');
       state = const AuthError('Google 로그인에 실패했습니다. 다시 시도해주세요.');
     }
   }
@@ -65,11 +80,7 @@ class AuthController extends Notifier<AuthState> {
     state = const AuthLoading();
     try {
       if (AppConfig.useMockApi) {
-        final user = await AuthApiService.login(
-          provider: AuthProviderType.kakao,
-          idToken: 'mock-id-token',
-        );
-        state = AuthAuthenticated(user);
+        await _loginWithBackend(AuthProviderType.kakao, idToken: 'mock-id-token');
         return;
       }
 
@@ -120,6 +131,51 @@ class AuthController extends Notifier<AuthState> {
   void clearError() {
     if (state is AuthError) {
       state = const AuthInitial();
+    }
+  }
+
+  /// Firebase ID Token을 백엔드(/api/v1/auth/login)에 전달해 유저 프로필을 받고
+  /// 인증 완료 상태로 전환한다. mock/실연동, Google/Kakao 공통 경로.
+  Future<void> _loginWithBackend(
+    AuthProviderType provider, {
+    required String idToken,
+  }) async {
+    final user = await AuthApiService.login(provider: provider, idToken: idToken);
+    state = AuthAuthenticated(user);
+  }
+
+  /// google_sign_in이 던지는 "사용자 취소" 계열 예외인지 판별한다.
+  /// (취소는 실패가 아니므로 에러 배너를 띄우지 않고 초기 상태로 되돌린다)
+  bool _isCancellation(PlatformException e) {
+    const cancelCodes = {'sign_in_canceled', 'sign_in_cancelled', 'canceled', 'cancelled'};
+    return cancelCodes.contains(e.code);
+  }
+
+  /// google_sign_in PlatformException → 사용자용 한국어 메시지 (REQ-001-4)
+  String _googleSignInErrorMessage(PlatformException e) {
+    switch (e.code) {
+      case 'network_error':
+        return '인터넷 연결을 확인한 뒤 다시 시도해주세요.';
+      case 'sign_in_failed':
+        return 'Google 로그인에 실패했습니다. 다시 시도해주세요.';
+      default:
+        return 'Google 로그인에 실패했습니다. 다시 시도해주세요.';
+    }
+  }
+
+  /// FirebaseAuthException → 사용자용 한국어 메시지 (REQ-001-4)
+  String _firebaseAuthErrorMessage(FirebaseAuthException e) {
+    switch (e.code) {
+      case 'network-request-failed':
+        return '인터넷 연결을 확인한 뒤 다시 시도해주세요.';
+      case 'account-exists-with-different-credential':
+        return '이미 다른 방법으로 가입된 이메일입니다. 기존 로그인 방법으로 시도해주세요.';
+      case 'invalid-credential':
+        return '인증 정보가 만료되었거나 올바르지 않습니다. 다시 시도해주세요.';
+      case 'user-disabled':
+        return '사용이 중지된 계정입니다. 관리자에게 문의해주세요.';
+      default:
+        return '로그인 처리 중 문제가 발생했습니다. 다시 시도해주세요.';
     }
   }
 }
