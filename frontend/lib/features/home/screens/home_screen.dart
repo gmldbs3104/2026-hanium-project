@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/app_theme.dart';
+import '../../auth/providers/auth_controller.dart';
+import '../../auth/providers/auth_state.dart';
 import '../providers/mode_provider.dart';
 
 /// 메인 화면 - 모드 분기 (SFR-002)
@@ -31,8 +33,38 @@ class HomeScreen extends ConsumerWidget {
     }
   }
 
+  /// SFR-001: 로그아웃. signOut()이 인증 상태를 초기화하면 라우터 가드가
+  /// 자동으로 /login 으로 되돌리므로 별도 화면 이동은 필요 없다.
+  Future<void> _confirmSignOut(BuildContext context, WidgetRef ref) async {
+    final shouldSignOut = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('로그아웃'),
+        content: const Text('로그아웃하시겠어요?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('취소'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('로그아웃'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldSignOut == true) {
+      await ref.read(authControllerProvider.notifier).signOut();
+    }
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final authState = ref.watch(authControllerProvider);
+    final userLabel =
+        authState is AuthAuthenticated ? (authState.user.name ?? authState.user.email) : null;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('AI 손글씨 교정'),
@@ -41,6 +73,34 @@ class HomeScreen extends ConsumerWidget {
             icon: const Icon(Icons.bar_chart_rounded),
             tooltip: '학습 대시보드',
             onPressed: () => context.go('/dashboard'),
+          ),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.account_circle_rounded),
+            tooltip: '계정',
+            onSelected: (value) {
+              if (value == 'logout') _confirmSignOut(context, ref);
+            },
+            itemBuilder: (context) => [
+              if (userLabel != null)
+                PopupMenuItem<String>(
+                  enabled: false,
+                  child: Text(
+                    userLabel,
+                    style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+                  ),
+                ),
+              if (userLabel != null) const PopupMenuDivider(),
+              const PopupMenuItem<String>(
+                value: 'logout',
+                child: Row(
+                  children: [
+                    Icon(Icons.logout_rounded, size: 20),
+                    SizedBox(width: 12),
+                    Text('로그아웃'),
+                  ],
+                ),
+              ),
+            ],
           ),
         ],
       ),
