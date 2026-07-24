@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/analytics_service.dart';
 import '../../../core/app_theme.dart';
 import '../../../core/theme_provider.dart';
 import '../../auth/providers/auth_controller.dart';
@@ -20,12 +21,9 @@ class HomeScreen extends ConsumerWidget {
   void _selectMode(BuildContext context, WidgetRef ref, AnalysisMode mode) {
     ref.read(selectedModeProvider.notifier).state = mode;
 
-    // ===== Firebase Analytics 연동 시 (현재는 mock 로그) =====
-    // FirebaseAnalytics.instance.logEvent(
-    //   name: 'mode_selected',
-    //   parameters: {'mode': mode.name},
-    // );
-    debugPrint('[Analytics] mode_selected: ${mode.name}');
+    // SFR-002 Side Effect: 모드 선택 이벤트를 Firebase Analytics에 로깅.
+    // (mock 모드에서는 AnalyticsService 내부에서 debugPrint로 대체됨)
+    AnalyticsService.logModeSelected(mode.name);
 
     if (mode == AnalysisMode.canvas) {
       context.go('/canvas');

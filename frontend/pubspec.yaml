@@ -34,6 +34,8 @@ dependencies:
   firebase_core: ^3.0.0
   firebase_auth: ^5.0.0
   google_sign_in: ^6.2.0
+  # SFR-002 Side Effect: 모드 선택 등 이벤트 로깅 (mock 모드에서는 debugPrint로 대체)
+  firebase_analytics: ^11.0.0
   # Kakao 로그인 실제 연동 시 주석 해제 (auth_controller.dart의 TODO 참고 —
   # 백엔드에 Kakao → Firebase Custom Token 발급 엔드포인트 추가가 선행되어야 함)
   # kakao_flutter_sdk_user: ^1.9.0
