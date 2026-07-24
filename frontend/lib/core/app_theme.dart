@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// 앱 전역 테마
+/// 앱 전역 테마 (SFR-007 Inputs: light / dark 지원)
 class AppTheme {
   AppTheme._();
 
@@ -11,10 +11,20 @@ class AppTheme {
   static const Color successColor = Color(0xFF2E7D32);
   static const Color warningColor = Color(0xFFF9A825);
 
-  static ThemeData get lightTheme {
+  static ThemeData get lightTheme => _build(Brightness.light);
+  static ThemeData get darkTheme => _build(Brightness.dark);
+
+  /// light/dark 공통 골격. 밝기만 바꿔 ColorScheme를 시드에서 생성한다.
+  static ThemeData _build(Brightness brightness) {
+    final colorScheme = ColorScheme.fromSeed(
+      seedColor: primaryColor,
+      brightness: brightness,
+    );
+    final isDark = brightness == Brightness.dark;
+
     return ThemeData(
       useMaterial3: true,
-      colorScheme: ColorScheme.fromSeed(seedColor: primaryColor),
+      colorScheme: colorScheme,
       appBarTheme: const AppBarTheme(
         centerTitle: true,
         elevation: 0,
@@ -32,7 +42,8 @@ class AppTheme {
           borderRadius: BorderRadius.circular(12),
         ),
         filled: true,
-        fillColor: Colors.grey.shade50,
+        fillColor:
+            isDark ? colorScheme.surfaceContainerHighest : Colors.grey.shade50,
       ),
     );
   }

@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/app_config.dart';
 import 'core/app_theme.dart';
+import 'core/theme_provider.dart';
 import 'features/feedback/services/session_save_queue.dart';
 import 'shared/router/app_router.dart';
 
@@ -39,11 +40,14 @@ class HandwritingApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final router = ref.watch(routerProvider);
+    final themeMode = ref.watch(themeModeProvider);
 
     return MaterialApp.router(
       title: 'AI 손글씨 교정',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
+      darkTheme: AppTheme.darkTheme,
+      themeMode: themeMode, // SFR-007 Inputs: light / dark (기본 시스템 설정)
       routerConfig: router,
     );
   }

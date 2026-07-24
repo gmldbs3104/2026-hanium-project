@@ -307,7 +307,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(12),
         child: Container(
-          color: Colors.grey.shade100,
+          color: Theme.of(context).colorScheme.surfaceContainerHighest,
           child: _isCanvas ? _buildCanvasOverlay() : _buildImageOverlay(),
         ),
       ),

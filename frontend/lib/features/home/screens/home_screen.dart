@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/app_theme.dart';
+import '../../../core/theme_provider.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../../auth/providers/auth_state.dart';
 import '../providers/mode_provider.dart';
@@ -113,6 +114,19 @@ class HomeScreen extends ConsumerWidget {
             icon: const Icon(Icons.bar_chart_rounded),
             tooltip: '학습 대시보드',
             onPressed: () => context.go('/dashboard'),
+          ),
+          // SFR-007 Inputs: 테마(light/dark) 선택
+          PopupMenuButton<ThemeMode>(
+            icon: const Icon(Icons.brightness_6_rounded),
+            tooltip: '테마',
+            initialValue: ref.watch(themeModeProvider),
+            onSelected: (mode) =>
+                ref.read(themeModeProvider.notifier).state = mode,
+            itemBuilder: (context) => const [
+              PopupMenuItem(value: ThemeMode.system, child: Text('시스템 설정')),
+              PopupMenuItem(value: ThemeMode.light, child: Text('라이트')),
+              PopupMenuItem(value: ThemeMode.dark, child: Text('다크')),
+            ],
           ),
           PopupMenuButton<String>(
             icon: const Icon(Icons.account_circle_rounded),
