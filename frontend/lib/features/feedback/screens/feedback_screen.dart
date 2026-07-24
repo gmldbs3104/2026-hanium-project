@@ -83,6 +83,10 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   bool _confirmed = false;
   int _pendingQueueCount = 0;
 
+  // 경계 케이스 안내용 상태
+  int _lowConfidenceCount = 0; // SFR-004C Side Effect: 저신뢰 문자 수 (canvas)
+  int _detectedCount = 0;      // REQ-004I-5 / SFR-005I Side Effect: 탐지 문자 수 (image)
+
   @override
   void initState() {
     super.initState();
@@ -119,6 +123,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       );
       _overallScore = feedbackResponse.overallScore;
       _achievementMessage = feedbackResponse.achievementMessage;
+      _lowConfidenceCount = groupResponse.lowConfidenceCount;
     });
   }
 
@@ -135,6 +140,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       );
       _overallScore = feedbackResponse.overallScore;
       _achievementMessage = feedbackResponse.achievementMessage;
+      _detectedCount = detectResponse.totalDetected;
     });
   }
 
@@ -248,12 +254,68 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     return Column(
       children: [
         if (_pendingQueueCount > 0) _buildPendingQueueBanner(),
+        ..._buildCaseNotices(),
         _buildScoreHeader(context),
         const Divider(height: 1),
         Expanded(child: _buildOverlayArea(context)),
         const Divider(height: 1),
         _buildConfirmSection(context),
       ],
+    );
+  }
+
+  /// 저신뢰/경계 케이스 안내 배너들 (모드에 따라 필요한 것만 표시).
+  ///  - 캔버스: 저신뢰 문자 존재 시 '일부 문자 인식 불확실' (SFR-004C Side Effect)
+  ///  - 이미지: 탐지 0자 '인식 불가'(REQ-004I-5), 3자 미만 '분석 데이터 부족'(SFR-005I Side Effect)
+  List<Widget> _buildCaseNotices() {
+    final notices = <Widget>[];
+
+    if (_isCanvas) {
+      if (_lowConfidenceCount > 0) {
+        notices.add(_buildInfoBanner(
+          icon: Icons.help_outline_rounded,
+          color: Colors.orange,
+          message: '일부 문자($_lowConfidenceCount개)의 인식이 불확실해요. 결과가 정확하지 않을 수 있어요.',
+        ));
+      }
+    } else {
+      if (_detectedCount == 0) {
+        notices.add(_buildInfoBanner(
+          icon: Icons.error_outline_rounded,
+          color: Colors.red,
+          message: '글씨를 인식할 수 없습니다. 밝은 곳에서 글씨가 선명하게 보이도록 다시 촬영해주세요.',
+        ));
+      } else if (_detectedCount < 3) {
+        notices.add(_buildInfoBanner(
+          icon: Icons.info_outline_rounded,
+          color: Colors.orange,
+          message: '분석 데이터가 부족해요 (탐지 $_detectedCount자). 3자 이상 촬영하면 더 정확한 결과를 받을 수 있어요.',
+        ));
+      }
+    }
+
+    return notices;
+  }
+
+  /// 경계 케이스 안내용 공통 배너 (기존 대기 큐 배너와 동일한 톤).
+  Widget _buildInfoBanner({
+    required IconData icon,
+    required MaterialColor color,
+    required String message,
+  }) {
+    return Container(
+      width: double.infinity,
+      color: color.shade50,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Row(
+        children: [
+          Icon(icon, size: 16, color: color.shade700),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(message, style: TextStyle(fontSize: 12, color: color.shade800)),
+          ),
+        ],
+      ),
     );
   }
 
