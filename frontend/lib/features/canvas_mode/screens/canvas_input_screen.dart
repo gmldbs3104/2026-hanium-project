@@ -14,6 +14,9 @@ import '../widgets/stroke_painter.dart';
 /// REQ-003C-4: 한 획 지우기 및 전체 지우기 가능
 /// REQ-003C-5: RepaintBoundary로 프레임 드롭 방지
 /// REQ-003C-6: 이미지 모드 전처리 파이프라인을 거치지 않음 (별도 파일/서비스로 완전 분리됨)
+///
+/// SFR-003C Inputs 캔버스 설정: 선 굵기(가늘게/보통/굵게)와 격자 표시 여부를
+/// 화면 내 인라인 컨트롤(하단 세그먼트 + AppBar 토글)로 조절한다.
 class CanvasInputScreen extends StatefulWidget {
   const CanvasInputScreen({super.key});
 
@@ -27,6 +30,13 @@ class _CanvasInputScreenState extends State<CanvasInputScreen> {
   bool _isSubmitting = false;
   String? _errorMessage;
   Size _canvasSize = Size.zero;
+
+  // SFR-003C Inputs: 캔버스 설정 (선 굵기 프리셋, 격자 표시 여부)
+  static const double _thinWidth = 2.0;
+  static const double _mediumWidth = 4.0;
+  static const double _thickWidth = 7.0;
+  double _strokeWidth = _mediumWidth;
+  bool _showGrid = false;
 
   static const _uuid = Uuid();
 
@@ -104,10 +114,17 @@ class _CanvasInputScreenState extends State<CanvasInputScreen> {
           // ⚠️ 점수/성취 메시지는 여기서 넘기지 않습니다.
           // analyze() 응답에는 원래 점수가 없고(백엔드 CanvasAnalyzeResponse 참고),
           // feedback_screen.dart가 GET /feedback을 직접 호출해서 진짜 점수를 받아옵니다.
-          // SFR-007 오버레이 렌더링용: 서버에 PNG를 보내지 않으므로(REQ-003C-6)
-          // feedback 화면에서 이 획 데이터로 StrokePainter를 다시 그려 배경으로 사용한다.
+          //
+          // ── SFR-003C Action ③ 결정: PNG 스냅샷 대신 "재렌더링" 채택 ──
+          // requirement 원문은 CustomPainter.toImage()로 스냅샷 PNG를 만들어 오버레이
+          // 배경으로 쓰라고 되어 있으나, 서버로 PNG를 보내지 않는(REQ-003C-6) 이상
+          // PNG 바이트를 메모리에 들고 다닐 이유가 없다. 대신 획 데이터 자체를 넘겨
+          // feedback 화면에서 StrokePainter로 동일하게 다시 그린다(결과 동일, 메모리 절약).
+          // → requirement Outputs·Post-condition 문구는 이 결정에 맞춰 갱신 필요(팀 합의).
+          // 재렌더 배경이 실제 필기와 같은 굵기로 보이도록 strokeWidth도 함께 전달한다.
           'strokes': List<Stroke>.from(_strokes),
           'canvasMetadata': metadata,
+          'strokeWidth': _strokeWidth,
         });
       }
     } on ApiException catch (e) {
@@ -123,6 +140,11 @@ class _CanvasInputScreenState extends State<CanvasInputScreen> {
       appBar: AppBar(
         title: const Text('글씨 연습'),
         actions: [
+          IconButton(
+            icon: Icon(_showGrid ? Icons.grid_on_rounded : Icons.grid_off_rounded),
+            tooltip: _showGrid ? '격자 끄기' : '격자 켜기',
+            onPressed: () => setState(() => _showGrid = !_showGrid),
+          ),
           IconButton(
             icon: const Icon(Icons.undo_rounded),
             tooltip: '한 획 지우기',
@@ -166,6 +188,8 @@ class _CanvasInputScreenState extends State<CanvasInputScreen> {
                         painter: StrokePainter(
                           strokes: _strokes,
                           currentStroke: _currentStroke,
+                          strokeWidth: _strokeWidth, // SFR-003C Inputs: 선 굵기
+                          showGrid: _showGrid,       // SFR-003C Inputs: 격자 표시
                         ),
                       ),
                     ),
@@ -174,18 +198,46 @@ class _CanvasInputScreenState extends State<CanvasInputScreen> {
               },
             ),
           ),
+          _buildBottomControls(),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _isSubmitting ? null : () => _submit(_canvasSize),
-        icon: _isSubmitting
-            ? const SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-              )
-            : const Icon(Icons.check_rounded),
-        label: Text(_isSubmitting ? '분석 중...' : '분석하기'),
+    );
+  }
+
+  /// SFR-003C Inputs: 하단 인라인 컨트롤 — 선 굵기 세그먼트 + 분석하기 버튼
+  Widget _buildBottomControls() {
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+        child: Row(
+          children: [
+            Expanded(
+              child: SegmentedButton<double>(
+                showSelectedIcon: false,
+                segments: const [
+                  ButtonSegment(value: _thinWidth, label: Text('가늘게')),
+                  ButtonSegment(value: _mediumWidth, label: Text('보통')),
+                  ButtonSegment(value: _thickWidth, label: Text('굵게')),
+                ],
+                selected: {_strokeWidth},
+                onSelectionChanged: (selection) =>
+                    setState(() => _strokeWidth = selection.first),
+              ),
+            ),
+            const SizedBox(width: 12),
+            FilledButton(
+              onPressed: _isSubmitting ? null : () => _submit(_canvasSize),
+              child: _isSubmitting
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Text('분석하기'),
+            ),
+          ],
+        ),
       ),
     );
   }

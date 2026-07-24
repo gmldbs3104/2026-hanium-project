@@ -34,8 +34,10 @@ class FeedbackScreen extends StatefulWidget {
 
   // 캔버스 모드 오버레이용 (mode == 'canvas'일 때 필수)
   // 서버에 PNG를 보내지 않으므로(REQ-003C-6) 배경을 이 데이터로 다시 그린다.
+  // strokeWidth: 입력 화면에서 고른 선 굵기 — 재렌더 배경이 실제 필기와 같게 보이도록.
   final List<Stroke>? strokes;
   final CanvasMetadata? canvasMetadata;
+  final double? strokeWidth;
 
   // 이미지 모드 오버레이용 (mode == 'image'일 때 필수)
   final List<int>? imageBytes;
@@ -48,6 +50,7 @@ class FeedbackScreen extends StatefulWidget {
     required this.sessionId,
     this.strokes,
     this.canvasMetadata,
+    this.strokeWidth,
     this.imageBytes,
     this.imageWidth,
     this.imageHeight,
@@ -329,7 +332,11 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
           width: metadata.width,
           height: metadata.height,
           child: CustomPaint(
-            painter: StrokePainter(strokes: widget.strokes!),
+            // 격자(showGrid)는 필기 보조선이므로 결과 배경에는 넣지 않는다.
+            painter: StrokePainter(
+              strokes: widget.strokes!,
+              strokeWidth: widget.strokeWidth ?? 4.0,
+            ),
           ),
         ),
       ),

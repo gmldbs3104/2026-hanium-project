@@ -59,6 +59,7 @@ final routerProvider = Provider<GoRouter>((ref) {
             // SFR-007 오버레이용 — mode에 따라 아래 중 필요한 것만 넘어옴
             strokes: extra['strokes'] as List<Stroke>?,
             canvasMetadata: extra['canvasMetadata'] as CanvasMetadata?,
+            strokeWidth: extra['strokeWidth'] as double?,
             imageBytes: extra['imageBytes'] as List<int>?,
             imageWidth: extra['imageWidth'] as int?,
             imageHeight: extra['imageHeight'] as int?,
