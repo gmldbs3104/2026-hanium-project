@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import '../../../shared/models/feedback_item.dart';
 import '../models/image_bbox_overlay_item.dart';
 import '../utils/canvas_coordinate_mapper.dart';
+import '../utils/severity_style.dart';
 
 /// SFR-007: 촬영 이미지 위에 문자 검출 Bounding Box 오버레이를 렌더링하는 위젯.
 ///
@@ -94,33 +94,31 @@ class ImageBBoxOverlayPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     for (final item in items) {
       final rect = mapper.toDisplayRect(item.boundingBox);
-      final color = _colorFor(item.severity, item.confidence);
+      final severity = item.severity;
+      final color =
+          severity != null ? SeverityStyle.color(severity) : _neutralColorFor(item.confidence);
 
       final strokePaint = Paint()
         ..color = color
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.5;
       canvas.drawRect(rect, strokePaint);
+
+      // REQ-007-6: severity가 있는 박스에만 색맹 보조 아이콘 배지 (색상 + 형태)
+      if (severity != null) {
+        SeverityStyle.paintBadge(canvas, rect.topLeft, severity);
+      }
     }
   }
 
-  Color _colorFor(FeedbackSeverity? severity, double? confidence) {
-    switch (severity) {
-      case FeedbackSeverity.good:
-        return const Color(0xFF34C759);
-      case FeedbackSeverity.warning:
-        return const Color(0xFFFF9500);
-      case FeedbackSeverity.error:
-        return const Color(0xFFFF3B30);
-      case null:
-        // severity(문자 단위 피드백)가 아직 없을 때 — confidence가 있으면
-        // (ai/AI_MODEL_INTERFACE.md 기준 CRAFT가 이미 계산하는 값, 백엔드가
-        // 노출하면 여기서 바로 반영됨) 저신뢰도 탐지만 옅은 주황으로 구분
-        if (confidence != null && confidence < 0.7) {
-          return const Color(0xFFFF9500);
-        }
-        return _neutralColor;
+  /// severity(문자 단위 피드백)가 아직 없을 때의 중립색. confidence가 있으면
+  /// (ai/AI_MODEL_INTERFACE.md 기준 CRAFT가 이미 계산하는 값, 백엔드가 노출하면
+  /// 여기서 바로 반영됨) 저신뢰도 탐지만 옅은 주황으로 구분한다.
+  Color _neutralColorFor(double? confidence) {
+    if (confidence != null && confidence < 0.7) {
+      return const Color(0xFFFF9500);
     }
+    return _neutralColor;
   }
 
   @override

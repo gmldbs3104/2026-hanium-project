@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../../shared/models/feedback_item.dart';
 import '../models/canvas_correction_overlay_item.dart';
 import '../utils/canvas_coordinate_mapper.dart';
+import '../utils/severity_style.dart';
 
 /// SFR-007: 캔버스 스냅샷(재렌더링된 스트로크) 위에 교정 오버레이를 렌더링하는 위젯.
 ///
@@ -105,7 +106,7 @@ class CanvasCorrectionOverlayPainter extends CustomPainter {
       if (item.severity == FeedbackSeverity.good) continue;
 
       final rect = mapper.toDisplayRect(item.boundingBox);
-      final color = _colorFor(item.severity);
+      final color = SeverityStyle.color(item.severity);
 
       final fillPaint = Paint()
         ..color = color.withValues(alpha: 0.12)
@@ -117,17 +118,9 @@ class CanvasCorrectionOverlayPainter extends CustomPainter {
         ..style = PaintingStyle.stroke
         ..strokeWidth = item.severity == FeedbackSeverity.error ? 2.5 : 2.0;
       canvas.drawRect(rect, strokePaint);
-    }
-  }
 
-  Color _colorFor(FeedbackSeverity severity) {
-    switch (severity) {
-      case FeedbackSeverity.good:
-        return const Color(0xFF34C759);
-      case FeedbackSeverity.warning:
-        return const Color(0xFFFF9500);
-      case FeedbackSeverity.error:
-        return const Color(0xFFFF3B30);
+      // REQ-007-6: 색맹 보조 아이콘 배지 (색상 + 형태로 severity 이중 표현)
+      SeverityStyle.paintBadge(canvas, rect.topLeft, item.severity);
     }
   }
 
