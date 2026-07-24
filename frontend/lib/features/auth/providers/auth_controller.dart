@@ -127,6 +127,32 @@ class AuthController extends Notifier<AuthState> {
     return FirebaseAuth.instance.currentUser?.getIdToken();
   }
 
+  /// REQ-009-7: 계정 삭제. 백엔드에 삭제 요청을 보낸 뒤 로컬 세션을 정리한다.
+  /// 실제 데이터(DB/S3/Firebase 사용자) 삭제는 백엔드가 수행한다.
+  ///
+  /// ⚠️ 진행 중 [AuthLoading]으로 바꾸지 않는다 — 라우터 가드가 인증 상태를
+  ///    "로그인 안 됨"으로 보고 삭제 완료 전에 /login 으로 튕겨버리기 때문이다.
+  ///    로딩 표시는 UI(다이얼로그)에서 처리하고, 여기서는 성공 시에만 상태를 바꾼다.
+  /// 성공하면 [AuthInitial]로 전환되어 라우터가 자동으로 /login 으로 되돌린다.
+  /// 반환값: 삭제 성공 여부 (실패 시 인증 상태를 유지해 사용자가 홈에 남도록 함).
+  Future<bool> deleteAccount() async {
+    try {
+      final idToken = await getCurrentIdToken();
+      await AuthApiService.deleteAccount(idToken: idToken);
+
+      // 실연동 시 로컬 소셜 로그인 세션도 정리 (Firebase 사용자 자체 삭제는 백엔드 Admin SDK 담당)
+      if (!AppConfig.useMockApi) {
+        await _googleSignIn.signOut();
+      }
+
+      state = const AuthInitial();
+      return true;
+    } catch (e, st) {
+      debugPrint('[Auth] deleteAccount error: $e\n$st');
+      return false;
+    }
+  }
+
   /// 에러 상태를 초기 상태로 되돌림 (에러 메시지 닫기 등에서 사용)
   void clearError() {
     if (state is AuthError) {

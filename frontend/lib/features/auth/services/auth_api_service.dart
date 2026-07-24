@@ -30,6 +30,23 @@ class AuthApiService {
     return UserProfile.fromJson(response);
   }
 
+  /// DELETE /api/v1/auth/account (REQ-009-7)
+  ///
+  /// 계정 삭제 요청을 백엔드에 보낸다. 실제 데이터(DB 레코드/S3 이미지/Firebase 사용자)의
+  /// 영구 삭제는 백엔드가 수행하며(30일 이내), 프론트는 요청 트리거와 로컬 세션 정리만 담당한다.
+  /// 인증 필요: Firebase ID Token을 Authorization 헤더로 전달.
+  static Future<void> deleteAccount({required String? idToken}) async {
+    if (AppConfig.useMockApi) {
+      await Future.delayed(AppConfig.mockDelay);
+      return;
+    }
+
+    if (idToken == null) {
+      throw ApiException('로그인이 필요합니다. 다시 로그인 후 시도해주세요.');
+    }
+    await ApiClient.delete(AppConfig.authDeleteAccountEndpoint, authToken: idToken);
+  }
+
   /// ===== Mock 구현 =====
   static Future<UserProfile> _mockLogin(AuthProviderType provider) async {
     await Future.delayed(AppConfig.mockDelay);

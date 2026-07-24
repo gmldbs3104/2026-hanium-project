@@ -54,6 +54,31 @@ class ApiClient {
     }
   }
 
+  static Future<Map<String, dynamic>> delete(
+    String path, {
+    String? authToken,
+  }) async {
+    final uri = Uri.parse('${AppConfig.apiBaseUrl}$path');
+    try {
+      final response = await http.delete(
+        uri,
+        headers: {
+          if (authToken != null) 'Authorization': 'Bearer $authToken',
+        },
+      );
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        if (response.body.isEmpty) return {};
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+      throw ApiException('요청이 실패했습니다 (${response.statusCode})', response.statusCode);
+    } on ApiException {
+      rethrow;
+    } catch (e) {
+      throw ApiException('서버에 연결할 수 없습니다: $e');
+    }
+  }
+
   static Future<Map<String, dynamic>> get(
     String path, {
     Map<String, String>? queryParams,

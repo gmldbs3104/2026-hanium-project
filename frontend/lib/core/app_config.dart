@@ -24,6 +24,10 @@ class AppConfig {
   // 이후 인증이 필요한 모든 요청은 Firebase ID Token을 그대로
   // Authorization: Bearer {firebase_id_token} 헤더로 보낸다.
   static const String authLoginEndpoint = '/api/v1/auth/login';
+  // REQ-009-7: 계정 삭제 요청 (HTTP DELETE, 인증 필요).
+  // ⚠️ 백엔드 미구현 — 실제 데이터(DB 레코드/S3 이미지/Firebase 사용자) 영구 삭제는
+  //    백엔드가 수행하며, 엔드포인트 경로·응답 스펙은 협의 필요 (임시로 REST 관례를 따름).
+  static const String authDeleteAccountEndpoint = '/api/v1/auth/account';
 
   // ---- 캔버스 모드 파이프라인 (SFR-003C ~ SFR-007) ----
   static String canvasGroupEndpoint(String sessionId) => '/api/v1/canvas/$sessionId/group';

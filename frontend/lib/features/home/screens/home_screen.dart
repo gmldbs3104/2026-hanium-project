@@ -59,6 +59,46 @@ class HomeScreen extends ConsumerWidget {
     }
   }
 
+  /// REQ-009-7: 계정 삭제 진입점. 되돌릴 수 없는 작업이므로 명시적 경고 후 진행한다.
+  /// 실제 데이터 삭제는 백엔드가 수행하며, 성공 시 라우터 가드가 /login 으로 되돌린다.
+  Future<void> _confirmDeleteAccount(BuildContext context, WidgetRef ref) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('계정 삭제'),
+        content: const Text(
+          '계정을 삭제하면 학습 기록과 저장된 이미지를 포함한 모든 데이터가 삭제되며, '
+          '이 작업은 되돌릴 수 없습니다.\n\n정말 삭제하시겠어요?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('취소'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            style: TextButton.styleFrom(foregroundColor: AppTheme.errorColor),
+            child: const Text('삭제'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !context.mounted) return;
+
+    // context가 삭제 성공 시 /login 으로 사라질 수 있으므로 messenger를 미리 확보한다.
+    final messenger = ScaffoldMessenger.of(context);
+    final success = await ref.read(authControllerProvider.notifier).deleteAccount();
+
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          success ? '계정이 삭제되었습니다.' : '계정 삭제에 실패했습니다. 잠시 후 다시 시도해주세요.',
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final authState = ref.watch(authControllerProvider);
@@ -79,6 +119,7 @@ class HomeScreen extends ConsumerWidget {
             tooltip: '계정',
             onSelected: (value) {
               if (value == 'logout') _confirmSignOut(context, ref);
+              if (value == 'delete_account') _confirmDeleteAccount(context, ref);
             },
             itemBuilder: (context) => [
               if (userLabel != null)
@@ -97,6 +138,16 @@ class HomeScreen extends ConsumerWidget {
                     Icon(Icons.logout_rounded, size: 20),
                     SizedBox(width: 12),
                     Text('로그아웃'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem<String>(
+                value: 'delete_account',
+                child: Row(
+                  children: [
+                    Icon(Icons.delete_forever_rounded, size: 20, color: AppTheme.errorColor),
+                    SizedBox(width: 12),
+                    Text('계정 삭제', style: TextStyle(color: AppTheme.errorColor)),
                   ],
                 ),
               ),
