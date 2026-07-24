@@ -1,7 +1,9 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../../shared/services/api_client.dart';
 import '../../canvas_mode/services/canvas_api_service.dart';
 import '../../image_mode/services/image_api_service.dart';
 import '../models/pending_session_save.dart';
@@ -46,8 +48,14 @@ class SessionSaveQueue {
   }
 
   /// 큐에 쌓인 항목들을 순서대로 다시 저장 시도한다.
-  /// 성공한 항목만 큐에서 제거하고, 여전히 실패하는 항목은 큐에 남긴다.
   /// 반환값: 이번 flush에서 성공적으로 저장된 항목 수.
+  ///
+  /// 재시도 정책(REQ-009-5는 "네트워크 장애" 복구용 큐):
+  ///  - 성공: 큐에서 제거
+  ///  - 네트워크 장애(ApiException.statusCode == null): 큐에 유지 → 다음 flush에서 재시도
+  ///  - 서버 4xx/5xx(statusCode != null): 재시도해도 같은 이유로 실패하므로 큐에서 제거
+  ///    (poison 항목이 큐를 무한 점유하는 것을 방지)
+  ///  - 분류 불가 예외: 데이터 유실 방지를 위해 보수적으로 큐에 유지
   static Future<int> flush() async {
     final items = await _readAll();
     if (items.isEmpty) return 0;
@@ -63,8 +71,15 @@ class SessionSaveQueue {
           await ImageApiService.confirm(item.sessionId, saveImage: item.saveImage);
         }
         succeeded++;
-      } catch (_) {
-        remaining.add(item); // 이번에도 실패 -> 큐에 유지, 다음 flush에서 재시도
+      } on ApiException catch (e) {
+        if (e.statusCode == null) {
+          remaining.add(item); // 네트워크 장애 → 다음 flush에서 재시도
+        } else {
+          // 서버가 거부한 요청(4xx/5xx) → 큐에서 제거 (무한 재시도 방지)
+          debugPrint('[SessionSaveQueue] dropping ${item.sessionId} (server error ${e.statusCode})');
+        }
+      } catch (e) {
+        remaining.add(item); // 분류 불가 예외 → 유실 방지 위해 큐 유지
       }
     }
 

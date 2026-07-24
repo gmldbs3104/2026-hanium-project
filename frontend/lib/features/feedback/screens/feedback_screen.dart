@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../shared/services/api_client.dart';
 import '../../canvas_mode/models/stroke.dart';
 import '../../canvas_mode/services/canvas_api_service.dart';
 import '../../canvas_mode/widgets/stroke_painter.dart';
@@ -174,25 +175,47 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         ScaffoldMessenger.of(context)
             .showSnackBar(const SnackBar(content: Text('학습 결과가 저장되었습니다.')));
       }
-    } catch (e) {
-      // REQ-009-5: 네트워크 문제로 저장이 실패하면 로컬 큐에 쌓아두고
-      // 나중에(다음에 이 화면을 열 때, 또는 "지금 재시도") 자동으로 다시 시도한다.
-      await SessionSaveQueue.enqueue(PendingSessionSave(
-        mode: widget.mode,
-        sessionId: widget.sessionId,
-        saveImage: _saveImageConsent,
-      ));
-      await _refreshPendingQueueCount();
-
-      if (mounted) {
-        setState(() => _confirmed = true); // 큐에 넣어뒀으니 사용자 입장에서는 완료로 처리
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('오프라인 상태예요. 연결되면 자동으로 다시 저장할게요.')),
-        );
+    } on ApiException catch (e) {
+      // REQ-009-5는 "네트워크 장애" 시에만 로컬 큐에 저장하도록 요구한다.
+      // 연결 실패(statusCode == null)만 큐에 넣어 연결 복구 후 자동 재시도하고,
+      // 서버가 응답한 4xx/5xx(statusCode != null)는 재시도해도 같은 이유로 실패하므로
+      // 큐에 넣지 않고 즉시 실패로 안내한다 (무한 재시도 방지).
+      if (e.statusCode == null) {
+        await _enqueueForRetry();
+      } else {
+        _showSaveFailed('저장에 실패했습니다 (오류 ${e.statusCode}). 잠시 후 다시 시도해주세요.');
       }
+    } catch (e) {
+      // 예상치 못한 예외 — 네트워크 장애로 단정할 수 없으므로 큐에 넣지 않고 실패로 안내한다.
+      debugPrint('[Feedback] confirm unexpected error: $e');
+      _showSaveFailed('저장 중 문제가 발생했습니다. 잠시 후 다시 시도해주세요.');
     } finally {
       if (mounted) setState(() => _isConfirming = false);
     }
+  }
+
+  /// REQ-009-5: 네트워크 장애 시 저장 요청을 로컬 큐에 넣고, 사용자에게는 완료로 안내한다
+  /// (다음에 이 화면을 열 때 또는 "지금 재시도"로 자동 재전송되므로).
+  Future<void> _enqueueForRetry() async {
+    await SessionSaveQueue.enqueue(PendingSessionSave(
+      mode: widget.mode,
+      sessionId: widget.sessionId,
+      saveImage: _saveImageConsent,
+    ));
+    await _refreshPendingQueueCount();
+
+    if (mounted) {
+      setState(() => _confirmed = true); // 큐에 넣어뒀으니 사용자 입장에서는 완료로 처리
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('오프라인 상태예요. 연결되면 자동으로 다시 저장할게요.')),
+      );
+    }
+  }
+
+  /// 서버 오류 등 재시도 큐잉이 부적절한 실패 — 완료로 처리하지 않아 사용자가 다시 시도할 수 있게 둔다.
+  void _showSaveFailed(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
