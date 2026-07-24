@@ -1,9 +1,12 @@
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
 import 'package:go_router/go_router.dart';
 
 import '../../../shared/services/api_client.dart';
+import '../utils/image_download.dart';
 import '../../canvas_mode/models/stroke.dart';
 import '../../canvas_mode/services/canvas_api_service.dart';
 import '../../canvas_mode/widgets/stroke_painter.dart';
@@ -86,6 +89,10 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   // 경계 케이스 안내용 상태
   int _lowConfidenceCount = 0; // SFR-004C Side Effect: 저신뢰 문자 수 (canvas)
   int _detectedCount = 0;      // REQ-004I-5 / SFR-005I Side Effect: 탐지 문자 수 (image)
+
+  // 오버레이(배경 + 교정 표시)를 PNG로 캡처해 다운로드하기 위한 키
+  final GlobalKey _overlayCaptureKey = GlobalKey();
+  bool _isDownloading = false;
 
   @override
   void initState() {
@@ -230,12 +237,24 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       appBar: AppBar(
         title: const Text('분석 결과'),
         actions: [
-          if (!_isLoading && _errorMessage == null)
+          if (!_isLoading && _errorMessage == null) ...[
+            IconButton(
+              tooltip: '이미지 다운로드',
+              icon: _isDownloading
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.download_rounded),
+              onPressed: _isDownloading ? null : _downloadFeedbackImage,
+            ),
             IconButton(
               tooltip: _showOverlay ? '오버레이 숨기기' : '오버레이 보이기',
               icon: Icon(_showOverlay ? Icons.visibility_rounded : Icons.visibility_off_rounded),
               onPressed: () => setState(() => _showOverlay = !_showOverlay),
             ),
+          ],
         ],
       ),
       body: SafeArea(child: _buildBody(context)),
@@ -391,12 +410,57 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       padding: const EdgeInsets.all(16),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(12),
-        child: Container(
-          color: Theme.of(context).colorScheme.surfaceContainerHighest,
-          child: _isCanvas ? _buildCanvasOverlay() : _buildImageOverlay(),
+        // 다운로드 시 이 RepaintBoundary 하위(배경 + 교정 오버레이)를 PNG로 캡처한다.
+        child: RepaintBoundary(
+          key: _overlayCaptureKey,
+          child: Container(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            child: _isCanvas ? _buildCanvasOverlay() : _buildImageOverlay(),
+          ),
         ),
       ),
     );
+  }
+
+  /// 피드백 오버레이가 그려진 화면을 PNG로 캡처해 사용자 기기에 다운로드한다.
+  /// (웹: 브라우저 다운로드 / 그 외 플랫폼: 미지원 안내)
+  Future<void> _downloadFeedbackImage() async {
+    if (_isDownloading) return;
+    setState(() => _isDownloading = true);
+    try {
+      final boundary = _overlayCaptureKey.currentContext?.findRenderObject()
+          as RenderRepaintBoundary?;
+      if (boundary == null) throw StateError('캡처 대상을 찾을 수 없습니다.');
+
+      final image = await boundary.toImage(pixelRatio: 3.0);
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      image.dispose();
+      if (byteData == null) throw StateError('이미지 변환에 실패했습니다.');
+
+      final filename =
+          '${_isCanvas ? 'canvas' : 'image'}_feedback_${widget.sessionId}.png';
+      await downloadPng(byteData.buffer.asUint8List(), filename);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('이미지를 다운로드했어요.')));
+      }
+    } on UnsupportedError {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('이 플랫폼에서는 이미지 다운로드를 지원하지 않아요.')),
+        );
+      }
+    } catch (e) {
+      debugPrint('[Feedback] download error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('이미지 다운로드에 실패했어요. 잠시 후 다시 시도해주세요.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isDownloading = false);
+    }
   }
 
   Widget _buildCanvasOverlay() {
