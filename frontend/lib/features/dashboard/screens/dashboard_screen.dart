@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../auth/providers/auth_controller.dart';
 import '../models/dashboard_response.dart';
@@ -69,7 +70,14 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('학습 대시보드')),
+      appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_rounded),
+          tooltip: '홈으로',
+          onPressed: () => context.go('/home'),
+        ),
+        title: const Text('학습 대시보드'),
+      ),
       body: SafeArea(
         child: Column(
           children: [
