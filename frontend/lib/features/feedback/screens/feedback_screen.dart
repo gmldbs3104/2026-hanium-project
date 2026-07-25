@@ -15,6 +15,7 @@ import '../models/canvas_correction_overlay_item.dart';
 import '../models/image_bbox_overlay_item.dart';
 import '../models/pending_session_save.dart';
 import '../services/session_save_queue.dart';
+import '../widgets/feedback_action_bar.dart';
 import '../widgets/canvas_correction_overlay_view.dart';
 import '../widgets/image_bbox_overlay_view.dart';
 
@@ -186,7 +187,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       if (mounted) {
         setState(() => _confirmed = true);
         ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('학습 결과가 저장되었습니다.')));
+            .showSnackBar(const SnackBar(content: Text('학습 기록을 저장했어요.')));
       }
     } on ApiException catch (e) {
       // REQ-009-5는 "네트워크 장애" 시에만 로컬 큐에 저장하도록 요구한다.
@@ -237,24 +238,14 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       appBar: AppBar(
         title: const Text('분석 결과'),
         actions: [
-          if (!_isLoading && _errorMessage == null) ...[
-            IconButton(
-              tooltip: '이미지 다운로드',
-              icon: _isDownloading
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.download_rounded),
-              onPressed: _isDownloading ? null : _downloadFeedbackImage,
-            ),
+          // 다운로드는 하단 FeedbackActionBar로 옮겼다 — 서버 저장과 나란히 놓아
+          // "기기로 받기"와 "서버에 저장"이 구분되게 하기 위함.
+          if (!_isLoading && _errorMessage == null)
             IconButton(
               tooltip: _showOverlay ? '오버레이 숨기기' : '오버레이 보이기',
               icon: Icon(_showOverlay ? Icons.visibility_rounded : Icons.visibility_off_rounded),
               onPressed: () => setState(() => _showOverlay = !_showOverlay),
             ),
-          ],
         ],
       ),
       body: SafeArea(child: _buildBody(context)),
@@ -278,7 +269,17 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         const Divider(height: 1),
         Expanded(child: _buildOverlayArea(context)),
         const Divider(height: 1),
-        _buildConfirmSection(context),
+        FeedbackActionBar(
+          isCanvas: _isCanvas,
+          confirmed: _confirmed,
+          isConfirming: _isConfirming,
+          isDownloading: _isDownloading,
+          saveImageConsent: _saveImageConsent,
+          onConsentChanged: (v) => setState(() => _saveImageConsent = v),
+          onConfirm: _onConfirm,
+          onDownload: _downloadFeedbackImage,
+          onGoHome: () => context.go('/home'),
+        ),
       ],
     );
   }
@@ -443,7 +444,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('이미지를 다운로드했어요.')));
+            .showSnackBar(const SnackBar(content: Text('이미지를 기기에 받았어요.')));
       }
     } on UnsupportedError {
       if (mounted) {
@@ -559,62 +560,6 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  /// SFR-009: 하단 저장 확인 영역 (이미지 모드는 저장 동의 체크박스 포함, REQ-009-4)
-  Widget _buildConfirmSection(BuildContext context) {
-    if (_confirmed) {
-      return Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.check_circle_rounded, color: Colors.green.shade600, size: 20),
-            const SizedBox(width: 8),
-            const Text('저장이 완료되었습니다.'),
-            const SizedBox(width: 16),
-            TextButton(
-              onPressed: () => context.go('/home'),
-              child: const Text('홈으로'),
-            ),
-          ],
-        ),
-      );
-    }
-
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        children: [
-          if (!_isCanvas)
-            CheckboxListTile(
-              contentPadding: EdgeInsets.zero,
-              controlAffinity: ListTileControlAffinity.leading,
-              dense: true,
-              value: _saveImageConsent,
-              onChanged: (v) => setState(() => _saveImageConsent = v ?? false),
-              title: const Text('원본 이미지도 함께 저장하기', style: TextStyle(fontSize: 13)),
-              subtitle: const Text(
-                '동의하지 않으면 분석 결과만 저장되고, 촬영한 사진은 저장되지 않습니다.',
-                style: TextStyle(fontSize: 11),
-              ),
-            ),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton(
-              onPressed: _isConfirming ? null : _onConfirm,
-              child: _isConfirming
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                    )
-                  : const Text('확인 (결과 저장)'),
-            ),
-          ),
-        ],
       ),
     );
   }

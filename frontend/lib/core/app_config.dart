@@ -34,7 +34,7 @@ class AppConfig {
   static String canvasAnalyzeDetailEndpoint(String sessionId) =>
       '/api/v1/canvas/$sessionId/analyze-detail';
   static String canvasFeedbackEndpoint(String sessionId) => '/api/v1/canvas/$sessionId/feedback';
-  // SFR-009: 학습 결과 저장 확인 (피드백 화면에서 "확인" 탭 시 트리거)
+  // SFR-009: 학습 결과 저장 확인 (피드백 화면 "학습 기록 저장" 탭 시 트리거)
   static String canvasConfirmEndpoint(String sessionId) => '/api/v1/canvas/$sessionId/confirm';
 
   // ---- 이미지 모드 파이프라인 (SFR-003I ~ SFR-007) ----
