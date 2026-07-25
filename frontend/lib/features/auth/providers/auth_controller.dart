@@ -22,7 +22,11 @@ import 'auth_state.dart';
 /// [AuthApiService]의 mock 응답으로 즉시 로그인 처리한다.
 /// (Firebase 프로젝트 설정 없이도 화면 흐름을 테스트할 수 있도록 하기 위함)
 class AuthController extends Notifier<AuthState> {
-  final GoogleSignIn _googleSignIn = GoogleSignIn(scopes: ['email', 'profile']);
+  /// ⚠️ `late` (지연 초기화) 필수 — web에서 google_sign_in_web은 생성 시점에
+  /// clientId(<meta name="google-signin-client_id">)를 요구하며, 없으면 assert로
+  /// 앱 전체가 흰 화면이 된다. 아래 사용처는 모두 `!useMockApi` 가드 안에 있으므로
+  /// mock 모드에서는 아예 생성되지 않도록 한다.
+  late final GoogleSignIn _googleSignIn = GoogleSignIn(scopes: ['email', 'profile']);
 
   @override
   AuthState build() => const AuthInitial();
