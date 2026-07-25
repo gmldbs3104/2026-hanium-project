@@ -29,7 +29,7 @@ import '../widgets/image_bbox_overlay_view.dart';
 /// analyze()/preprocess() 단계 응답에는 원래 점수가 없습니다 (백엔드 스키마 참고).
 /// 반드시 GET /{canvas|image}/{id}/feedback 응답에서만 점수를 받습니다.
 ///
-/// SFR-009: 하단 "확인" 버튼을 탭하면 저장을 트리거한다 (requirement.md
+/// SFR-009: 하단 "학습 기록 저장" 버튼을 탭하면 저장을 트리거한다 (requirement.md
 /// SFR-007 Post-condition: "사용자가 피드백을 확인하면 SFR-009가 트리거된다").
 /// 저장 요청이 네트워크 문제로 실패하면 로컬 큐에 쌓아두고, 다음에 이 화면을
 /// 열 때(또는 "지금 재시도")마다 자동으로 다시 시도한다 (REQ-009-5).
@@ -237,9 +237,9 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('분석 결과'),
+        // 다운로드는 하단 FeedbackActionBar로 옮겼다 — 서버 저장과 나란히 놓아
+        // "기기로 받기"와 "서버에 저장"이 구분되게 하기 위함.
         actions: [
-          // 다운로드는 하단 FeedbackActionBar로 옮겼다 — 서버 저장과 나란히 놓아
-          // "기기로 받기"와 "서버에 저장"이 구분되게 하기 위함.
           if (!_isLoading && _errorMessage == null)
             IconButton(
               tooltip: _showOverlay ? '오버레이 숨기기' : '오버레이 보이기',
