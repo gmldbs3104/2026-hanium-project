@@ -10,7 +10,7 @@ import 'core/theme_provider.dart';
 import 'features/feedback/services/session_save_queue.dart';
 import 'shared/router/app_router.dart';
 
-// import 'firebase_options.dart'; // `flutterfire configure` 실행 시 생성됨
+import 'firebase_options.dart';
 
 Future<void> main() async {
   // ⚠️ SFR-009 오프라인 재시도 큐가 shared_preferences(플러그인)를 쓰기 때문에,
@@ -22,7 +22,7 @@ Future<void> main() async {
   // `flutterfire configure`로 firebase_options.dart를 생성해야 한다.
   if (!AppConfig.useMockApi) {
     await Firebase.initializeApp(
-      // options: DefaultFirebaseOptions.currentPlatform,
+      options: DefaultFirebaseOptions.currentPlatform,
     );
   }
 

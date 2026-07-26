@@ -35,3 +35,10 @@ async def get_session(key: str) -> Optional[Any]:
 
 async def delete_session(key: str) -> None:
     await get_redis().delete(key)
+
+
+async def delete_pattern(pattern: str) -> None:
+    """glob 패턴에 매칭되는 모든 키를 삭제한다 (예: 대시보드 캐시 무효화)."""
+    redis = get_redis()
+    async for key in redis.scan_iter(match=pattern):
+        await redis.delete(key)

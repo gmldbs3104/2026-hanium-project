@@ -7,7 +7,7 @@ from app.services.session_cache import set_session
 
 from fastapi import HTTPException
 from app.schemas.canvas import CanvasGroupResponse
-from app.services.session_cache import get_session, set_session
+from app.services.session_cache import get_session, set_session, delete_pattern
 from app.services.stroke_grouping import rule_based_grouping, build_char_groups
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -65,9 +65,26 @@ async def group_canvas_strokes(canvas_session_id: str):
 
     low_confidence_count = sum(1 for g in char_groups if g["low_confidence"])
 
+    # stroke_grouping.py는 내부적으로 bounding_box를 {x,y,w,h}로 다루지만,
+    # 응답 스키마(및 프론트 BoundingBox 모델)는 {x,y,width,height}를 기대한다.
+    # 캐시에 저장된 char_groups(analyze-detail이 참조)는 원본 그대로 두고,
+    # 응답용으로만 키를 변환한다.
+    response_char_groups = [
+        {
+            **g,
+            "bounding_box": {
+                "x": g["bounding_box"]["x"],
+                "y": g["bounding_box"]["y"],
+                "width": g["bounding_box"]["w"],
+                "height": g["bounding_box"]["h"],
+            },
+        }
+        for g in char_groups
+    ]
+
     return CanvasGroupResponse(
         canvas_session_id=canvas_session_id,
-        char_groups=char_groups,
+        char_groups=response_char_groups,
         low_confidence_count=low_confidence_count,
     )
 
@@ -125,7 +142,10 @@ async def analyze_canvas_detail(
         prev_box = group["bounding_box"]
 
     await db.commit()
-    
+
+    # 새 분석 결과가 저장됐으므로 이 유저의 대시보드 캐시(SFR-008)는 더 이상 최신이 아니다
+    await delete_pattern(f"dashboard:{current_user.id}:*")
+
     # SFR-007에서 재사용할 수 있도록 캐시에도 저장
     session_data["analysis_results"] = [r.model_dump() for r in results]
     await set_session(canvas_session_id, session_data)

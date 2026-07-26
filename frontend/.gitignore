@@ -15,7 +15,8 @@ ios/
 linux/
 macos/
 windows/
-web/
+# web/은 커밋함 — index.html에 google-signin-client_id 메타 태그가 있어서
+# 팀원마다 flutter create .로 새로 생성하면 이 태그가 빠져 로그인이 깨짐
 
 # IDE
 .idea/

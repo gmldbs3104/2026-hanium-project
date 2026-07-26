@@ -8,7 +8,7 @@
 class AppConfig {
   AppConfig._();
 
-  static const bool useMockApi = true;
+  static const bool useMockApi = false;
 
   static const String apiBaseUrl = 'http://localhost:8000';
 

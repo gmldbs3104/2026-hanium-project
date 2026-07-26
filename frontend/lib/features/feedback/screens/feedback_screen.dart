@@ -113,7 +113,8 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
       } else {
         await _loadImageFeedback();
       }
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('[Feedback] _loadFeedback error: $e\n$st');
       setState(() => _errorMessage = '피드백을 불러오지 못했습니다. 다시 시도해주세요.');
     } finally {
       if (mounted) setState(() => _isLoading = false);

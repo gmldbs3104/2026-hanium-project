@@ -20,7 +20,8 @@ app.add_middleware(
     allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    # ⚠️ "*"는 CORS 스펙상 Authorization 헤더를 커버하지 않는다 — 명시적으로 나열해야 함
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 app.include_router(auth.router, prefix="/api/v1")

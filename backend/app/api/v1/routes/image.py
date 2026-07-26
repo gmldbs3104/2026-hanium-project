@@ -8,7 +8,7 @@ from app.db.session import get_db
 from app.core.deps import get_current_user
 from app.models.user import User
 from app.models.correction import ImageAnalysisResult
-from app.services.session_cache import get_session, set_session
+from app.services.session_cache import get_session, set_session, delete_pattern
 from app.services.s3_service import upload_handwriting_image
 from app.services.image_preprocessing import preprocess_image, detect_char_bboxes
 from app.services.image_analysis import (
@@ -149,6 +149,9 @@ async def analyze(
     )
     db.add(result_row)
     await db.commit()
+
+    # 새 분석 결과가 저장됐으므로 이 유저의 대시보드 캐시(SFR-008)는 더 이상 최신이 아니다
+    await delete_pattern(f"dashboard:{current_user.id}:*")
 
     session_data["analysis_results"] = {
         "size_uniformity_score": size_uniformity_score,
