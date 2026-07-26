@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from uuid import uuid4
+from datetime import datetime
 
 from app.schemas.canvas import CanvasAnalyzeRequest, CanvasAnalyzeResponse
 from app.services.session_cache import set_session
@@ -21,6 +22,7 @@ from app.services.canvas_analysis import (
 
 from app.schemas.canvas import CanvasFeedbackResponse, FeedbackItem
 from app.services.feedback_generator import generate_canvas_feedback
+from app.schemas.session import SessionSaveResult
 
 router = APIRouter(prefix="/canvas", tags=["canvas"])
 
@@ -150,4 +152,23 @@ async def get_canvas_feedback(canvas_session_id: str):
         overall_score=feedback["overall_score"],
         achievement_message=feedback["achievement_message"],
         feedback_items=[FeedbackItem(**item) for item in feedback["feedback_items"]],
+    )
+
+@router.post("/{canvas_session_id}/confirm", response_model=SessionSaveResult)
+async def confirm_canvas_session(canvas_session_id: str):
+    """
+    SFR-009: 학습 결과 저장 확인.
+    실제 DB 저장은 /analyze-detail 시점에 이미 끝나 있으므로, 여기서는
+    해당 세션의 분석이 완료됐는지 확인하고 저장 확인 응답만 돌려준다.
+    """
+    session_data = await get_session(canvas_session_id)
+    if session_data is None or session_data.get("analysis_results") is None:
+        raise HTTPException(status_code=400, detail="먼저 /analyze-detail 엔드포인트를 호출해야 합니다.")
+
+    return SessionSaveResult(
+        session_id=canvas_session_id,
+        saved_at=datetime.utcnow(),
+        mode="canvas",
+        firestore_synced=False,
+        s3_uploaded=False,
     )

@@ -33,7 +33,7 @@ class CanvasApiService {
       AppConfig.canvasAnalyzeEndpoint,
       {
         'strokes': strokes.map((s) => s.toJson()).toList(),
-        'canvas_metadata': metadata.toJson(),
+        'metadata': metadata.toJson(),
       },
     );
     return CanvasAnalyzeResult.fromJson(response);
@@ -51,6 +51,20 @@ class CanvasApiService {
       {},
     );
     return CanvasGroupResponse.fromJson(response);
+  }
+
+  /// SFR-005C: 획순/자간/크기 분석 트리거 (인증 필요)
+  /// 이 호출이 서버 캐시에 분석 결과를 채워야 feedback()이 동작한다.
+  /// 응답 자체는 화면에서 쓰지 않으므로(진짜 점수는 feedback()에서만 받음) 반환하지 않는다.
+  /// (requirement: POST /api/v1/canvas/{canvas_session_id}/analyze-detail)
+  static Future<void> analyzeDetail(String canvasSessionId, {String? idToken}) async {
+    if (AppConfig.useMockApi) return;
+
+    await ApiClient.post(
+      AppConfig.canvasAnalyzeDetailEndpoint(canvasSessionId),
+      {},
+      authToken: idToken,
+    );
   }
 
   /// SFR-007: 교정 피드백 조회 (문자별 severity + 메시지 + 최종 종합 점수)

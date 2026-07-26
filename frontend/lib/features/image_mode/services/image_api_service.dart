@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'package:uuid/uuid.dart';
 
 import '../../../core/app_config.dart';
@@ -7,7 +6,6 @@ import '../../../shared/models/bounding_box.dart';
 import '../../../shared/models/feedback_item.dart';
 import '../../../shared/models/session_save_result.dart';
 import '../models/image_result.dart';
-import '../models/image_roi.dart';
 import '../models/detected_char.dart';
 import '../models/image_detect_response.dart';
 import '../models/image_feedback_response.dart';
@@ -21,30 +19,31 @@ import '../models/image_feedback_response.dart';
 /// [AppConfig.useMockApi] 를 false로 바꾸면 아래 메서드들이 자동으로
 /// 실제 ApiClient 호출로 전환됩니다.
 class ImageApiService {
-  /// 촬영된 이미지를 Base64로 인코딩해 서버로 전송
-  /// (requirement Action ①: POST /api/v1/image/preprocess)
-  ///
-  /// [roi]: SFR-003I Inputs의 선택적 관심영역 좌표. null이면 전체 이미지를 대상으로 한다.
+  /// 촬영된 이미지를 multipart/form-data로 서버에 업로드
+  /// (requirement Action ①: POST /api/v1/image/preprocess, 백엔드는 필드명 `file`의
+  /// multipart 업로드를 기대함 — backend/app/api/v1/routes/image.py 참고)
   static Future<ImagePreprocessResult> preprocess({
     required List<int> imageBytes,
-    ImageRoi? roi,
   }) async {
     if (AppConfig.useMockApi) {
       return _mockPreprocess(imageBytes);
     }
 
-    final base64Image = base64Encode(imageBytes);
-    final response = await ApiClient.post(
+    final isPng = _isPngBytes(imageBytes);
+    final response = await ApiClient.postMultipart(
       AppConfig.imagePreprocessEndpoint,
-      {
-        'image': base64Image,
-        'input_type': 'camera',
-        // SFR-003I Inputs: 선택적 ROI 좌표 (원본 이미지 픽셀 기준). 있을 때만 포함.
-        if (roi != null) 'roi': roi.toJson(),
-      },
+      imageBytes,
+      fieldName: 'file',
+      filename: isPng ? 'capture.png' : 'capture.jpg',
+      contentType: isPng ? 'image/png' : 'image/jpeg',
     );
     return ImagePreprocessResult.fromJson(response);
   }
+
+  static bool _isPngBytes(List<int> b) =>
+      b.length >= 8 &&
+      b[0] == 0x89 && b[1] == 0x50 && b[2] == 0x4E && b[3] == 0x47 &&
+      b[4] == 0x0D && b[5] == 0x0A && b[6] == 0x1A && b[7] == 0x0A;
 
   /// SFR-004I: 문자 영역 Bounding Box 탐지 결과 조회
   /// (requirement: POST /api/v1/image/{image_session_id}/detect)
@@ -55,6 +54,20 @@ class ImageApiService {
 
     final response = await ApiClient.post(AppConfig.imageDetectEndpoint(imageSessionId), {});
     return ImageDetectResponse.fromJson(response);
+  }
+
+  /// SFR-005I: 크기 균일성/기울기/줄 정렬 분석 트리거 (인증 필요)
+  /// 이 호출이 서버 캐시에 분석 결과를 채워야 feedback()이 동작한다.
+  /// 응답 자체는 화면에서 쓰지 않으므로(진짜 점수는 feedback()에서만 받음) 반환하지 않는다.
+  /// (requirement: POST /api/v1/image/{image_session_id}/analyze)
+  static Future<void> analyze(String imageSessionId, {String? idToken}) async {
+    if (AppConfig.useMockApi) return;
+
+    await ApiClient.post(
+      AppConfig.imageAnalyzeEndpoint(imageSessionId),
+      {},
+      authToken: idToken,
+    );
   }
 
   /// SFR-007: 교정 피드백 조회

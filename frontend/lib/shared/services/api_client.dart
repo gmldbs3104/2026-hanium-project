@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 
 import '../../core/app_config.dart';
 
@@ -50,6 +51,43 @@ class ApiClient {
       rethrow;
     } catch (e) {
       // 서버가 아직 없거나(Connection refused), 네트워크 문제일 때
+      throw ApiException('서버에 연결할 수 없습니다: $e');
+    }
+  }
+
+  /// multipart/form-data로 파일을 업로드한다 (예: 이미지 모드 `/image/preprocess`).
+  static Future<Map<String, dynamic>> postMultipart(
+    String path,
+    List<int> bytes, {
+    required String fieldName,
+    required String filename,
+    String? contentType,
+    String? authToken,
+  }) async {
+    final uri = Uri.parse('${AppConfig.apiBaseUrl}$path');
+    try {
+      final request = http.MultipartRequest('POST', uri)
+        ..files.add(http.MultipartFile.fromBytes(
+          fieldName,
+          bytes,
+          filename: filename,
+          contentType: contentType != null ? MediaType.parse(contentType) : null,
+        ));
+      if (authToken != null) {
+        request.headers['Authorization'] = 'Bearer $authToken';
+      }
+
+      final streamedResponse = await request.send();
+      final response = await http.Response.fromStream(streamedResponse);
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        if (response.body.isEmpty) return {};
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+      throw ApiException('요청이 실패했습니다 (${response.statusCode})', response.statusCode);
+    } on ApiException {
+      rethrow;
+    } catch (e) {
       throw ApiException('서버에 연결할 수 없습니다: $e');
     }
   }

@@ -18,6 +18,8 @@ dependencies:
 
   # 네트워킹
   http: ^1.2.1
+  # multipart 업로드 시 Content-Type 지정용 (image_mode preprocess)
+  http_parser: ^4.0.2
 
   # 카메라 (이미지 모드)
   camera: ^0.10.5+9

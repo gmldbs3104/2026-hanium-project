@@ -9,8 +9,8 @@ AI 손글씨 교정 플랫폼 — an AI-powered Korean handwriting correction pl
 Tech stack:
 - **Backend**: Python 3.13, FastAPI + Uvicorn (async), SQLAlchemy 2.0 async, Alembic, PostgreSQL
 - **Auth**: Firebase Authentication (Google/Kakao OAuth 2.0) — the backend verifies Firebase ID tokens, not passwords
-- **Frontend**: Flutter (not yet in this repo)
-- **Planned**: AWS S3 for image storage, Firebase Firestore for multi-device sync
+- **Frontend**: Flutter (`frontend/`), Riverpod + go_router; mock/real API switch via `AppConfig.useMockApi`
+- **Storage**: AWS S3 for image uploads (implemented, graceful no-op if unconfigured); Firebase Firestore multi-device sync is planned but not implemented
 
 ## Backend Development Commands
 
@@ -83,7 +83,8 @@ The `POST /api/v1/auth/login` endpoint creates or updates a user record in Postg
 - `users` — Firebase UID, email, name, provider, timestamps
 - `canvas_analysis_results` — per-character results (stroke order JSON, spacing/size deviation, overall score) keyed by session_id + user_id
 - `image_analysis_results` — session-level scores (size uniformity, slant angle, line alignment) + char-level JSON
-- `stroke_standards` — standard reference data for Korean characters (height, width, spacing, expected stroke sequence); currently sparse — TODO: populate all 11,172 Korean characters
+- `stroke_standards` — standard reference data for Korean characters (height, width, spacing, expected stroke sequence); seeded for all 11,172 Korean characters
+- `font_standards` — per-character/per-font reference dimensions (height, width, aspect ratio) used by the image pipeline; seeded for all 11,172 characters (`myeongjo` font)
 
 ### Configurable thresholds (in `.env` / `Settings`)
 
@@ -100,9 +101,12 @@ The **canvas pipeline** is functional end-to-end with placeholder logic:
 - Stroke order analysis compares stroke counts only (LSTM model inference is a TODO)
 - Character recognition (identifying *which* Korean character) is not yet implemented; `get_standard()` always returns `DEFAULT_STANDARD`
 
-The **image pipeline** (SFR-003I through SFR-005I: OpenCV preprocessing → CRAFT bounding box detection → size/slant analysis) is **not yet implemented**.
+The **image pipeline** (SFR-003I through SFR-005I) is functional end-to-end with placeholder logic:
+- Preprocessing (grayscale → GaussianBlur → Otsu binarization) is fully implemented with OpenCV
+- Character bounding-box detection uses OpenCV contour detection as a placeholder (CRAFT model integration is a TODO)
+- Size uniformity, slant, and line alignment analysis are implemented; slant currently approximates from aspect ratio rather than the CRAFT angle output
 
-The **dashboard** route (`/api/v1/dashboard`) exists as an empty stub — SFR-008 is pending.
+The **dashboard** route (`/api/v1/dashboard`) is implemented (SFR-008): period/mode-filtered aggregation over `canvas_analysis_results` / `image_analysis_results`, Redis-cached per `(user_id, period, mode)`. `recommended_exercises` always returns `[]` (practice-sentence DB not built yet).
 
 ## Branch Strategy
 

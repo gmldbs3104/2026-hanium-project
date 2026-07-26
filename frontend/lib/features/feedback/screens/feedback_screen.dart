@@ -3,9 +3,11 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../shared/services/api_client.dart';
+import '../../auth/providers/auth_controller.dart';
 import '../utils/image_download.dart';
 import '../../canvas_mode/models/stroke.dart';
 import '../../canvas_mode/services/canvas_api_service.dart';
@@ -33,7 +35,7 @@ import '../widgets/image_bbox_overlay_view.dart';
 /// SFR-007 Post-condition: "사용자가 피드백을 확인하면 SFR-009가 트리거된다").
 /// 저장 요청이 네트워크 문제로 실패하면 로컬 큐에 쌓아두고, 다음에 이 화면을
 /// 열 때(또는 "지금 재시도")마다 자동으로 다시 시도한다 (REQ-009-5).
-class FeedbackScreen extends StatefulWidget {
+class FeedbackScreen extends ConsumerStatefulWidget {
   final String mode; // 'canvas' | 'image'
   final String sessionId;
 
@@ -62,10 +64,10 @@ class FeedbackScreen extends StatefulWidget {
   });
 
   @override
-  State<FeedbackScreen> createState() => _FeedbackScreenState();
+  ConsumerState<FeedbackScreen> createState() => _FeedbackScreenState();
 }
 
-class _FeedbackScreenState extends State<FeedbackScreen> {
+class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
   bool _isLoading = true;
   String? _errorMessage;
 
@@ -121,6 +123,9 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   Future<void> _loadCanvasFeedback() async {
     // SFR-004C: 문자 단위 bounding box
     final groupResponse = await CanvasApiService.group(widget.sessionId);
+    // SFR-005C: 획순/자간/크기 분석 (인증 필요) — feedback()이 참조할 서버 캐시를 채운다
+    final idToken = await ref.read(authControllerProvider.notifier).getCurrentIdToken();
+    await CanvasApiService.analyzeDetail(widget.sessionId, idToken: idToken);
     // SFR-007: 문자별 severity + 메시지 + 최종 종합 점수 (진짜 점수는 여기서만 나옴)
     final feedbackResponse = await CanvasApiService.feedback(widget.sessionId);
 
@@ -138,6 +143,9 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   Future<void> _loadImageFeedback() async {
     // SFR-004I: 문자 검출 bounding box
     final detectResponse = await ImageApiService.detect(widget.sessionId);
+    // SFR-005I: 크기 균일성/기울기/줄 정렬 분석 (인증 필요) — feedback()이 참조할 서버 캐시를 채운다
+    final idToken = await ref.read(authControllerProvider.notifier).getCurrentIdToken();
+    await ImageApiService.analyze(widget.sessionId, idToken: idToken);
     // SFR-007: 피드백 (현재는 target_id="global"만 옴 — 문서 참고) + 최종 종합 점수
     final feedbackResponse = await ImageApiService.feedback(widget.sessionId);
 

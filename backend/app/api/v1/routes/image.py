@@ -1,5 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from uuid import uuid4
+from datetime import datetime
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
@@ -25,10 +27,15 @@ from app.schemas.image import (
     ImageFeedbackResponse,
     ImageFeedbackItem,
 )
+from app.schemas.session import SessionSaveResult
 
 router = APIRouter(prefix="/image", tags=["image"])
 
 ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp"}
+
+
+class ImageConfirmRequest(BaseModel):
+    save_image: bool = False
 
 
 @router.post("/preprocess", response_model=ImagePreprocessResponse)
@@ -234,4 +241,24 @@ async def feedback(image_session_id: str):
         overall_score=overall_score,
         achievement_message=achievement_message,
         feedback_items=feedback_items,
+    )
+
+
+@router.post("/{image_session_id}/confirm", response_model=SessionSaveResult)
+async def confirm_image_session(image_session_id: str, payload: ImageConfirmRequest):
+    """
+    SFR-009: 학습 결과 저장 확인 (원본 이미지 저장 동의 여부 포함).
+    S3 업로드 자체는 /preprocess 시점에 이미 끝나 있다. save_image=false일 때
+    실제로 업로드된 원본을 삭제하는 정책은 아직 미구현 (TODO).
+    """
+    session_data = await get_session(image_session_id)
+    if session_data is None or session_data.get("analysis_results") is None:
+        raise HTTPException(status_code=400, detail="먼저 /analyze 엔드포인트를 호출해야 합니다.")
+
+    return SessionSaveResult(
+        session_id=image_session_id,
+        saved_at=datetime.utcnow(),
+        mode="image",
+        firestore_synced=False,
+        s3_uploaded=payload.save_image,
     )

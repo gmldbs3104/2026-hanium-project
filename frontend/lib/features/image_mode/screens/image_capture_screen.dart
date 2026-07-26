@@ -1,12 +1,8 @@
-import 'dart:typed_data';
-import 'dart:ui' as ui;
-
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../shared/services/api_client.dart';
-import '../models/image_roi.dart';
 import '../services/image_api_service.dart';
 
 /// 카메라 촬영 화면 (SFR-003I 대응)
@@ -15,8 +11,8 @@ import '../services/image_api_service.dart';
 /// REQ-003I-4: 품질 점수 40점 미만 시 재촬영 요구
 /// REQ-003I-6: 캔버스 모드와 로직을 공유하지 않음 (별도 화면/서비스로 완전 분리)
 ///
-/// SFR-003I Inputs 선택적 ROI 좌표: [1안 채택] 촬영한 전체 이미지를 ROI로 지정한다.
-/// (촬영 후 드래그로 영역을 직접 지정하는 [2안]은 파일 하단 주석 블록 참고)
+/// ⚠️ 백엔드 `/image/preprocess`는 ROI 좌표를 받지 않는다 (전체 이미지만 처리) —
+/// 그래서 촬영한 전체 이미지를 그대로 전송하고 ROI는 보내지 않는다.
 class ImageCaptureScreen extends StatefulWidget {
   const ImageCaptureScreen({super.key});
 
@@ -85,12 +81,7 @@ class _ImageCaptureScreenState extends State<ImageCaptureScreen> {
         }
       }
 
-      // ── SFR-003I Inputs: 선택적 ROI 좌표 [1안 채택] ──
-      // 촬영한 "전체 이미지"를 ROI로 지정한다. 원본 픽셀 크기를 디코딩해 (0,0)~(w,h)로 전달.
-      // 디코딩 실패(카메라 없는 테스트 환경의 mock 바이트 등)나 fallback이면 ROI를 생략한다.
-      final roi = isRealCapture ? await _fullImageRoi(bytes) : null;
-
-      final result = await ImageApiService.preprocess(imageBytes: bytes, roi: roi);
+      final result = await ImageApiService.preprocess(imageBytes: bytes);
 
       // REQ-003I-4: 품질 점수 40점 미만 시 재촬영 요구
       // ⚠️ 백엔드가 quality_score를 아직 안 주면(null) 이 체크를 건너뜁니다.
@@ -138,21 +129,6 @@ class _ImageCaptureScreenState extends State<ImageCaptureScreen> {
       b.length >= 8 &&
       b[0] == 0x89 && b[1] == 0x50 && b[2] == 0x4E && b[3] == 0x47 &&
       b[4] == 0x0D && b[5] == 0x0A && b[6] == 0x1A && b[7] == 0x0A;
-
-  /// SFR-003I Inputs [1안]: 촬영한 전체 이미지를 ROI로 지정하기 위해 원본 픽셀 크기를 구한다.
-  /// 디코딩 실패 시 null(ROI 생략).
-  Future<ImageRoi?> _fullImageRoi(List<int> bytes) async {
-    try {
-      final codec = await ui.instantiateImageCodec(Uint8List.fromList(bytes));
-      final frame = await codec.getNextFrame();
-      final image = frame.image;
-      final roi = ImageRoi(x: 0, y: 0, width: image.width, height: image.height);
-      image.dispose();
-      return roi;
-    } catch (_) {
-      return null;
-    }
-  }
 
   @override
   void dispose() {
