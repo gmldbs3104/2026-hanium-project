@@ -1,0 +1,56 @@
+name: frontend
+description: "2026 한이음 - AI 손글씨 교정 플랫폼 (Flutter 프론트엔드)"
+publish_to: "none"
+version: 0.1.0
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # 상태관리
+  flutter_riverpod: ^2.5.1
+
+  # 라우팅
+  go_router: ^14.2.0
+
+  # 네트워킹
+  http: ^1.2.1
+
+  # 카메라 (이미지 모드)
+  camera: ^0.10.5+9
+
+  # 고유 ID 생성 (stroke_id, session_id 등)
+  uuid: ^4.4.0
+
+  # 아이콘
+  cupertino_icons: ^1.0.6
+
+  # ---- 로그인 연동 (SFR-001, Firebase 기반 - backend/app/core/firebase.py 참고) ----
+  # docs/01_login_oauth_api_spec.md 참고
+  # 실제 기기에서 로그인 테스트 시 `flutterfire configure` 로 firebase_options.dart 생성 필요
+  firebase_core: ^3.0.0
+  firebase_auth: ^5.0.0
+  google_sign_in: ^6.2.0
+  # SFR-002 Side Effect: 모드 선택 등 이벤트 로깅 (mock 모드에서는 debugPrint로 대체)
+  firebase_analytics: ^11.0.0
+  # Kakao 로그인 실제 연동 시 주석 해제 (auth_controller.dart의 TODO 참고 —
+  # 백엔드에 Kakao → Firebase Custom Token 발급 엔드포인트 추가가 선행되어야 함)
+  # kakao_flutter_sdk_user: ^1.9.0
+
+  # ---- 학습 데이터 저장 (SFR-009) ----
+  # 오프라인 재시도 큐(REQ-009-5)를 로컬에 영속화하기 위해 사용
+  shared_preferences: ^2.2.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+
+  # assets:
+  #   - assets/images/
