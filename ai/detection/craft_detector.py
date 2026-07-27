@@ -25,19 +25,15 @@ angle 산출 방식 (2026-07-19 교체)
     reliable한 글자만 모아 문서 단위 기울기를 평가한다.
 """
 import logging
-import os
 import threading
 import cv2
 import numpy as np
 from typing import List, Dict, Tuple, Optional
 
 from craft_text_detector import Craft
+from craft_text_detector.predict import get_prediction
 
 logger = logging.getLogger(__name__)
-
-_FINETUNED_WEIGHT = os.path.join(
-    os.path.dirname(__file__), "..", "models", "craft_finetuned_raw.pth"
-)
 
 # ── 자소→음절 병합 파라미터 (DETECTION_IMPROVEMENT_PLAN.md 3단계) ────────────
 # 기준 높이(ref_h)는 행(row) 단위로 추정: 박스가 자소 파편뿐이어도(소형 밀집
@@ -618,64 +614,23 @@ class CraftDetector:
         # 묶는" 신호라서 글자 단위 분리가 목표인 이 프로젝트에서는 켜두면
         # 인접 음절이 한 박스로 병합된다 (평가 근거: DETECTION_IMPROVEMENT_PLAN.md
         # 2단계 — 평균 F1@0.3 0.378→0.574, 폰트 텍스트 25/25 정확 일치).
-        weight_path = os.path.normpath(_FINETUNED_WEIGHT)
-        craft_weight = weight_path if os.path.exists(weight_path) else None
-        if craft_weight is None:
-            logger.warning(
-                "파인튜닝 가중치를 찾을 수 없습니다: %s — 기본 pretrained 가중치로 폴백합니다.",
-                weight_path,
-            )
-
-        self._craft = self._load_craft(
-            craft_weight, text_threshold, link_threshold, low_text, cuda, long_size,
+        # pretrained CRAFT 로드 (파인튜닝은 롤백됨 — 추후 상황 보고 재개).
+        self._craft = Craft(
+            output_dir=None,
+            rectify=True,
+            export_extra=False,
+            text_threshold=text_threshold,
+            link_threshold=link_threshold,
+            low_text=low_text,
+            cuda=cuda,
+            long_size=long_size,
+            refiner=False,
+            crop_type="box",
+            weight_path_craft_net=None,
         )
         self._use_dist = use_dist_transform
         self._adaptive_scale = adaptive_scale
         self._base_long_size = long_size
-
-    @staticmethod
-    def _load_craft(craft_weight, text_threshold, link_threshold, low_text, cuda, long_size) -> Craft:
-        """
-        지정된 가중치로 Craft를 생성한다. 체크포인트가 현재 CraftNet 구조와
-        호환되지 않는 경우(state_dict 키 불일치 등) 조용히 죽는 대신 pretrained로
-        폴백한다 — 학습/추론 아키텍처가 어긋난 옛 체크포인트가 남아 있어도
-        서비스 자체는 항상 뜨도록 하기 위함.
-        """
-        try:
-            return Craft(
-                output_dir=None,
-                rectify=True,
-                export_extra=False,
-                text_threshold=text_threshold,
-                link_threshold=link_threshold,
-                low_text=low_text,
-                cuda=cuda,
-                long_size=long_size,
-                refiner=False,
-                crop_type="box",
-                weight_path_craft_net=craft_weight,
-            )
-        except Exception:
-            if craft_weight is None:
-                raise
-            logger.exception(
-                "파인튜닝 가중치 로드 실패(%s) — 현재 CraftNet 구조와 호환되지 않는 "
-                "체크포인트일 수 있습니다. pretrained 가중치로 폴백합니다.",
-                craft_weight,
-            )
-            return Craft(
-                output_dir=None,
-                rectify=True,
-                export_extra=False,
-                text_threshold=text_threshold,
-                link_threshold=link_threshold,
-                low_text=low_text,
-                cuda=cuda,
-                long_size=long_size,
-                refiner=False,
-                crop_type="box",
-                weight_path_craft_net=None,
-            )
 
     # ------------------------------------------------------------------ #
     # 공개 API
@@ -750,7 +705,15 @@ class CraftDetector:
             rgb = cv2.cvtColor(dist_norm, cv2.COLOR_GRAY2RGB)
         else:
             rgb = cv2.cvtColor(cv2.bitwise_not(binary), cv2.COLOR_GRAY2RGB)
-        return self._craft.detect_text(rgb)
+        # poly=False: crop_type="box"라 폴리곤은 쓰지 않는데, 기본 poly=True는 가변 길이
+        # 폴리곤을 만들어 adjustResultCoordinates의 np.array(polys)가 터진다(풀해상도·고
+        # long_size에서 재현). 박스 결과는 poly 값과 무관하게 동일하다.
+        c = self._craft
+        return get_prediction(
+            image=rgb, craft_net=c.craft_net, refine_net=c.refine_net,
+            text_threshold=c.text_threshold, link_threshold=c.link_threshold,
+            low_text=c.low_text, cuda=c.cuda, long_size=c.long_size, poly=False,
+        )
 
     def _process_boxes(self, pred: dict, binary: np.ndarray) -> List[Dict]:
         """CRAFT boxes → tight bbox + angle + confidence."""

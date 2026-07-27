@@ -13,7 +13,9 @@ import base64
 import pytest
 
 from preprocessing import ImagePreprocessor, QualityScorer
-from preprocessing.image_preprocessor import OUTPUT_MIN_SIDE, OUTPUT_MAX_SIDE
+from preprocessing.image_preprocessor import (
+    OUTPUT_MIN_SIDE, EXTREME_ASPECT_RATIO, RETAKE_EXTREME_ASPECT,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -26,17 +28,17 @@ def _deterministic_seed():
 
 def assert_valid_output_size(result, orig_w, orig_h):
     """
-    현재 SFR-003I 구현 스펙: 비율 유지 리사이즈, 장축이 OUTPUT_MIN_SIDE~OUTPUT_MAX_SIDE.
-    (초기 스펙이던 '1280×960 고정'은 CRAFT 탐지 정확도를 위해 비율 유지 방식으로
-    변경됨 — IMPLEMENTATION_HISTORY.md 참고. 원본 장축이 범위 안이면 그대로 유지.)
+    현행 구현 스펙(A 방향): 다운스케일 없이 원본 해상도 유지. 장축이 OUTPUT_MIN_SIDE보다
+    작은 아주 작은 입력만 업스케일하므로, 출력 장축은 항상 OUTPUT_MIN_SIDE 이상이다.
+    (상한 없음 — 손글씨 충실도를 위해 원본을 그대로 둔다.)
 
     deskew 회전이 적용된 경우(skew_angle ≥ 0.5°) 캔버스가 확장되어 종횡비가
     정당하게 달라지므로, 종횡비 검사는 회전이 없을 때만 수행한다.
     """
     out_h, out_w = result.binary_image.shape
     long_side = max(out_h, out_w)
-    assert OUTPUT_MIN_SIDE <= long_side <= OUTPUT_MAX_SIDE, \
-        f"장축 {long_side}px가 {OUTPUT_MIN_SIDE}~{OUTPUT_MAX_SIDE} 범위를 벗어남"
+    assert long_side >= OUTPUT_MIN_SIDE, \
+        f"장축 {long_side}px가 최소 {OUTPUT_MIN_SIDE}px 미만"
     if abs(result.skew_angle) < 0.5:
         orig_ratio = orig_w / orig_h
         out_ratio = out_w / out_h
@@ -69,6 +71,23 @@ def make_handwriting_image(width=800, height=600, skew_deg=5.0) -> np.ndarray:
     return img
 
 
+def make_bleed_through_image(width=800, height=600) -> np.ndarray:
+    """
+    뒷장 잉크 비침(bleed-through)이 있는 종이를 모사한다.
+    위쪽 절반 = 진짜 글씨(배경보다 훨씬 어두움), 아래쪽 절반 = 비침(배경보다 22만 어두움).
+    사람 눈에는 아래쪽이 흐릿한 회색으로 보여 글씨와 구분되지만, adaptiveThreshold는
+    국소 대비만 보므로 둘을 똑같이 새까만 획으로 만든다.
+    """
+    img = np.full((height, width), 200, dtype=np.uint8)      # 종이
+    for x in range(60, width - 60, 60):
+        cv2.line(img, (x, 140), (x + 36, 140), 40, 4)        # 진짜 획 (가로)
+        cv2.line(img, (x + 18, 120), (x + 18, 180), 40, 4)   # 진짜 획 (세로)
+    for x in range(60, width - 60, 60):
+        cv2.line(img, (x, 420), (x + 36, 420), 178, 4)       # 비침 (가로)
+        cv2.line(img, (x + 18, 400), (x + 18, 460), 178, 4)  # 비침 (세로)
+    return img
+
+
 def image_to_bgr(gray: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
@@ -97,34 +116,93 @@ def test_pipeline_runs_without_error():
 
 
 def test_output_resolution():
-    """출력 해상도: 비율 유지, 장축 800~1280px 범위. (현행 SFR-003I 구현 스펙)"""
+    """출력 해상도(A 방향): 다운스케일 없음, 장축 OUTPUT_MIN_SIDE 이상, 비율 유지."""
     preprocessor = ImagePreprocessor()
 
-    # 업스케일(작은 원본) / 다운스케일(큰 원본) / 범위 내 유지 케이스
+    # 업스케일(작은 원본) / 큰 원본은 그대로 유지 케이스
     for (w, h) in [(640, 480), (1920, 1080), (400, 300), (1000, 750)]:
         bgr = np.random.randint(0, 255, (h, w, 3), dtype=np.uint8)
         _, encoded = cv2.imencode(".jpg", bgr)
         result = preprocessor.preprocess_from_bytes(encoded.tobytes())
         assert_valid_output_size(result, w, h)
 
-    print(f"  [PASS] 출력 해상도 스펙(비율 유지, 장축 {OUTPUT_MIN_SIDE}~{OUTPUT_MAX_SIDE}px) 확인")
+    print(f"  [PASS] 출력 해상도 스펙(다운스케일 없음, 장축 ≥{OUTPUT_MIN_SIDE}px) 확인")
 
 
 def test_apply_resize_false_skips_resize_step():
-    """apply_resize=False면 Step6 리사이즈를 건너뛴다 (3.1 측정용 토글).
-    장축이 OUTPUT_MAX_SIDE를 넘는 큰 이미지로, on은 축소되고 off는 유지됨을 확인."""
+    """apply_resize=False면 Step7 리사이즈(업스케일)를 건너뛴다.
+    작은 이미지(장축<OUTPUT_MIN_SIDE)로, on은 업스케일되고 off는 원본을 유지함을 확인.
+    (A 방향: 다운스케일은 on/off 어느 경우에도 하지 않는다.)"""
     preprocessor = ImagePreprocessor()
-    big = np.random.randint(0, 255, (900, 2000, 3), dtype=np.uint8)
-    _, enc = cv2.imencode(".png", big)
+    small = np.random.randint(0, 255, (300, 400, 3), dtype=np.uint8)  # 장축 400 < MIN
+    _, enc = cv2.imencode(".png", small)
     raw = enc.tobytes()
 
-    on = preprocessor.preprocess_from_bytes(raw)                    # 기본: 리사이즈 적용
+    on = preprocessor.preprocess_from_bytes(raw)                    # 기본: 업스케일 적용
     off = preprocessor.preprocess_from_bytes(raw, apply_resize=False)
 
-    assert max(on.binary_image.shape) <= OUTPUT_MAX_SIDE
-    assert max(off.binary_image.shape) > OUTPUT_MAX_SIDE            # 리사이즈 안 됨
+    assert max(on.binary_image.shape) >= OUTPUT_MIN_SIDE           # 업스케일됨
+    assert max(off.binary_image.shape) < OUTPUT_MIN_SIDE           # 원본 유지(업스케일 안 함)
     assert not any("resize" in f for f in off.applied_filters)
     print(f"  [PASS] apply_resize 토글: on={on.binary_image.shape} off={off.binary_image.shape}")
+
+
+def test_bleed_through_is_not_promoted_to_ink():
+    """뒷장 잉크 비침은 획으로 승격되면 안 된다.
+
+    adaptiveThreshold에는 절대 밝기 조건이 없어(주변 평균보다 C=5만 어두우면 획),
+    배경과 거의 같은 밝기인 비침도 진짜 획과 동일한 255가 된다. 이진화는 밝기 정보를
+    되돌릴 수 없게 버리므로 이후 단계에서 복구가 불가능하다 — 그 결과 CRAFT가
+    글자 수만큼의 유령 덩어리를 함께 탐지한다(홀드아웃 test8~10·test_line에서 관측,
+    유령/진짜 blob 비율 0.87~1.13 vs 기존 평가셋 7장 0.00~0.20).
+    """
+    preprocessor = ImagePreprocessor()
+    gray = make_bleed_through_image()
+    _, encoded = cv2.imencode(".png", image_to_bgr(gray))
+    result = preprocessor.preprocess_from_bytes(encoded.tobytes())
+
+    binary = result.binary_image
+    half = binary.shape[0] // 2
+    real_ink = int((binary[:half] > 127).sum())
+    ghost_ink = int((binary[half:] > 127).sum())
+
+    assert real_ink > 0, "진짜 획까지 사라졌다"
+    assert ghost_ink < real_ink * 0.1, \
+        f"비침이 획으로 승격됨: 진짜 {real_ink}px vs 비침 {ghost_ink}px"
+    print(f"  [PASS] 비침 억제 확인 (진짜 {real_ink}px / 비침 {ghost_ink}px)")
+
+
+def test_extreme_aspect_ratio_triggers_retake():
+    """극단적으로 긴 종횡비(초광각·비스듬 촬영)는 재촬영을 요구해야 한다.
+
+    장축을 표준 크기로 맞추면 단축이 뭉개져 글자가 붕괴한다(실측: test9 4.99:1,
+    test10 4.04:1). 전처리로 복구 불가능한 촬영 문제이므로 재촬영으로 처리한다.
+    임계값(EXTREME_ASPECT_RATIO=3.0)은 test9·10만 걸러내고 정상 표본(test3_crop
+    2.23:1, test_line2 1.96:1)은 통과시킨다.
+    """
+    preprocessor = ImagePreprocessor()
+    wide = make_handwriting_image(width=3000, height=600, skew_deg=0.0)  # ar=5.0
+    _, encoded = cv2.imencode(".jpg", image_to_bgr(wide))
+    result = preprocessor.preprocess_from_bytes(encoded.tobytes())
+
+    assert max(3000, 600) / min(3000, 600) > EXTREME_ASPECT_RATIO
+    assert result.retake_required, "극단 종횡비인데 재촬영이 요구되지 않았다"
+    assert not result.is_acceptable()
+    assert RETAKE_EXTREME_ASPECT in result.retake_reason, \
+        f"종횡비 재촬영 사유가 없다: {result.retake_reason!r}"
+    print(f"  [PASS] 극단 종횡비 재촬영 확인: {result.retake_reason}")
+
+
+def test_normal_aspect_ratio_not_flagged_for_aspect():
+    """정상 종횡비 이미지는 종횡비 사유로 재촬영되지 않아야 한다."""
+    preprocessor = ImagePreprocessor()
+    normal = make_handwriting_image(width=1200, height=900, skew_deg=0.0)  # ar=1.33
+    _, encoded = cv2.imencode(".jpg", image_to_bgr(normal))
+    result = preprocessor.preprocess_from_bytes(encoded.tobytes())
+
+    assert RETAKE_EXTREME_ASPECT not in result.retake_reason, \
+        f"정상 종횡비인데 종횡비 재촬영이 걸렸다: {result.retake_reason!r}"
+    print(f"  [PASS] 정상 종횡비 통과 확인")
 
 
 def test_quality_score_range():

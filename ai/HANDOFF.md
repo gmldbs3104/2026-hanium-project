@@ -1,14 +1,19 @@
 # AI 모듈 인수인계 문서 (HANDOFF)
 
 > 2026 한이음 드림업 — AI 손글씨 교정 플랫폼
-> 최종 갱신: 2026-07-21 (문서 구조 재편 — 남은 일은 `STATUS.md`, 개발 서사는 `DEVLOG.md`)
+> 최종 갱신: 2026-07-24 (문서 체계 정리 — 남은 일은 `STATUS.md`, 개발 서사는 `DEVLOG.md`)
 > **이 문서는 새로운 세션(계정 변경 등으로 이전 대화 기록이 없는 상태)이 처음 열었을 때
 > 가장 먼저 읽어야 할 문서입니다.** 아래 순서대로 읽으면 지금까지의 판단 근거와 현재
 > 상태를 처음부터 다시 조사하지 않고도 파악할 수 있습니다.
 
-## ⚡ 최신 현황 요약 (2026-07-18 ~ 07-19)
+## ⚡ 현황 요약 (2026-07-18 ~ 07-19)
 
 상세 경위는 `archive/DETECTION_IMPROVEMENT_PLAN.md` 11~17단계 진행 기록 참고. 핵심만:
+> ⚠️ 아래 1번의 수치(4장 197음절 / F1@0.3 0.968)는 이 시점 기준입니다. 7장 확장은 아래
+> 2026-07-23 항목(7장 537음절 / 0.938)을 보세요.
+> ⚠️ **2026-07-27 전처리를 측지 재구성으로 재작성**(아래 07-27 항목 / `DEVLOG.md` 11막)하면서
+> 전처리 좌표계가 바뀌어 **위 F1 수치들은 옛(adaptiveThreshold) 파이프라인 값**입니다. 새 파이프라인
+> F1은 GT 재라벨(T5) 후 재측정 예정 — 현재 미측정(`STATUS.md` §1).
 
 1. **탐지 정확도** — 손글씨 공식 평가셋 4장(test/test2/test3_crop/test6, 수동 GT
    197음절, 2차 검수 완료): **평균 F1@0.3 0.968 / F1@0.5 0.946**. 평가 실행:
@@ -56,9 +61,9 @@
 - ⚠️ **현재 CRAFT는 pretrained**(이 sparse clone엔 `models/*.pth` 없음 → 무조건 pretrained 폴백).
   파인튜닝은 여전히 미배포.
 
-### 2026-07-23 — 평가셋 확장: test4·5·7 독립 GT 라벨링 완료 (상세: `DEVLOG.md` 9막)
+### 2026-07-23 — 평가셋 확장 + 라벨링 GUI + 평가 지표 강화 (상세: `DEVLOG.md` 9막 / 커밋 `d6faa53`)
 
-1. 평가셋 **4장(197음절) → 7장(536음절)**: test4(238)·test5(39)·test7(62) 수동 라벨링.
+1. 평가셋 **4장(197음절) → 7장(537음절)**: test4(239)·test5(39)·test7(62) 수동 라벨링.
    탐지기 미사용 **독립 라벨**(blob 그룹핑). 문장부호 제외, 영문(TEST)은 글자별 1박스.
 2. `eval/label_helper.py`에 **blob 분할 기능** 추가(`"splits"`: x/y/격자 절단) — 흘림에서
    음절 경계를 넘는 blob을 잉크 픽셀 tight bbox로 나눔. 기존 groups 형식 하위 호환.
@@ -66,12 +71,53 @@
    기준으로 재조정(경위·교훈은 `DEVLOG.md` 9막).
 4. 확장 7장 평균 **F1@0.3 0.938 / F1@0.5 0.894** (기존 4장만은 0.968 — 흘림 포함으로
    상방 편향 축소가 목적이므로 하락은 의도된 것). 흘림 개별 0.87~0.93, 과병합 경향.
+5. **브라우저 라벨링 GUI** `eval/label_gui.py`(+`label_gui_template.html`) — 사람이 클릭으로
+   blob을 음절로 묶고 분할선을 그으면 `groups.json` 생성 → 기존 `label_helper.py build`가 소비.
+   **AI가 이미지를 판독하지 않아 토큰을 거의 안 쓰고** 흘림도 정확. 앞으로 GT는 이 경로로 만든다.
+   절차·관례는 `.claude/skills/gt-labeling/SKILL.md`(skill).
+6. **merge/split 분리 측정**(`evaluate_detection.py`의 `count_merge_split`) — F1·count_ratio가
+   상쇄로 숨기던 오류 구성이 보인다(test4 병합 43/분할 5, test3_crop은 ratio 0.95인데 병합 14/분할 9).
+7. **순환성 편향 측정** — test3_crop을 독립 재라벨링해 기존 GT와 비교: 상호 평균 IoU **0.992**,
+   탐지 F1 차이 ≤0.007 → **편향 사실상 0**. 기존 4장 재작업 불필요, 7장 통합 평균 그대로 사용 확정.
+- ⚠️ **아직 안 한 것**: 이 7장이 개발셋=테스트셋이라 **후처리 과최적화가 미측정**이다. 미라벨 홀드아웃
+  후보(`test_images/test8~10.jpg`, `test_line1~3.jpg`)는 확보돼 있음 → `STATUS.md` §1.
+
+### 2026-07-24 — 문서 체계 정리 (코드 변경 없음, 상세: `DEVLOG.md` 10막)
+
+1. **다음 할 일 확정** — 미착수 3건 중 **후처리 과최적화 측정(A)을 최우선**으로 결정.
+   저비용·AI 파트 단독 가능이고, 결과가 어느 쪽이든 백엔드 통합(B)보다 앞선다. → `STATUS.md` §5.
+2. **문서 작성 규칙 신설** — `ai/CLAUDE.md` 추가. **정리 요청에 새 `.md`를 만들지 말고 기존 문서에
+   성격별로 배분·최신화**할 것, **시간순 배치**, **DEVLOG에는 문답도 기록**. 세션 단위 파일
+   (`SESSION_*.md`) 금지. 이에 따라 `SESSION_2026-07-23.md`를 해체해 DEVLOG·STATUS·HANDOFF로 배분.
+3. **수치 정정** — `eval/gt/*.json` 실측 기준 **test4=239, 합계 537음절**. 여러 문서에 2차 검수 전
+   숫자(238/536)가 남아 있던 것을 통일. 문서 수치는 문서에서 베끼지 말고 원 데이터에서 확인할 것.
+4. **누락 보완** — 파일 지도에 `eval/`·`.claude/skills/` 추가, `test_images/`를 라벨링/미라벨로 구분.
+
+### 2026-07-27 — 이미지 전처리 개편 실행 (상세: `DEVLOG.md` 11막 / `IMAGE_PIPELINE_REBUILD_PLAN.md`)
+
+`IMAGE_PIPELINE_REBUILD_PLAN.md`(07-24)의 T1·T2를 반영하고, 리사이즈·게이트 정책을 A/B/C 실측으로 확정.
+
+1. **전처리 재작성(T1)** — adaptiveThreshold → **채널 max 그레이 + 조명 정규화(division) + 측지 재구성**.
+   비침·괘선을 진짜 획으로 승격하던 문제를 원천 제거. 공개 API·`PreprocessResult` 계약 유지.
+2. **🐛 close 버그(11막 핵심)** — 마무리 close가 배경을 닫아 가는 획을 **43% 깎아 끊던** 것을,
+   잉크 전경을 닫도록 수정(`255-CLOSE(255-fg,2×2)`). data/ 재현율 0.38→0.99로 폭등.
+3. **리사이즈 = A방향(풀해상도)** — A/B/C 실측 결과 close 고친 뒤 A≈C 동률 + A가 원본 충실 → **다운스케일
+   제거**(장축<800만 업스케일). ⚠️ 8막 "리사이즈 유지가 정답"은 close 버그로 인한 오판이었음이 드러나 정정됨.
+4. **보존율 게이트 = coverage 방식** — percentile→coverage((1) 방식). 연한 획 복구(04399 "세계적으로"),
+   비침 이미지엔 recon 유지(비침 안전).
+5. **탐지 크래시(T2)** — 풀해상도 `poly=True` 폴리곤 크래시를 `get_prediction(poly=False)`로 해결.
+6. **검증** — 단위 테스트 32개 통과(비침 억제 포함), 프로덕션 경로 풀해상도 탐지 크래시 없음(재현율 0.99대).
+   시각 근거는 `hanium_out/05~10`(작업자 로컬, 리포 외).
+- ⚠️ **남은 것**: T4(분석기 문장기울기 재작성) · T5(GT 재라벨 — 좌표계 변경) · T7(새 GT로 F1 재측정) 미착수.
+  현재 새 파이프라인 F1은 미측정. → `STATUS.md` §1.
 
 ---
 
 ## 0. 문서 읽는 순서
 
 **살아있는 참조 (자주 읽음 — ai/ 최상위):**
+0. **`CLAUDE.md`** — 문서 작성 규칙. **정리·기록 요청에 새 파일을 만들지 말고 기존 문서에 배분**할 것.
+   어떤 내용이 어느 문서로 가는지 표가 있음.
 1. **이 문서(`HANDOFF.md`)** — 전체 지도. 무엇이 어디 있는지, 뭐가 되고 뭐가 안 되는지 요약.
 2. **`STATUS.md`** — 현재 상태·남은 일·미결·팀논의의 **단일 출처**. "지금 뭐 하면 되나"는 여기.
 3. `IMPLEMENTATION_PLAN.md` — 설계 결정 + 구현 계획(배경).
@@ -119,6 +165,7 @@ AI 모듈은 백엔드와 **3개의 함수 계약**으로만 연결됩니다(`AI
 
 ```
 ai/
+├── CLAUDE.md                         ← 문서 작성 규칙 (새 파일 금지 · 내용별 배분표)
 ├── HANDOFF.md                        ← 지금 읽고 있는 문서 (전체 지도)
 ├── STATUS.md                         ← 현재 상태·남은 일·미결 (단일 출처, 트래커)
 ├── DEVLOG.md                         ← 개발일지/TIL/트러블슈팅 (회고·복기용)
@@ -136,6 +183,19 @@ ai/
 ├── report/                           ← 외부 제출용
 │   ├── PROJECT_REPORT_AI.md              ← 한이음 보고서 양식용 (이미지 모드만)
 │   └── KEY_CODE_SUMMARY.md               ← PPT용 압축 요약
+│
+├── .claude/skills/
+│   └── gt-labeling/SKILL.md          ← GT 라벨링 절차·관례 (`/gt-labeling`으로 호출)
+│
+├── eval/                             ← 탐지 정확도 평가 · GT 제작 도구
+│   ├── evaluate_detection.py         ← F1@0.3/0.5 + count_ratio + merge/split 분리 측정
+│   ├── label_gui.py                  ← **브라우저 라벨링 GUI 생성** (사람이 클릭으로 음절 묶기/분할)
+│   ├── label_gui_template.html       ← 위 GUI의 HTML 템플릿
+│   ├── label_helper.py               ← blob 추출 + groups.json → GT 빌드 (`"splits"` 분할 지원)
+│   ├── measure_latency.py            ← 레이턴시 실측 (500ms 목표 대비)
+│   ├── measure_resize.py             ← 전처리 리사이즈 on/off 실측 (→ 현행 유지 확정)
+│   ├── gt/                           ← **정답지 7장 537음절** (test·test2·test3_crop·test4~7)
+│   └── gt_work/                      ← 라벨링 작업물 (groups.json, 생성된 label.html)
 │
 ├── preprocessing/
 │   └── image_preprocessor.py         ← SFR-003I, 완성. 이진화/deskew/품질검사
@@ -168,7 +228,8 @@ ai/
 │   └── craft_ep007_wrapped.pth.bak     ← 더 이전 파인튜닝 결과물 (참고용 보관)
 │   (craft_finetuned_raw.pth가 없으면 craft_detector.py가 자동으로 pretrained 가중치 사용)
 │
-├── test_images/                      ← test.jpg ~ test7.jpg, 수동 검증용 샘플
+├── test_images/                      ← test~test7: **라벨링됨(평가셋 7장)**
+│                                        test8~10 · test_line1~3(줄노트): **미라벨 = 홀드아웃 후보**
 ├── debug_craft.py                    ← CRAFT 탐지 결과 시각화
 ├── debug_gt.py                       ← GT score map 시각화 + 체크포인트 collapse 진단
 ├── debug_analysis.py                 ← SFR-005I 판단 모듈 검증
@@ -333,8 +394,10 @@ SFR-004C(획 그룹핑) → SFR-005C(획순/자간/크기 분석) 흐름입니�
      어댑터의 AI 전처리로 교체할지, `image_analysis.py`(자체 SFR-005I 구현)를
      `analyze_size_angle`로 교체할지. **탐지 정확도 평가(F1@0.3=0.960)는 전부 AI 전처리
      전제이므로 Otsu 입력과 섞으면 성능 보장 안 됨.**
-  3. **좌표계 논의**: AI 전처리는 deskew+리사이즈를 하므로 bbox가 "전처리 후" 좌표계 —
-     원본 사진 오버레이(SFR-007)를 위해 역변환 또는 전처리 이미지 기준 오버레이 필요.
+  3. **좌표계 계약**: AI 전처리는 deskew+리사이즈를 하므로 bbox는 **"전처리 후" 좌표계**다.
+     오버레이(SFR-007)는 **전처리 이미지 위에 그리는 것으로 확정**(역변환 불필요,
+     `IMPLEMENTATION_PLAN.md` §3.1). ⚠️ 프론트가 **원본 사진 위에 그리면 전부 어긋난다** —
+     통합 첫날 터지는 종류의 버그이므로 프론트와 명시적으로 합의할 것. 위험 정리는 `STATUS.md` §3.
   4. **의존성**: 백엔드 requirements.txt에 torch/craft_text_detector 추가 필요
      (canvas 경로는 torch 없이 동작하도록 lazy import 처리돼 있음).
 - **캔버스 모드 2단계(실사용자 데이터 fine-tuning)** — 데이터 수집 방법은
