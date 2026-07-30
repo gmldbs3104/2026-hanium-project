@@ -30,12 +30,11 @@ def _row_chars(n=6, base_h=100):
 # ── W1: 교육적 가중 (3:2:1), clarity 제외 ──────────────────────────────
 def test_weighted_total_applies_3_2_1_weights_and_excludes_clarity():
     metrics = {
-        "height_uniformity":       {"score": 90.0},  # w=3
-        "tilt_consistency":        {"score": 60.0},  # w=2
-        "stroke_width_uniformity": {"score": 30.0},  # w=1
-        "clarity":                 {"score": 0.0},   # 제외돼야 함
+        "height_uniformity": {"score": 90.0},  # w=3
+        "tilt_consistency":  {"score": 40.0},  # w=2 (문장 기울기)
+        "clarity":           {"score": 0.0},   # 제외돼야 함
     }
-    # (90*3 + 60*2 + 30*1) / (3+2+1) = 420/6 = 70.0
+    # (90*3 + 40*2) / (3+2) = 350/5 = 70.0
     assert _weighted_total(metrics) == 70.0
 
 
@@ -55,7 +54,7 @@ def test_weights_are_3_2_1_alignment_uniformity_first():
     assert WEIGHTS["line_spacing_uniformity"] == 3
     assert WEIGHTS["tilt_consistency"] == 2
     assert WEIGHTS["spacing_uniformity"] == 2
-    assert WEIGHTS["stroke_width_uniformity"] == 1
+    assert "stroke_width_uniformity" not in WEIGHTS   # 2026-07-27 T4에서 제거
     assert "clarity" not in WEIGHTS
 
 

@@ -1,7 +1,7 @@
 """SFR-005I 절대 규범 축 (1.3, 2026-07-20 결정 / 3.3 문헌 조사) 단위 테스트.
 
 norm_deviations: 자기 일관성(종합점수)과 **별개의 절대 규범 축**.
-  ① 기울기 — 세로획 수직(0°) 이탈       (TILT_NORM_DEG)
+  ① 기울기 — 문장(행) 수평(0°) 이탈      (TILT_NORM_DEG, 2026-07-27 T4)
   ② 자간   — 띄어쓰기(어간) 뭉개짐        (이봉 분포 붕괴 = 넓은 gap 소실)
   ③ 행간   — 줄 겹침 (baseline 간격 / 글자 높이 < LINE_NORM_MIN_RATIO)
 규범 이탈은 **경고만** — 종합점수(total_score)에 반영되지 않는다.
@@ -19,21 +19,23 @@ def _row(y, n, step=95.0):
 
 
 def _grid(rows_spec, angle=2.0, h=100.0, w=60.0, x0=50.0,
-          conf=0.9, reliable=True):
+          conf=0.9, reliable=True, dy=0.0):
     """rows_spec: [(row_top_y, [x_steps]), ...]. 각 행 글자수 = len(steps)+1.
 
     글자는 명료도 게이트에 걸리지 않게 충분히 큼(h=100 ≥ CLARITY_MIN_H),
     폭이 좁아 병합 의심 아님, confidence 높음.
+    dy>0이면 행 내에서 글자마다 y를 dy씩 내려 줄을 기울인다(문장 기울기 유발).
     """
     chars = []
     k = 0
     for (y, steps) in rows_spec:
         x = x0
+        yy = float(y)
         n = len(steps) + 1
         for c in range(n):
             chars.append({
                 "char_id": f"c{k}",
-                "bounding_box": {"x": x, "y": float(y),
+                "bounding_box": {"x": x, "y": yy,
                                  "width": w, "height": h},
                 "angle": float(angle), "angle_reliable": reliable,
                 "confidence": conf,
@@ -41,26 +43,28 @@ def _grid(rows_spec, angle=2.0, h=100.0, w=60.0, x0=50.0,
             k += 1
             if c < n - 1:
                 x += steps[c]
+                yy += dy
     return chars
 
 
-# ── ① 기울기 규범 (세로획 수직 이탈) ──────────────────────────────────
-def test_tilt_norm_violated_when_mean_angle_exceeds_threshold():
-    chars = _grid([_row(80, 6)], angle=TILT_NORM_DEG + 2.0)   # 9°
+# ── ① 기울기 규범 (문장/행 수평 이탈, 2026-07-27 T4) ──────────────────
+def test_tilt_norm_violated_when_line_slopes():
+    # 4글자 행이 오른쪽 아래로 기욺: dy=15 / step=95 → atan(0.158)≈9° > TILT_NORM_DEG(7)
+    chars = _grid([_row(80, 4)], dy=15.0)
     nd = analyze_size_angle(chars)["norm_deviations"]
     assert nd["tilt"]["violated"] is True
     assert nd["tilt"]["value"] >= TILT_NORM_DEG
     assert nd["tilt"]["message"]
 
 
-def test_tilt_norm_ok_when_upright():
-    chars = _grid([_row(80, 6)], angle=2.0)
+def test_tilt_norm_ok_when_horizontal():
+    chars = _grid([_row(80, 4)], dy=0.0)   # 수평 행
     nd = analyze_size_angle(chars)["norm_deviations"]
     assert nd["tilt"]["violated"] is False
 
 
-def test_tilt_norm_skipped_when_too_few_reliable_chars():
-    chars = _grid([_row(80, 2)], angle=9.0)   # 신뢰 글자 2 < 3
+def test_tilt_norm_skipped_when_too_few_chars_for_line():
+    chars = _grid([_row(80, 2)], dy=15.0)   # 2글자 < 3 → 직선 적합 불가
     nd = analyze_size_angle(chars)["norm_deviations"]
     assert nd["tilt"]["violated"] is False
     assert nd["tilt"].get("evaluated") is False
@@ -113,14 +117,15 @@ def test_line_spacing_norm_ok_when_rows_well_separated():
 
 # ── 규범은 점수에 반영되지 않는다 (별도 축) ──────────────────────────
 def test_norm_deviations_do_not_affect_total_score():
-    # 기하 동일·σ=0 동일, 절대 기울기만 다름 → 종합점수는 같고 규범만 달라야 함
-    upright = _grid([_row(80, 6)], angle=2.0)   # |mean|=2 → 규범 정상
-    slanted = _grid([_row(80, 6)], angle=9.0)   # |mean|=9 → 기울기 규범 위반
-    r_up = analyze_size_angle(upright)
-    r_sl = analyze_size_angle(slanted)
-    assert r_up["total_score"] == r_sl["total_score"]
-    assert r_sl["norm_deviations"]["tilt"]["violated"] is True
-    assert r_up["norm_deviations"]["tilt"]["violated"] is False
+    # 행간만 다름(겹침 gap80 vs 정상 gap220). 둘 다 등간격이라 행간 CV 등 점수 지표는
+    # 동일 → 종합점수는 같고 '행간 규범(줄 겹침)'만 달라야 한다(규범=경고, 점수 미반영).
+    overlap = _grid([_row(80, 3), _row(160, 3), _row(240, 3)])   # gap 80 < h100 → 겹침
+    spaced  = _grid([_row(80, 3), _row(300, 3), _row(520, 3)])   # gap 220 → 정상
+    r_o = analyze_size_angle(overlap)
+    r_s = analyze_size_angle(spaced)
+    assert r_o["total_score"] == r_s["total_score"]
+    assert r_o["norm_deviations"]["line_spacing"]["violated"] is True
+    assert r_s["norm_deviations"]["line_spacing"]["violated"] is False
 
 
 def test_norm_deviations_present_with_three_axes_and_not_a_metric():

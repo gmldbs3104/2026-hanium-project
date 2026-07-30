@@ -2,26 +2,27 @@
 SFR-005I: 손글씨 평가 — handwriting_evaluation.md 지표 1~6 + 명료도
 
 입력: craft_detect_chars() 결과 (char_id, bounding_box, angle, angle_reliable,
-      confidence) + (선택) 전처리 binary 이미지 — 획 굵기 측정에만 사용
+      confidence). binary_image 인자는 계약 유지를 위해 남기나 현재 미사용
+      (2026-07-27 T4: 획 굵기 지표 제거로 이진 이미지 소비자 없음).
 출력: SizeAngleResult — per-char 분석 + 지표별 등급/점수 + 종합 점수 + 피드백
 
-평가 지표 (ai/handwriting_evaluation.md 기준, 2026-07-19 전면 구현)
+평가 지표 (ai/handwriting_evaluation.md 기준, 2026-07-27 T4 재편)
 ------------------------------------------------------------------
 1. 글자 높이 균일성   — 높이 CV        (<10% 우수 / 10~20 보통 / ≥20 불량)
-2. 기울기 일관성      — slant σ        (<3° 우수 / 3~7 보통 / ≥7 불량)
+2. 문장 기울기        — 행별 중심선 회귀 기울기의 |평균 각도|(수평 이탈) (<3° / 3~7 / ≥7)
 3. 자간 균등성        — 행 내 인접 박스 간격 CV (<15% / 15~30 / ≥30)
 4. 행간 균등성        — 행 기준선 간격 CV       (<10% / 10~20 / ≥20)
 5. 기준선 이탈도      — 행 회귀선 잔차 σ ÷ 평균 글자 높이 (<5% / 5~15 / ≥15)
-6. 획 굵기 균일성     — distance transform 릿지 폭 CV (<10% / 10~25 / ≥25)
-7. (제외 확정) 자소 내부 비율 — 이미지 모드 목적과 불일치
+(제거) 획 굵기 균일성 · 글자별 slant 일관성 — 2026-07-27 T4에서 제외(문장 기울기로 대체)
+(제외 확정) 자소 내부 비율 — 이미지 모드 목적과 불일치
 + 명료도(clarity)     — 탐지 이상(병합 의심 과폭·기울기 이상치·저신뢰) 글자 감점
 
 설계 노트
 --------
-- 기울기: craft_detect_chars()의 세로획 slant(angle, angle_reliable)를 재사용.
-  reliable 글자만 모아 중앙값 ±TILT_OUTLIER_DEG 밖 이상치를 제외(필자의 slant는
-  습관적으로 일정하다는 전제)한 뒤 문서 단위 평균·편차를 낸다. 개별 글자 지적
-  문구는 내지 않는다.
+- 문장 기울기(2026-07-27 T4): 개별 글자 slant가 아니라 **행별 글자 중심선의 회귀 기울기**
+  (전처리 이미지 좌표 그대로)로 "줄이 수평인가 / 올라가며·내려가며 쓰는가"를 본다. 수평(0°)
+  에서 벗어난 |평균 각도|로 점수화(수평 이탈 감점 — 사용자 결정). 개별 글자 지적 문구는 안 낸다.
+  (craft의 per-char angle은 char 출력 메타·명료도 이상치 판정에만 남기고 채점엔 미사용.)
 - 자간: 띄어쓰기 간격(행 중앙 높이 × WORD_GAP_RATIO 초과)은 제외하고 글자 사이
   간격만 CV 계산. 겹침(음수 간격)은 0으로 클립.
 - 명료도: 탐지가 제대로 안 된 글자는 흘림·잘못 이어 씀 등 "못 쓴 글자"로 보고
@@ -48,11 +49,10 @@ TILT_OUTLIER_DEG = 10.0   # 중앙값에서 이 이상 벗어난 측정값은 �
 #    (우수 상한, 보통 상한) — 값이 작을수록 좋다
 BANDS = {
     "height_uniformity":       (10.0, 20.0),   # CV %
-    "tilt_consistency":        (3.0, 7.0),     # σ °
+    "tilt_consistency":        (3.0, 7.0),     # 문장 기울기 |평균 각도| ° (수평 이탈)
     "spacing_uniformity":      (15.0, 30.0),   # CV %
     "line_spacing_uniformity": (10.0, 20.0),   # CV %
     "baseline_deviation":      (5.0, 15.0),    # 잔차σ/평균높이 %
-    "stroke_width_uniformity": (10.0, 25.0),   # CV %
 }
 
 # ── 자간/행간/명료도 파라미터 ─────────────────────────────────────────
@@ -97,7 +97,6 @@ WEIGHTS = {
     "line_spacing_uniformity": 3,
     "tilt_consistency":        2,
     "spacing_uniformity":      2,
-    "stroke_width_uniformity": 1,
 }
 
 
@@ -190,8 +189,8 @@ class SizeAngleAnalyzer:
         cv = float(np.std(heights) / np.mean(heights) * 100) if np.mean(heights) > 0 else 0.0
         metrics["height_uniformity"] = self._metric(cv, "height_uniformity", "%")
 
-        # ── 지표 2: 기울기 (이상치 조정 포함) ────────────────────────
-        tilt = self._tilt(chars, clear_ids)
+        # ── 지표 2: 문장 기울기 (행별 중심선 회귀 기울기, 수평 이탈) ──
+        tilt = self._sentence_tilt(rows, clear_ids)
         metrics["tilt_consistency"] = tilt["metric"]
 
         # ── 지표 3: 자간 ─────────────────────────────────────────────
@@ -200,9 +199,6 @@ class SizeAngleAnalyzer:
         # ── 지표 4·5: 행간 / 기준선(회귀선) ──────────────────────────
         baselines, metrics["baseline_deviation"] = self._baseline(rows, clear_ids)
         metrics["line_spacing_uniformity"] = self._line_spacing(baselines)
-
-        # ── 지표 6: 획 굵기 (binary 필요) ────────────────────────────
-        metrics["stroke_width_uniformity"] = self._stroke_width(binary_image)
 
         # ── 명료도: 경고만 (점수 미반영, 2026-07-20 결정) ────────────
         # clarity_flag는 위 지표들의 통계 오염 방지 게이트로만 쓰고, 종합점수엔
@@ -235,9 +231,6 @@ class SizeAngleAnalyzer:
         issues += self._issues_generic(
             metrics["baseline_deviation"], "글자들이 기준선에서 많이 벗어납니다",
             "기준선을 조금 더 맞춰 써보세요", "이탈도")
-        issues += self._issues_generic(
-            metrics["stroke_width_uniformity"], "획 굵기가 고르지 않습니다",
-            "획 굵기를 조금 더 일정하게 써보세요", "굵기 CV")
         # 규범 이탈 경고도 issues에 노출(자간·행간). 기울기 규범은 위 tilt issues와
         # 중복되므로 구조화된 norm_deviations에만 담는다.
         for axis in ("spacing", "line_spacing"):
@@ -327,33 +320,47 @@ class SizeAngleAnalyzer:
                     clarity_flag=clarity.get(c["char_id"], "clear"))
         return [out[c["char_id"]] for c in chars]
 
-    def _tilt(self, chars: List[Dict], clear_ids: set) -> Dict:
-        reliable = np.array(
-            [float(c.get("angle", 0.0)) for c in chars
-             if c.get("angle_reliable", True)], dtype=np.float32)
-        if len(reliable) < TILT_MIN_RELIABLE:
+    def _sentence_tilt(self, rows: List[List[Dict]], clear_ids: set) -> Dict:
+        """문장 기울기 — 행별 글자 중심선의 회귀 기울기(전처리 좌표 그대로).
+
+        개별 글자 slant가 아니라 "줄이 수평인가 / 올라가며·내려가며 쓰는가"(필기 습관)를
+        본다(2026-07-27 T4, deskew 이전이 아니라 전처리 이미지 좌표에서 측정 — 사용자 결정).
+        점수는 수평(0°)에서 벗어난 |평균 각도|로 매긴다(수평 이탈 감점 — 사용자 결정).
+        부호: 이미지 좌표는 y가 아래로 증가 → 양수=하강(내려감), 음수=상승(올라감).
+        """
+        angles = []
+        for row in rows:
+            pts = [(c["bounding_box"]["x"] + c["bounding_box"]["width"] / 2.0,
+                    c["bounding_box"]["y"] + c["bounding_box"]["height"] / 2.0)
+                   for c in row if c["char_id"] in clear_ids]
+            if len(pts) < 3:
+                pts = [(c["bounding_box"]["x"] + c["bounding_box"]["width"] / 2.0,
+                        c["bounding_box"]["y"] + c["bounding_box"]["height"] / 2.0)
+                       for c in row]
+            if len(pts) < 3:
+                continue
+            xs = np.array([p[0] for p in pts], dtype=np.float32)
+            ys = np.array([p[1] for p in pts], dtype=np.float32)
+            if float(np.ptp(xs)) < 1.0:      # 세로로만 늘어선 행은 기울기 정의 불가
+                continue
+            slope = float(np.polyfit(xs, ys, 1)[0])
+            angles.append(float(np.degrees(np.arctan(slope))))
+        if not angles:
             return {"mean": 0.0, "std": 0.0, "overall": "straight", "issues": [],
-                    "metric": {"skipped": "세로획이 있는 글자가 부족해 기울기 평가 생략"}}
-        med = float(np.median(reliable))
-        inliers = reliable[np.abs(reliable - med) <= TILT_OUTLIER_DEG]
-        n_out = len(reliable) - len(inliers)
-        mean_a, std_a = float(np.mean(inliers)), float(np.std(inliers))
-        overall = ("leaning_right" if mean_a > ANGLE_WARN_DEG else
-                   "leaning_left" if mean_a < -ANGLE_WARN_DEG else "straight")
+                    "metric": {"skipped": "기울기를 잴 수 있는 행(3글자 이상)이 부족"}}
+        mean_a = float(np.mean(angles))
+        std_a = float(np.std(angles))
+        dev = abs(mean_a)
+        overall = ("falling" if mean_a > ANGLE_WARN_DEG else
+                   "rising" if mean_a < -ANGLE_WARN_DEG else "straight")
         issues = []
-        if abs(mean_a) > ANGLE_FLAG_DEG:
-            d = "오른쪽" if mean_a > 0 else "왼쪽"
-            issues.append(f"글씨 전체가 {d}으로 {abs(mean_a):.1f}° 기울어져 있습니다")
-        elif abs(mean_a) > ANGLE_WARN_DEG:
-            d = "오른쪽" if mean_a > 0 else "왼쪽"
-            issues.append(f"글씨가 전체적으로 {d}으로 약간({abs(mean_a):.1f}°) 기울어져 있습니다")
-        good, fair = BANDS["tilt_consistency"]
-        if std_a >= fair:
-            issues.append(f"글자들의 기울기가 들쭉날쭉합니다 (편차 {std_a:.1f}°, 7° 이상은 불량)")
-        elif std_a >= good:
-            issues.append(f"기울기를 조금 더 일정하게 써보세요 (편차 {std_a:.1f}°)")
-        metric = self._metric(std_a, "tilt_consistency", "°",
-                              n_outlier=n_out, n_unmeasured=len(chars) - len(reliable))
+        if dev > ANGLE_FLAG_DEG:
+            d = "내려가며" if mean_a > 0 else "올라가며"
+            issues.append(f"글씨 줄이 전체적으로 {d} {dev:.1f}° 기울어 수평에서 벗어납니다")
+        elif dev > ANGLE_WARN_DEG:
+            d = "내려가며" if mean_a > 0 else "올라가며"
+            issues.append(f"글씨 줄이 약간 {d}({dev:.1f}°) 기울어 있습니다")
+        metric = self._metric(dev, "tilt_consistency", "°", n_rows=len(angles))
         return {"mean": round(mean_a, 2), "std": round(std_a, 2),
                 "overall": overall, "issues": issues, "metric": metric}
 
@@ -428,7 +435,7 @@ class SizeAngleAnalyzer:
                          baselines: List[float], clear_ids: set) -> Dict:
         """절대 규범 축 — 자기 일관성과 별개. **점수 미반영, 경고만.**
 
-        ① 기울기: 세로획 평균 slant의 절대값이 수직(0°)에서 TILT_NORM_DEG 초과 이탈.
+        ① 기울기: 문장(행) 평균 기울기 각도의 절대값이 수평(0°)에서 TILT_NORM_DEG 초과 이탈.
         ② 자간: 충분히 긴 글에서 띄어쓰기(어간, 넓은 gap) 군집이 완전히 소실(붙여 씀).
         ③ 행간: 인접 행 baseline 간격 / 평균 글자 높이 < LINE_NORM_MIN_RATIO(줄 겹침).
 
@@ -438,17 +445,17 @@ class SizeAngleAnalyzer:
         # ── ① 기울기 규범 (세로획 수직 이탈) ──
         if "skipped" in tilt["metric"]:
             tilt_norm = {"violated": False, "evaluated": False,
-                         "reason": "세로획이 있는 글자가 부족"}
+                         "reason": "기울기를 잴 수 있는 행(3글자 이상)이 부족"}
         else:
             mean_a = tilt["mean"]
             violated = abs(mean_a) > TILT_NORM_DEG
             tilt_norm = {"violated": violated, "evaluated": True,
                          "value": round(abs(mean_a), 1)}
             if violated:
-                d = "오른쪽" if mean_a > 0 else "왼쪽"
+                d = "내려가며" if mean_a > 0 else "올라가며"
                 tilt_norm["message"] = (
-                    f"글씨가 전체적으로 {d}으로 {abs(mean_a):.0f}° 기울어 "
-                    f"곧은 형식에서 벗어납니다")
+                    f"글씨 줄이 전체적으로 {d} {abs(mean_a):.0f}° 기울어 "
+                    f"수평 규범에서 벗어납니다")
 
         # ── ② 자간 규범 (띄어쓰기 뭉개짐 — 넓은 gap 군집 소실) ──
         n_clear = n_pairs = n_word = 0
@@ -496,20 +503,6 @@ class SizeAngleAnalyzer:
 
         return {"tilt": tilt_norm, "spacing": spacing_norm,
                 "line_spacing": line_norm}
-
-    def _stroke_width(self, binary: Optional[np.ndarray]) -> Dict:
-        if binary is None:
-            return {"skipped": "binary 이미지 미제공으로 획 굵기 평가 생략"}
-        import cv2
-        dt = cv2.distanceTransform((binary > 0).astype(np.uint8), cv2.DIST_L2, 5)
-        # 릿지(획 중심선) 근사: 3×3 이웃 최대값과 같은 지점의 distance 값 × 2 = 획 폭
-        ridge = (dt >= cv2.dilate(dt, np.ones((3, 3), np.uint8)) - 1e-6) & (dt >= 0.8)
-        widths = dt[ridge] * 2.0
-        if len(widths) < 50:
-            return {"skipped": "획 픽셀이 부족해 획 굵기 평가 생략"}
-        cv_val = float(np.std(widths) / np.mean(widths) * 100)
-        return self._metric(cv_val, "stroke_width_uniformity", "%",
-                            mean_width_px=round(float(np.mean(widths)), 1))
 
     # ------------------------------------------------------------------
 
