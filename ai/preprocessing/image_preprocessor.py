@@ -26,6 +26,14 @@ EXTREME_ASPECT_RATIO = 3.0
 # 재구성된 잉크 강도(밝을수록 진한 획)를 하드 이진으로 자르는 임계
 INK_BINARIZE_THRESH = 40
 
+# 이미지별 이진화 라우팅 (DEVLOG 12막): near-black 진짜 잉크(진한 앵커) 유무로 결정.
+# 연한 글씨와 비침은 세기로 구분 불가하므로, 성분이 아니라 '진한 앵커가 있는 이미지인가'로
+# 갈라 — 앵커 없음(연한 글씨 이미지)=gentle(보존), 앵커 있음(진한 글씨+비침)=geodesic(제거).
+INK_BLACK_LEVEL = 220     # 잉크 세기(255-norm)가 이 이상이면 near-black 진짜 잉크
+BLACK_ANCHOR_FRAC = 0.02  # 잉크 픽셀 중 near-black 비율이 이 미만이면 gentle로 라우팅
+# 실측 근거: 연한 세트(data/ 25장·test·test4~7) frac_black=0.000, 비침/진한 세트
+# (test8·test3_crop·test_line1~3·test2) 0.036~0.693 — 0.02가 그 틈 정중앙.
+
 # 측지 팽창 재구성 최대 반복 (보통 조기 수렴)
 RECON_MAX_ITERS = 150
 
@@ -187,47 +195,59 @@ class ImagePreprocessor:
         norm = cv2.divide(gray, bg, scale=255)
         ink = (255 - norm).astype(np.uint8)
 
-        # (c) 잉크 후보량 기반 적응형 seed/mask 임계
-        cand_frac = max(float((norm < 200).mean()), 0.005)
-        seed_pct = 100 - cand_frac * 100 * 0.30           # 후보 중 최암 30%
-        mask_pct = 100 - min(cand_frac * 100 * 1.60, 45)  # 후보 전체 + 여유
-        hi_t = np.percentile(ink, seed_pct)
-        lo_t = np.percentile(ink, mask_pct)
-        seed = np.where(ink >= hi_t, ink, 0).astype(np.uint8)
-        mask = np.where(ink >= lo_t, ink, 0).astype(np.uint8)
-        seed = cv2.min(cv2.dilate(seed, _K3), mask)
+        # 라우터: near-black 진짜 잉크(진한 앵커)가 있는가? (DEVLOG 12막)
+        #  없으면 = 진짜 글씨가 연함(태블릿·연필·clean 종이) → seed 기반 재구성이 seed에서
+        #  닿지 못하는 연한 획을 비침처럼 지우므로 gentle 스트레치로 보존한다. 있으면 진짜 글씨는
+        #  진하고 연한 건 비침/노이즈이므로 geodesic으로 안전하게 제거한다. (연한 글씨와 비침은
+        #  세기로 구분 불가 → 성분이 아니라 '이미지별 진한 앵커 유무'로 라우팅한다.)
+        ink_pos = ink[ink > 0]
+        frac_black = float((ink_pos >= INK_BLACK_LEVEL).mean()) if ink_pos.size else 0.0
 
-        # (d) 측지 팽창 재구성 (비침·잔여 괘선 제거)
-        cur, prev = seed, None
-        for _ in range(RECON_MAX_ITERS):
-            cur = cv2.min(cv2.dilate(cur, _K3), mask)
-            if prev is not None and np.array_equal(cur, prev):
-                break
-            prev = cur.copy()
-
-        # 획 강도 정규화 (연한 펜/연필 보정)
-        nz = cur[cur > 0]
-        if nz.size:
-            scale = 230.0 / max(float(np.percentile(nz, 85)), 1.0)
-            cur = np.clip(cur.astype(np.float32) * scale, 0, 255).astype(np.uint8)
-        fg = 255 - cur  # 검은 잉크 / 흰 배경
-
-        # (e) 보존율 게이트 (coverage 기반, craft_preprocess (1) 방식):
-        # 확실한 잉크(norm<110) 근처가 출력에 얼마나 남았는지(coverage)로 재구성 품질을
-        # 판정한다. coverage≥0.97, 또는 coverage≥0.92면서 옅은대역(norm 110~190)을
-        # 대량 제거(fer≥0.30 = 비침 제거 증거)면 재구성 채택. 아니면 선형 스트레치 폴백.
-        # percentile 방식보다 "seed에서 떨어진 연한 획을 놓친 재구성"을 잘 감지해 stretch로
-        # 복구한다(실측: 연한 손글씨 되살림, 재현율 동률). 비침 이미지는 fer가 높아 recon 유지.
-        strong = norm < 110
-        near = cv2.dilate((fg < 160).astype(np.uint8), _K3) > 0
-        cov0 = float(near[strong].mean()) if strong.any() else 1.0
-        faint = (norm >= 110) & (norm < 190)
-        fer = float((~near)[faint].mean()) if faint.any() else 0.0
-        method = "geodesic_reconstruction"
-        if not (cov0 >= 0.97 or (cov0 >= 0.92 and fer >= 0.30)):
-            method = "linear_stretch"                      # 폴백: 안전한 선형 스트레치
+        if frac_black < BLACK_ANCHOR_FRAC:
+            # gentle: 연한 글씨 보존 우선. 비침이 함께 남을 수 있으나(드묾) 유령 박스는 탐지
+            # 단계에서 걸러 재촬영 안내로 처리(사용자 방침 — 연한 글씨 손실이 더 치명적).
+            method = "gentle_stretch"
             lo = 90.0
             fg = (np.clip((norm.astype(np.float32) - lo) / (205.0 - lo), 0, 1) * 255).astype(np.uint8)
+        else:
+            # geodesic: 진한 앵커 기준 seed에서 재구성 — 비침·잔여 괘선을 원천 제거.
+            # (c) 잉크 후보량 기반 적응형 seed/mask 임계
+            cand_frac = max(float((norm < 200).mean()), 0.005)
+            seed_pct = 100 - cand_frac * 100 * 0.30           # 후보 중 최암 30%
+            mask_pct = 100 - min(cand_frac * 100 * 1.60, 45)  # 후보 전체 + 여유
+            hi_t = np.percentile(ink, seed_pct)
+            lo_t = np.percentile(ink, mask_pct)
+            seed = np.where(ink >= hi_t, ink, 0).astype(np.uint8)
+            mask = np.where(ink >= lo_t, ink, 0).astype(np.uint8)
+            seed = cv2.min(cv2.dilate(seed, _K3), mask)
+
+            # (d) 측지 팽창 재구성 (비침·잔여 괘선 제거)
+            cur, prev = seed, None
+            for _ in range(RECON_MAX_ITERS):
+                cur = cv2.min(cv2.dilate(cur, _K3), mask)
+                if prev is not None and np.array_equal(cur, prev):
+                    break
+                prev = cur.copy()
+
+            # 획 강도 정규화 (연한 펜/연필 보정)
+            nz = cur[cur > 0]
+            if nz.size:
+                scale = 230.0 / max(float(np.percentile(nz, 85)), 1.0)
+                cur = np.clip(cur.astype(np.float32) * scale, 0, 255).astype(np.uint8)
+            fg = 255 - cur  # 검은 잉크 / 흰 배경
+
+            # (e) 보존율 게이트 (coverage 기반): 재구성이 확실한 잉크(norm<110)를 놓쳤으면
+            # 선형 스트레치로 폴백. 비침 이미지는 옅은대역 제거증거(fer)가 높아 recon 유지.
+            strong = norm < 110
+            near = cv2.dilate((fg < 160).astype(np.uint8), _K3) > 0
+            cov0 = float(near[strong].mean()) if strong.any() else 1.0
+            faint = (norm >= 110) & (norm < 190)
+            fer = float((~near)[faint].mean()) if faint.any() else 0.0
+            method = "geodesic_reconstruction"
+            if not (cov0 >= 0.97 or (cov0 >= 0.92 and fer >= 0.30)):
+                method = "linear_stretch"                      # 폴백: 안전한 선형 스트레치
+                lo = 90.0
+                fg = (np.clip((norm.astype(np.float32) - lo) / (205.0 - lo), 0, 1) * 255).astype(np.uint8)
 
         # (f) 획 연결 — 잉크 전경을 close한다. fg는 검은 잉크/흰 배경이므로 fg에 직접
         #     CLOSE를 걸면 '밝은 배경'이 닫혀 가는 획이 깎여 끊긴다(실측: 획 43% 소실).

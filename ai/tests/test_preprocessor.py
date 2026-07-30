@@ -80,11 +80,26 @@ def make_bleed_through_image(width=800, height=600) -> np.ndarray:
     """
     img = np.full((height, width), 200, dtype=np.uint8)      # 종이
     for x in range(60, width - 60, 60):
-        cv2.line(img, (x, 140), (x + 36, 140), 40, 4)        # 진짜 획 (가로)
-        cv2.line(img, (x + 18, 120), (x + 18, 180), 40, 4)   # 진짜 획 (세로)
+        cv2.line(img, (x, 140), (x + 36, 140), 12, 4)        # 진짜 획 (가로, near-black)
+        cv2.line(img, (x + 18, 120), (x + 18, 180), 12, 4)   # 진짜 획 (세로, near-black)
     for x in range(60, width - 60, 60):
         cv2.line(img, (x, 420), (x + 36, 420), 178, 4)       # 비침 (가로)
         cv2.line(img, (x + 18, 400), (x + 18, 460), 178, 4)  # 비침 (세로)
+    return img
+
+
+def make_faint_writing_no_anchor(width=800, height=600) -> np.ndarray:
+    """진한 앵커(near-black 잉크)가 없는 연한 손글씨, clean 종이(비침 없음).
+
+    좌상단에 살짝 진한 획 하나(seed를 독점)와, 그로부터 멀리 떨어진 우하단의 연한 획들.
+    seed 기반 측지 재구성은 seed에서 닿지 못하는 연한 획을 '비침'처럼 지운다(test7·test5
+    실제 버그). 이런 이미지는 gentle 이진화로 라우팅되어 연한 획이 보존돼야 한다.
+    """
+    img = np.full((height, width), 205, np.uint8)          # 밝은 종이
+    cv2.line(img, (90, 70), (240, 70), 90, 6)              # 살짝 진한 획(좌상단, seed 독점)
+    for (cx, cy) in [(430, 300), (560, 300), (430, 440), (560, 440)]:
+        cv2.line(img, (cx - 35, cy), (cx + 35, cy), 135, 5)  # 연한 획(우하단, 멀리)
+        cv2.line(img, (cx, cy - 35), (cx, cy + 35), 135, 5)
     return img
 
 
@@ -170,6 +185,41 @@ def test_bleed_through_is_not_promoted_to_ink():
     assert ghost_ink < real_ink * 0.1, \
         f"비침이 획으로 승격됨: 진짜 {real_ink}px vs 비침 {ghost_ink}px"
     print(f"  [PASS] 비침 억제 확인 (진짜 {real_ink}px / 비침 {ghost_ink}px)")
+
+
+def test_faint_writing_without_dark_anchor_is_preserved():
+    """진한 앵커(near-black 잉크)가 없는 연한 손글씨는 gentle로 라우팅되어 보존돼야 한다.
+
+    seed 기반 측지 재구성은 seed(가장 진한 상위 ~1%)에서 공간적으로 닿지 못하는 연한 획을
+    비침처럼 제거한다(test7·test5·data/ 실제 버그, DEVLOG 12막). 진한 앵커가 없는 이미지는
+    '진짜 글씨가 연함'을 뜻하므로 gentle 이진화로 라우팅해 연한 획을 지키지 않아야 한다.
+    """
+    preprocessor = ImagePreprocessor()
+    gray = make_faint_writing_no_anchor()
+    _, encoded = cv2.imencode(".png", image_to_bgr(gray))
+    result = preprocessor.preprocess_from_bytes(encoded.tobytes())
+
+    # near-black 앵커가 없으므로 gentle 경로로 라우팅돼야 한다(geodesic이면 연한 획 소실 위험).
+    assert any("gentle" in f for f in result.applied_filters), \
+        f"앵커 없는 연한 글씨인데 gentle로 라우팅되지 않음: {result.applied_filters}"
+    # 연한 획(우하단)이 출력에 남아 있어야 한다.
+    b = result.binary_image
+    H, W = b.shape
+    br_ink = int((b[int(H * 0.42):, int(W * 0.45):] > 127).sum())
+    assert br_ink > 200, f"연한 획이 전처리에서 사라졌다 (우하단 잉크 {br_ink}px)"
+    print(f"  [PASS] 앵커 없는 연한 글씨 gentle 라우팅·보존 (필터 {result.applied_filters}, 잉크 {br_ink}px)")
+
+
+def test_dark_ink_with_bleed_routes_to_geodesic():
+    """near-black 진짜 잉크(진한 앵커)가 있으면 geodesic으로 라우팅되어 비침을 제거한다.
+    (연한 글씨=비침 세기로 구분 불가라, '진한 앵커 유무'로 이미지별 라우팅한다 — DEVLOG 12막.)"""
+    preprocessor = ImagePreprocessor()
+    gray = make_bleed_through_image()   # 진짜 획 near-black, 비침 연함
+    _, encoded = cv2.imencode(".png", image_to_bgr(gray))
+    result = preprocessor.preprocess_from_bytes(encoded.tobytes())
+    assert any("geodesic" in f for f in result.applied_filters), \
+        f"진한 앵커+비침인데 geodesic으로 라우팅되지 않음: {result.applied_filters}"
+    print(f"  [PASS] 진한 앵커+비침 geodesic 라우팅 (필터 {result.applied_filters})")
 
 
 def test_extreme_aspect_ratio_triggers_retake():
