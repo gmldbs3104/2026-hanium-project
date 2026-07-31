@@ -59,6 +59,7 @@ CRAFT는 region score map(글자 존재 확률)과 affinity map(인접 글자 �
 ## 3. 파인튜닝 — 글자 단위 GT 생성 + 동일 전처리 재사용 + OHEM
 
 `ai/training/gt_generator.py` / `ai/training/kaggle_finetune.py`
+*(아래 코드는 기록용 스냅샷 — 실제 파일은 2026-07-31 트리에서 제거, git `ec3f0fb`에 보존)*
 
 ```python
 def split_word_box(word_pts, num_chars):

@@ -103,6 +103,8 @@
   남은 것: ① 브랜치 병합(ai-setup 실구현 채택) ② 라우트가 AI 전처리/분석 쓰도록 결정(⚠️ 정확도는
   전부 AI 전처리 전제 — 다른 방식 섞으면 보장 안 됨) ③ bbox "전처리 후" 좌표계 오버레이 합의 ④
   backend `requirements.txt`에 torch 추가. 근거: [HANDOFF.md](HANDOFF.md) §5.1.
+  **백엔드 팀원용 인계 가이드 = [BACKEND_INTEGRATION.md](BACKEND_INTEGRATION.md)**(2026-08-01 신설 —
+  위 ①~④와 함정 8·자가 검증·팀 결정 목록 종합, 수치 당일 재실측).
 - **⚠️ 통합 시 터질 위험 2가지 (통합 전 반드시 합의)** — ②③이 왜 단순 협의가 아니라 위험인지:
   1. **전처리 체인 의존** — 탐지 성능은 특정 체인(**측지 재구성**+deskew+distance transform) 전제다.
      백엔드가 다른 전처리(예: 단순 이진화)를 쓰면 성능은 무보장. 이건 **파인튜닝 2차 실패
@@ -124,19 +126,28 @@
 
 > 결론: **지금 당장은 불필요**(pretrained로 서비스 가능). 시간·여지 있을 때 조건부 재도전.
 > 상세 경위는 [archive/IMPLEMENTATION_HISTORY.md](archive/IMPLEMENTATION_HISTORY.md) Phase 12·§14.
+> **실행 계획 전체는 [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) §4.1**(P1~P7·데이터 자산·합성 전략·Kaggle 우회).
+
+- **채택 기준(엄격)** — 배포 경로 F1@0.3 **> 0.891 AND merge 카운트 < 151**(홀드아웃 회귀 없음). 단 merge는 12장
+  집계라 노이즈 → **하드 이미지(test_line1·test5·test)의 merge 감소를 병행 판정**(§4.1 P5). 미달 시 pretrained 유지.
 
 - **예전 실패 이유(쉽게)** — ① 정답지 불균형으로 학습 붕괴 ② 학습/실제 입력이 다른 그림 ③ 좋은
   시점(체크포인트)을 못 골랐음(자체 점수↓인데 실제 탐지는↓) ④ **결정적**: 검증이 실제 배포 경로가 아닌
   기준 낮춘 별도 스크립트였음 → 진짜 경로로 재검증하니 0개 탐지 → 최종 포기.
-- **지금 달라진 점(재도전 가치)** — ① **실제 배포 경로 기준 F1 채점 하니스**(`eval/evaluate_detection.py`)
-  생김 ② 정밀 수동 GT(197음절, 2차 검수) ③ 검증 전용 `debug_compare_production.py`. → 예전의 "시점 잘못
-  고르기" 실수를 원천 차단 가능.
+- **지금 달라진 점(재도전 가치)** — ① **실제 배포 경로 기준 F1 채점 하니스**(`eval/evaluate_detection.py` —
+  실제 `CraftDetector`로 채점하므로 옛 `debug_compare_production.py`의 "배포 클래스로 검증" 역할을 흡수)
+  ② 정밀 수동 GT(2차 검수) ③ 13막 데이터 실측(③ 필기체 charbox 셋의 "붙음 케이스 0%"). → 예전의 "시점 잘못
+  고르기"·"검증 경로 다름" 실수를 원천 차단 가능.
 - **다시 한다면 — 바꿔볼 가설** — ① 정답지 정밀화(watershed로 pseudo-GT 정제) ② distance-transform이
-  학습 땐 신호를 약화했을 가능성 → 빼고 비교 ③ 학습률/스케줄 과했을 가능성.
+  학습 땐 신호를 약화했을 가능성 → 빼고 비교 ③ 학습률/스케줄 과했을 가능성 ④ **(13막 신규)** charbox로
+  "붙여쓴 2음절"을 합성해 우리 실패모드를 학습셋에 주입(간격 압축 + 괘선·비침·저대비 증강).
 - **✋ 절대 규칙** — 매 체크포인트를 **실제 `CraftDetector`(기본 threshold)로 검증**(자체 loss 믿지 말 것).
   재도전 조건 = 다른 개선 다 해도 목표(평균 F1@0.3 ≥ 0.7, AI Hub 각 R@0.3 ≥ 0.5) 미달일 때만.
-- **재사용 자산** — `craft_model.py`(구조 완전 호환), 학습 파이프라인 전체(OHEM·도메인 일치), `gt_generator.py`,
-  `kaggle_finetune.py`(resume), `debug_compare_production.py`(검증), `craft_finetuned_epoch9.pth.bak`(보관).
+- **학습 코드 상태(2026-07-31)** — 옛 파인튜닝 코드(`ai/training/` 전체 + `debug_gt.py` +
+  `debug_compare_production.py`)는 **작업 트리에서 제거**했다(3회 실패한 Colab/Kaggle 잔재, 재도전 시 새로
+  설계). **git 히스토리에 보존** — 복원: `git checkout ec3f0fb -- ai/training ai/debug_gt.py`. 실패 경위·설계는
+  archive Phase 5~12에 그대로 남음. 재사용 참고 자산도 그 커밋에: `craft_model.py`(구조 완전 호환)·
+  `gt_generator.py`(affinity=0)·`kaggle_finetune.py`(resume).
 
 ---
 
@@ -165,4 +176,4 @@ WSL/Linux 기준. Windows 로컬은 `venv/bin/python` 대신 `venv/Scripts/pytho
 | AI Hub 양식지까지 포함 | 위 명령에 `--aihub` |
 | GT 라벨링·검수 | `/gt-labeling` skill 또는 `python eval/label_gui.py <이미지>` → 브라우저에서 묶기 → build |
 | E2E 수동 점검 | `ai/venv/bin/python debug_e2e_image_mode.py` |
-| pretrained vs 파인튜닝 비교 | `ai/venv/bin/python debug_compare_production.py` (체크포인트 검증은 **반드시** 이걸로) |
+| pretrained vs 파인튜닝 비교 | 실제 `CraftDetector`로 채점하는 `evaluate_detection.py`로 검증(옛 `debug_compare_production.py`는 2026-07-31 제거, git `ec3f0fb`) |

@@ -125,6 +125,15 @@
 - ⚠️ **남은 것(팀/통합 위주)**: 백엔드 통합·속도(GPU)·캔버스 데이터 수집. AI 단독 후보: "재촬영 안내" 구현,
   파인튜닝 재도전(조건부). → `STATUS.md` §5.
 
+### 2026-08-01 — 백엔드 인계 패키지 준비 (상세: `DEVLOG.md` 14막)
+
+방향 결정(사용자): **파인튜닝은 보류, pretrained 확정본으로 백엔드 통합 먼저.** 준비 내용:
+1. **`BACKEND_INTEGRATION.md` 신설** — 백엔드 팀원용 통합 가이드(병합·환경·함정 8·변경 금지·자가 검증·
+   팀 결정 5). 수치는 당일 재실측(F1@0.3 0.891/@0.5 0.820 재현, pytest 34 passed, test.jpg 13박스·2.9s/장).
+2. **🐛 `eval/evaluate_detection.py` 2건 수리** — ① 삭제된 training/ 모듈의 최상단 import로 기본 평가까지
+   죽던 것 → --aihub 전용 lazy import화 ② GT만 있고 이미지 없는 클론(팀원 환경)에서 죽던 것 → skip+안내.
+3. 파인튜닝 학습 코드 삭제분 커밋 반영 + 홀드아웃 이미지(test8·test_line1) 추적 추가로 원격 GT 정합.
+
 ---
 
 ## 0. 문서 읽는 순서
@@ -137,10 +146,12 @@
 3. `IMPLEMENTATION_PLAN.md` — 설계 결정 + 구현 계획(배경).
 4. `AI_MODEL_INTERFACE.md` — 백엔드와 약속한 함수 시그니처 3개. **함수 이름/파라미터/
    반환 형식은 절대 바꾸면 안 됨** — 내부 구현만 교체 가능.
-5. `requirement.md` — 전체 SFR(기능 요구사항) 목록.
-6. `handwriting_evaluation.md` — 이미지 모드 평가 지표 정의. `NORM_STROKE_RESEARCH.md` — 규범
+5. **`BACKEND_INTEGRATION.md`** — **백엔드 팀원용 통합 가이드**(2026-08-01): 병합·환경 구축·함정·
+   자가 검증·팀 결정 목록. 백엔드 통합 작업자는 이 문서부터.
+6. `requirement.md` — 전체 SFR(기능 요구사항) 목록.
+7. `handwriting_evaluation.md` — 이미지 모드 평가 지표 정의. `NORM_STROKE_RESEARCH.md` — 규범
    임계값·획순 정본 문헌 근거.
-7. `CANVAS_DATA_PLAN.md` (프로젝트 루트) — 캔버스 모드 실사용자 데이터 수집 전략, 팀 논의용.
+8. `CANVAS_DATA_PLAN.md` (프로젝트 루트) — 캔버스 모드 실사용자 데이터 수집 전략, 팀 논의용.
 
 **회고 (사람용):**
 - **`DEVLOG.md`** — 처음부터 지금까지의 개발일지/TIL/트러블슈팅. 왜 이렇게 됐는지 시간순 서사.
@@ -185,6 +196,7 @@ ai/
 ├── DEVLOG.md                         ← 개발일지/TIL/트러블슈팅 (회고·복기용)
 ├── IMPLEMENTATION_PLAN.md            ← 2026-07-20 설계 결정 + 구현 계획
 ├── AI_MODEL_INTERFACE.md             ← 백엔드 연동 함수 계약 3개 (절대 준수)
+├── BACKEND_INTEGRATION.md            ← 백엔드 팀원용 통합 가이드 (병합·환경·함정·검증, 2026-08-01)
 ├── requirement.md                    ← 전체 SFR 요구사항 원문
 ├── handwriting_evaluation.md         ← 이미지 모드 평가 지표 정의
 ├── NORM_STROKE_RESEARCH.md           ← 규범 임계값·획순 정본 문헌 근거
@@ -208,7 +220,8 @@ ai/
 │   ├── label_helper.py               ← blob 추출 + groups.json → GT 빌드 (`"splits"` 분할 지원)
 │   ├── measure_latency.py            ← 레이턴시 실측 (500ms 목표 대비)
 │   ├── measure_resize.py             ← 전처리 리사이즈 on/off 실측 (→ 현행 유지 확정)
-│   ├── gt/                           ← **정답지 7장 537음절** (test·test2·test3_crop·test4~7)
+│   ├── gt/                           ← **정답지 12장**(2026-07-31 재라벨: 사진 7 + data/ 태블릿 5 —
+│   │                                    태블릿 5장 이미지는 AI Hub 원본이라 로컬 전용, git엔 GT만)
 │   └── gt_work/                      ← 라벨링 작업물 (groups.json, 생성된 label.html)
 │
 ├── preprocessing/
@@ -230,26 +243,20 @@ ai/
 │   ├── debug_canvas.py               ← 그룹핑/표준데이터 검증 스크립트
 │   └── debug_synthetic.py            ← 합성 데이터 생성 검증 스크립트
 │
-├── training/                         ← CRAFT 파인튜닝 (현재 결과물은 미배포 상태, 12절 참고)
-│   ├── craft_model.py                ← clovaai 공식 구조 vendoring (키 호환 검증 완료, 자산으로 남음)
-│   ├── gt_generator.py               ← AI Hub 라벨 파싱 + 단어→글자 분할 + score map 생성
-│   ├── colab_finetune.py             ← Colab용 학습 스크립트 (현재 미사용, Kaggle로 대체)
-│   ├── kaggle_finetune.py            ← Kaggle용 학습 스크립트 (실제 사용됨, resume 지원)
-│   └── prepare_kaggle_dataset.py     ← 학습 데이터를 Kaggle Dataset 형태로 패키징
+│   (training/ 파인튜닝 코드는 2026-07-31 트리에서 제거 — 3회 실패 잔재. git `ec3f0fb`에 보존:
+│    `git checkout ec3f0fb -- ai/training`. 경위=archive Phase 5~12, 재도전 방침=STATUS §4·DEVLOG 13막)
 │
 ├── models/
 │   ├── craft_finetuned_epoch9.pth.bak  ← 파인튜닝 최종 결과물이나 **미배포** (pretrained보다 성능 낮음)
 │   └── craft_ep007_wrapped.pth.bak     ← 더 이전 파인튜닝 결과물 (참고용 보관)
 │   (craft_finetuned_raw.pth가 없으면 craft_detector.py가 자동으로 pretrained 가중치 사용)
 │
-├── test_images/                      ← test~test7: **라벨링됨(평가셋 7장)**
-│                                        test8~10 · test_line1~3(줄노트): **미라벨 = 홀드아웃 후보**
+├── test_images/                      ← 평가셋 사진 7장(test·test2·test5~7·test8·test_line1) **라벨링됨**.
+│                                        test9~10·test_line2~3: 미라벨(로컬 전용). test3계열·test4: 평가 배제
 ├── debug_craft.py                    ← CRAFT 탐지 결과 시각화
-├── debug_gt.py                       ← GT score map 시각화 + 체크포인트 collapse 진단
 ├── debug_analysis.py                 ← SFR-005I 판단 모듈 검증
-├── debug_preprocess.py               ← 전처리 전/후 비교 이미지 생성
-└── debug_compare_production.py       ← **실제 배포 클래스(CraftDetector)로** pretrained vs
-                                          파인튜닝 성능 비교 (반드시 이걸로 검증할 것, 12.5절 참고)
+└── debug_preprocess.py               ← 전처리 전/후 비교 이미지 생성
+   (debug_gt.py·debug_compare_production.py는 파인튜닝 도구라 training/과 함께 2026-07-31 제거 — git `ec3f0fb`)
 ```
 
 ---
@@ -284,7 +291,8 @@ ai/
 
 **교훈(중요, 다음에 파인튜닝을 다시 시도한다면 반드시 지킬 것)**: 학습 중 자체 정의한
 지표(loss, peak_quality 등)로 체크포인트를 고르지 말고, **매번 실제 배포 클래스를 그대로
-호출해서 검증**해야 한다. `debug_compare_production.py`가 이 용도로 만들어져 있음.
+호출해서 검증**해야 한다. (이 용도의 `debug_compare_production.py`는 2026-07-31 제거 — 실제
+`CraftDetector`로 채점하는 `eval/evaluate_detection.py`가 그 역할을 흡수. 옛 스크립트는 git `ec3f0fb`.)
 
 ---
 

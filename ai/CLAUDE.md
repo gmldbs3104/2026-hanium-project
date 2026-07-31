@@ -35,8 +35,10 @@ $P ai/eval/measure_resize.py                # 전처리 리사이즈 정책 실�
 $P ai/debug_preprocess.py
 $P ai/debug_craft.py
 $P ai/debug_e2e_image_mode.py               # 백엔드 어댑터 경로 그대로 전처리→탐지→평가
-$P ai/debug_compare_production.py           # pretrained vs 파인튜닝은 반드시 이 배포 클래스로 검증
 ```
+
+> 파인튜닝 학습 코드(`ai/training/`)와 그 도구(`debug_gt.py`·`debug_compare_production.py`)는 3회 실패 후
+> 2026-07-31에 트리에서 제거했습니다. 복원은 `git checkout ec3f0fb -- ai/training`. 재도전 방침은 STATUS §4·DEVLOG 13막.
 
 **설치**는 `ai/requirements.txt` 상단 절차를 그대로 따를 것. Python 3.14 환경의 두 함정이
 있어 단순 `pip install -r`만으로는 CRAFT import가 깨집니다: ① `opencv-python-headless`는
