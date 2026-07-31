@@ -36,10 +36,8 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "training"))
 from preprocessing.image_preprocessor import ImagePreprocessor
 from detection.craft_detector import CraftDetector
-from gt_generator import parse_aihub_json
 
 GT_DIR = os.path.join(os.path.dirname(__file__), "gt")
 
@@ -158,7 +156,13 @@ def evaluate_image(detector, pre, image_path, gt_boxes, gt_in_original_coords=Fa
 
 
 def aihub_gt_boxes(label_path):
-    """parse_aihub_json의 4점 폴리곤 → 축정렬 bbox 리스트."""
+    """parse_aihub_json의 4점 폴리곤 → 축정렬 bbox 리스트.
+
+    ⚠️ --aihub 전용 lazy import — ai/training/은 2026-07-31 트리에서 제거됨.
+    복원: git checkout ec3f0fb -- ai/training
+    """
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "training"))
+    from gt_generator import parse_aihub_json
     boxes = []
     for pts in parse_aihub_json(label_path):
         pts = np.asarray(pts, dtype=np.float32)
@@ -204,10 +208,17 @@ def main():
             gt = json.load(f)
         image_path = os.path.join(os.path.dirname(__file__), "..", gt["image"])
         name = os.path.basename(gt["image"])
+        if not os.path.exists(image_path):
+            # data/ 태블릿 5장은 AI Hub 원본이라 git에 없음(재배포 금지) — 로컬 전용.
+            print(f"skip: {name} — 이미지 없음(git 미포함, 로컬 전용 평가셋)")
+            continue
         rows[name] = evaluate_image(detector, pre, image_path, gt["syllable_boxes"])
 
     # 2) AI Hub 자동 GT (--aihub 지정 시에만 — 기본 평가는 손글씨 test_images만)
     if args.aihub:
+        if not os.path.isdir(os.path.join(os.path.dirname(__file__), "..", "training")):
+            sys.exit("--aihub은 ai/training/(gt_generator·matched_pairs.json)이 필요합니다 — "
+                     "2026-07-31 트리에서 제거됨. 복원: git checkout ec3f0fb -- ai/training")
         manifest = _load_manifest()
         for stem in AIHUB_STEMS:
             entry = manifest.get(stem)
