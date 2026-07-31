@@ -29,8 +29,10 @@
     | `line_spacing_uniformity` (행간) | 3 |
     | `tilt_consistency` (기울기 일관) | 2 |
     | `spacing_uniformity` (자간) | 2 |
-    | `stroke_width_uniformity` (획 굵기) | 1 |
     | `clarity` (명료도) | **제외** (1.2 참고) |
+
+    > **정정 2026-07-27 (T4)**: `stroke_width_uniformity`(획 굵기, 가중치 1) 지표를 **제거** —
+    > 이미지 모드는 위 **5지표 체계**. 정렬·균일 우선 3:2:1 가중치는 유지.
   - `total_score = Σ(scoreᵢ·wᵢ) / Σ(wᵢ)`, `skipped` 지표는 분자·분모 모두 제외.
   - 가중치는 **모듈 상수 dict**로 노출(REQ-005I-5 "설정 파일로 조정 가능" 취지). 3:2:1은
     초기값이며 실사용 데이터로 튜닝.
