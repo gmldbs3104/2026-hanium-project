@@ -14,11 +14,23 @@ class StrokePainter extends CustomPainter {
   final double strokeWidth;
   final bool showGrid;
 
+  /// SFR-003C 확장(UI 리디자인): 펜 색상, 옅은 가이드 글자, 기준 점선 표시
+  final Color penColor;
+  final String? guideText;
+  final bool showBaseline;
+
+  /// false면 흰 배경을 칠하지 않는다(뒤의 가이드 문장이 비쳐 보이도록).
+  final bool fillBackground;
+
   StrokePainter({
     required this.strokes,
     this.currentStroke,
     this.strokeWidth = 4.0,
     this.showGrid = false,
+    this.penColor = Colors.black87,
+    this.guideText,
+    this.showBaseline = false,
+    this.fillBackground = true,
   });
 
   /// 격자 한 칸 간격(px)
@@ -28,7 +40,7 @@ class StrokePainter extends CustomPainter {
     if (stroke.points.isEmpty) return;
 
     final paint = Paint()
-      ..color = Colors.black87
+      ..color = penColor
       ..strokeWidth = strokeWidth
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
@@ -59,12 +71,18 @@ class StrokePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     // 캔버스 배경 (흰 배경 + 선택 시 격자)
-    canvas.drawRect(
-      Rect.fromLTWH(0, 0, size.width, size.height),
-      Paint()..color = Colors.white,
-    );
+    if (fillBackground) {
+      canvas.drawRect(
+        Rect.fromLTWH(0, 0, size.width, size.height),
+        Paint()..color = Colors.white,
+      );
+    }
 
     if (showGrid) _drawGrid(canvas, size);
+    if (showBaseline) _drawBaseline(canvas, size);
+    if (guideText != null && guideText!.isNotEmpty) {
+      _drawGuideText(canvas, size);
+    }
 
     for (final stroke in strokes) {
       _drawStroke(canvas, stroke);
@@ -72,6 +90,41 @@ class StrokePainter extends CustomPainter {
     if (currentStroke != null) {
       _drawStroke(canvas, currentStroke!);
     }
+  }
+
+  /// 기준선(가로 점선) — 글자 정렬 보조. 분석 대상 아님.
+  void _drawBaseline(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = const Color(0xFFB9C0C9)
+      ..strokeWidth = 1.2;
+    const dash = 6.0, gap = 6.0;
+    for (final ratio in [0.42, 0.62]) {
+      final y = size.height * ratio;
+      double x = 0;
+      while (x < size.width) {
+        canvas.drawLine(Offset(x, y), Offset(x + dash, y), paint);
+        x += dash + gap;
+      }
+    }
+  }
+
+  /// 옅은 가이드 글자 (점선을 따라 연습할 기준 글자)
+  void _drawGuideText(Canvas canvas, Size size) {
+    final tp = TextPainter(
+      text: TextSpan(
+        text: guideText,
+        style: TextStyle(
+          fontSize: size.height * 0.34,
+          fontWeight: FontWeight.w600,
+          color: const Color(0xFFDCE1E7),
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    tp.paint(
+      canvas,
+      Offset((size.width - tp.width) / 2, (size.height - tp.height) / 2),
+    );
   }
 
   @override

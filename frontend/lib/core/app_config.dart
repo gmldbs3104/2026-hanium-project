@@ -8,7 +8,7 @@
 class AppConfig {
   AppConfig._();
 
-  static const bool useMockApi = false;
+  static const bool useMockApi = ture;
 
   static const String apiBaseUrl = 'http://localhost:8000';
 
@@ -30,19 +30,26 @@ class AppConfig {
   static const String authDeleteAccountEndpoint = '/api/v1/auth/account';
 
   // ---- 캔버스 모드 파이프라인 (SFR-003C ~ SFR-007) ----
-  static String canvasGroupEndpoint(String sessionId) => '/api/v1/canvas/$sessionId/group';
+  static String canvasGroupEndpoint(String sessionId) =>
+      '/api/v1/canvas/$sessionId/group';
   static String canvasAnalyzeDetailEndpoint(String sessionId) =>
       '/api/v1/canvas/$sessionId/analyze-detail';
-  static String canvasFeedbackEndpoint(String sessionId) => '/api/v1/canvas/$sessionId/feedback';
+  static String canvasFeedbackEndpoint(String sessionId) =>
+      '/api/v1/canvas/$sessionId/feedback';
   // SFR-009: 학습 결과 저장 확인 (피드백 화면 "학습 기록 저장" 탭 시 트리거)
-  static String canvasConfirmEndpoint(String sessionId) => '/api/v1/canvas/$sessionId/confirm';
+  static String canvasConfirmEndpoint(String sessionId) =>
+      '/api/v1/canvas/$sessionId/confirm';
 
   // ---- 이미지 모드 파이프라인 (SFR-003I ~ SFR-007) ----
-  static String imageDetectEndpoint(String sessionId) => '/api/v1/image/$sessionId/detect';
-  static String imageAnalyzeEndpoint(String sessionId) => '/api/v1/image/$sessionId/analyze';
-  static String imageFeedbackEndpoint(String sessionId) => '/api/v1/image/$sessionId/feedback';
+  static String imageDetectEndpoint(String sessionId) =>
+      '/api/v1/image/$sessionId/detect';
+  static String imageAnalyzeEndpoint(String sessionId) =>
+      '/api/v1/image/$sessionId/analyze';
+  static String imageFeedbackEndpoint(String sessionId) =>
+      '/api/v1/image/$sessionId/feedback';
   // SFR-009: 학습 결과 저장 확인 (save_image 동의 여부 포함)
-  static String imageConfirmEndpoint(String sessionId) => '/api/v1/image/$sessionId/confirm';
+  static String imageConfirmEndpoint(String sessionId) =>
+      '/api/v1/image/$sessionId/confirm';
 
   /// mock 응답 지연 시간
   static const Duration mockDelay = Duration(milliseconds: 800);

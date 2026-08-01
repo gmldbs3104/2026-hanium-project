@@ -1,8 +1,8 @@
 /// 로그인 제공자 종류
-enum AuthProviderType { google, kakao }
+enum AuthProviderType { google, kakao, apple }
 
 extension AuthProviderTypeValue on AuthProviderType {
-  /// backend LoginRequest.provider 문자열 값 ("google" | "kakao")
+  /// backend LoginRequest.provider 문자열 값 ("google" | "kakao" | "apple")
   String get value => name;
 }
 

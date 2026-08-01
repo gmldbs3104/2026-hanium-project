@@ -2,21 +2,18 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:uuid/uuid.dart';
 
+import '../../../core/app_theme.dart';
 import '../../../shared/services/api_client.dart';
+import '../../../shared/widgets/ui_kit.dart';
 import '../models/stroke.dart';
 import '../services/canvas_api_service.dart';
 import '../widgets/stroke_painter.dart';
 
-/// 캔버스 손글씨 입력 화면 (SFR-003C 대응)
+/// 손글씨(글자) 연습 화면 (SFR-003C 대응) — UI 리디자인
 ///
-/// REQ-003C-1: 60fps 이상 샘플링 레이트 유지 (Flutter 기본 GestureDetector가 충족)
-/// REQ-003C-2: 캔버스 스냅샷 PNG는 분석에 사용하지 않고 UI 오버레이 전용
-/// REQ-003C-4: 한 획 지우기 및 전체 지우기 가능
-/// REQ-003C-5: RepaintBoundary로 프레임 드롭 방지
-/// REQ-003C-6: 이미지 모드 전처리 파이프라인을 거치지 않음 (별도 파일/서비스로 완전 분리됨)
-///
-/// SFR-003C Inputs 캔버스 설정: 선 굵기(가늘게/보통/굵게)와 격자 표시 여부를
-/// 화면 내 인라인 컨트롤(하단 세그먼트 + AppBar 토글)로 조절한다.
+/// 자음/모음/받침 탭 + 진행률 + 점선 가이드 글자 + 색상/굵기/지우기/저장.
+/// 저장 시 CanvasApiService.analyze()로 분석을 요청하고 결과는 피드백 화면에서 표시한다.
+/// (백엔드 연동/파이프라인은 기존과 동일 — analyze → /feedback)
 class CanvasInputScreen extends StatefulWidget {
   const CanvasInputScreen({super.key});
 
@@ -31,38 +28,57 @@ class _CanvasInputScreenState extends State<CanvasInputScreen> {
   String? _errorMessage;
   Size _canvasSize = Size.zero;
 
-  // SFR-003C Inputs: 캔버스 설정 (선 굵기 프리셋, 격자 표시 여부)
   static const double _thinWidth = 2.0;
   static const double _mediumWidth = 4.0;
   static const double _thickWidth = 7.0;
   double _strokeWidth = _mediumWidth;
-  bool _showGrid = false;
+
+  static const _palette = [
+    Colors.black87,
+    AppTheme.primaryColor,
+    Color(0xFF3B82F6),
+    Color(0xFFEF4444),
+  ];
+  int _colorIndex = 0;
+  Color get _penColor => _palette[_colorIndex];
+
+  // 자음/모음/받침 탭별 연습 글자 세트
+  static const _tabs = ['자음 쓰기', '모음 쓰기', '받침 글자 쓰기'];
+  static const _charSets = [
+    ['ㄱ', 'ㄴ', 'ㄷ', 'ㄹ', 'ㅁ'],
+    ['ㅏ', 'ㅑ', 'ㅓ', 'ㅕ', 'ㅗ'],
+    ['각', '간', '달', '밤', '상'],
+  ];
+  int _tabIndex = 0;
+  int _charIndex = 0;
+
+  List<String> get _chars => _charSets[_tabIndex];
+  String get _currentChar => _chars[_charIndex];
 
   static const _uuid = Uuid();
 
-  void _onPanStart(DragStartDetails details) {
+  void _onPanStart(DragStartDetails d) {
     setState(() {
       _currentStroke = Stroke(strokeId: _uuid.v4(), points: []);
-      _addPoint(details.localPosition);
+      _addPoint(d.localPosition);
     });
   }
 
-  void _onPanUpdate(DragUpdateDetails details) {
-    setState(() => _addPoint(details.localPosition));
-  }
+  void _onPanUpdate(DragUpdateDetails d) =>
+      setState(() => _addPoint(d.localPosition));
 
-  void _addPoint(Offset position) {
+  void _addPoint(Offset p) {
     _currentStroke?.points.add(
       StrokePoint(
-        x: position.dx,
-        y: position.dy,
-        pressure: 1.0, // 압력 센서 미지원 기기 대비 기본값
+        x: p.dx,
+        y: p.dy,
+        pressure: 1.0,
         timestamp: DateTime.now().millisecondsSinceEpoch,
       ),
     );
   }
 
-  void _onPanEnd(DragEndDetails details) {
+  void _onPanEnd(DragEndDetails d) {
     if (_currentStroke == null || _currentStroke!.points.isEmpty) return;
     setState(() {
       _strokes.add(_currentStroke!);
@@ -70,18 +86,25 @@ class _CanvasInputScreenState extends State<CanvasInputScreen> {
     });
   }
 
-  /// REQ-003C-4: 전체 지우기
-  void _clearCanvas() {
-    setState(() {
-      _strokes.clear();
-      _currentStroke = null;
-    });
-  }
+  void _clearCanvas() => setState(() {
+        _strokes.clear();
+        _currentStroke = null;
+      });
 
-  /// REQ-003C-4: 한 획 지우기 (가장 마지막 획 삭제)
-  void _undoLastStroke() {
-    if (_strokes.isEmpty) return;
-    setState(() => _strokes.removeLast());
+  void _selectTab(int i) => setState(() {
+        _tabIndex = i;
+        _charIndex = 0;
+        _clearStrokesOnly();
+      });
+
+  void _nextChar() => setState(() {
+        _charIndex = (_charIndex + 1) % _chars.length;
+        _clearStrokesOnly();
+      });
+
+  void _clearStrokesOnly() {
+    _strokes.clear();
+    _currentStroke = null;
   }
 
   Future<void> _submit(Size canvasSize) async {
@@ -89,39 +112,22 @@ class _CanvasInputScreenState extends State<CanvasInputScreen> {
       setState(() => _errorMessage = '먼저 글씨를 입력해주세요.');
       return;
     }
-
     setState(() {
       _isSubmitting = true;
       _errorMessage = null;
     });
-
     try {
       final metadata = CanvasMetadata(
         width: canvasSize.width,
         height: canvasSize.height,
         strokeCount: _strokes.length,
       );
-
-      final result = await CanvasApiService.analyze(
-        strokes: _strokes,
-        metadata: metadata,
-      );
-
+      final result =
+          await CanvasApiService.analyze(strokes: _strokes, metadata: metadata);
       if (mounted) {
         context.go('/feedback', extra: {
           'mode': 'canvas',
           'sessionId': result.canvasSessionId,
-          // ⚠️ 점수/성취 메시지는 여기서 넘기지 않습니다.
-          // analyze() 응답에는 원래 점수가 없고(백엔드 CanvasAnalyzeResponse 참고),
-          // feedback_screen.dart가 GET /feedback을 직접 호출해서 진짜 점수를 받아옵니다.
-          //
-          // ── SFR-003C Action ③ 결정: PNG 스냅샷 대신 "재렌더링" 채택 ──
-          // requirement 원문은 CustomPainter.toImage()로 스냅샷 PNG를 만들어 오버레이
-          // 배경으로 쓰라고 되어 있으나, 서버로 PNG를 보내지 않는(REQ-003C-6) 이상
-          // PNG 바이트를 메모리에 들고 다닐 이유가 없다. 대신 획 데이터 자체를 넘겨
-          // feedback 화면에서 StrokePainter로 동일하게 다시 그린다(결과 동일, 메모리 절약).
-          // → requirement Outputs·Post-condition 문구는 이 결정에 맞춰 갱신 필요(팀 합의).
-          // 재렌더 배경이 실제 필기와 같은 굵기로 보이도록 strokeWidth도 함께 전달한다.
           'strokes': List<Stroke>.from(_strokes),
           'canvasMetadata': metadata,
           'strokeWidth': _strokeWidth,
@@ -136,106 +142,259 @@ class _CanvasInputScreenState extends State<CanvasInputScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final progress = (_charIndex + 1) / _chars.length;
     return Scaffold(
+      backgroundColor: Colors.white,
       appBar: AppBar(
-        title: const Text('글씨 연습'),
-        actions: [
-          IconButton(
-            icon: Icon(_showGrid ? Icons.grid_on_rounded : Icons.grid_off_rounded),
-            tooltip: _showGrid ? '격자 끄기' : '격자 켜기',
-            onPressed: () => setState(() => _showGrid = !_showGrid),
-          ),
-          IconButton(
-            icon: const Icon(Icons.undo_rounded),
-            tooltip: '한 획 지우기',
-            onPressed: _strokes.isEmpty ? null : _undoLastStroke,
-          ),
-          IconButton(
-            icon: const Icon(Icons.delete_outline_rounded),
-            tooltip: '전체 지우기',
-            onPressed: _strokes.isEmpty ? null : _clearCanvas,
-          ),
-        ],
+        leading: const BackButton(),
+        title: const Text('손글씨 연습'),
       ),
-      body: Column(
-        children: [
-          if (_errorMessage != null)
-            Container(
-              width: double.infinity,
-              color: Colors.red.shade50,
-              padding: const EdgeInsets.all(12),
-              child: Text(
-                _errorMessage!,
-                style: TextStyle(color: Colors.red.shade700, fontSize: 13),
+      body: SafeArea(
+        top: false,
+        child: Column(
+          children: [
+            _TabBar(tabs: _tabs, index: _tabIndex, onSelect: _selectTab),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+              child: Row(
+                children: [
+                  Text('진행률: ${_charIndex + 1}/${_chars.length}',
+                      style: const TextStyle(
+                          fontSize: 12, color: AppTheme.inkMuted)),
+                  const Spacer(),
+                  Text('${(progress * 100).round()}%',
+                      style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: AppTheme.primaryDark)),
+                  const SizedBox(width: 12),
+                  GestureDetector(
+                    onTap: _nextChar,
+                    child: const Text('다음 글자 →',
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: AppTheme.inkMuted)),
+                  ),
+                ],
               ),
             ),
-          Expanded(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                // 분석 요청 시 캔버스 메타데이터(width, height)로 사용할 크기를 보관
-                _canvasSize = Size(constraints.maxWidth, constraints.maxHeight);
-
-                return RepaintBoundary( // REQ-003C-5: 프레임 드롭 방지
-                  child: GestureDetector(
-                    onPanStart: _onPanStart,
-                    onPanUpdate: _onPanUpdate,
-                    onPanEnd: _onPanEnd,
-                    child: Container(
-                      width: double.infinity,
-                      height: double.infinity,
-                      color: Colors.white,
-                      child: CustomPaint(
-                        painter: StrokePainter(
-                          strokes: _strokes,
-                          currentStroke: _currentStroke,
-                          strokeWidth: _strokeWidth, // SFR-003C Inputs: 선 굵기
-                          showGrid: _showGrid,       // SFR-003C Inputs: 격자 표시
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  value: progress,
+                  minHeight: 6,
+                  backgroundColor: AppTheme.line,
+                  valueColor:
+                      const AlwaysStoppedAnimation(AppTheme.primaryColor),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                decoration: BoxDecoration(
+                  color: AppTheme.mintSurface,
+                  borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+                ),
+                child: Text(
+                  "점선을 따라 '$_currentChar' 글자를 연습해보세요",
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.primaryDark),
+                ),
+              ),
+            ),
+            if (_errorMessage != null)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Text(_errorMessage!,
+                    style: const TextStyle(
+                        color: AppTheme.errorColor, fontSize: 12)),
+              ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    _canvasSize =
+                        Size(constraints.maxWidth, constraints.maxHeight);
+                    return ClipRRect(
+                      borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+                      child: RepaintBoundary(
+                        child: GestureDetector(
+                          onPanStart: _onPanStart,
+                          onPanUpdate: _onPanUpdate,
+                          onPanEnd: _onPanEnd,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              border: Border.all(color: AppTheme.line),
+                              borderRadius:
+                                  BorderRadius.circular(AppTheme.radiusMd),
+                            ),
+                            child: CustomPaint(
+                              size: Size.infinite,
+                              painter: StrokePainter(
+                                strokes: _strokes,
+                                currentStroke: _currentStroke,
+                                strokeWidth: _strokeWidth,
+                                penColor: _penColor,
+                                guideText: _currentChar,
+                                showBaseline: true,
+                              ),
+                            ),
+                          ),
                         ),
                       ),
-                    ),
-                  ),
-                );
-              },
+                    );
+                  },
+                ),
+              ),
             ),
-          ),
-          _buildBottomControls(),
-        ],
+            _buildToolbar(),
+          ],
+        ),
       ),
     );
   }
 
-  /// SFR-003C Inputs: 하단 인라인 컨트롤 — 선 굵기 세그먼트 + 분석하기 버튼
-  Widget _buildBottomControls() {
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-        child: Row(
-          children: [
-            Expanded(
-              child: SegmentedButton<double>(
-                showSelectedIcon: false,
-                segments: const [
-                  ButtonSegment(value: _thinWidth, label: Text('가늘게')),
-                  ButtonSegment(value: _mediumWidth, label: Text('보통')),
-                  ButtonSegment(value: _thickWidth, label: Text('굵게')),
-                ],
-                selected: {_strokeWidth},
-                onSelectionChanged: (selection) =>
-                    setState(() => _strokeWidth = selection.first),
+  Widget _buildToolbar() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
+      child: Row(
+        children: [
+          _ToolChip(
+            icon: Icons.circle,
+            iconColor: _penColor,
+            label: '색상',
+            onTap: () => setState(
+                () => _colorIndex = (_colorIndex + 1) % _palette.length),
+          ),
+          const SizedBox(width: 8),
+          _ToolChip(
+            icon: Icons.brush_rounded,
+            label: '굵기',
+            onTap: () => setState(() {
+              _strokeWidth = switch (_strokeWidth) {
+                _thinWidth => _mediumWidth,
+                _mediumWidth => _thickWidth,
+                _ => _thinWidth,
+              };
+            }),
+          ),
+          const SizedBox(width: 8),
+          _ToolChip(
+            icon: Icons.cleaning_services_rounded,
+            label: '지우기',
+            onTap: _strokes.isEmpty ? null : _clearCanvas,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: MintButton(
+              label: '저장',
+              height: 48,
+              loading: _isSubmitting,
+              onPressed:
+                  _isSubmitting ? null : () => _submit(_canvasSize),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TabBar extends StatelessWidget {
+  final List<String> tabs;
+  final int index;
+  final ValueChanged<int> onSelect;
+  const _TabBar(
+      {required this.tabs, required this.index, required this.onSelect});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: AppTheme.line)),
+      ),
+      child: Row(
+        children: List.generate(tabs.length, (i) {
+          final selected = i == index;
+          return Expanded(
+            child: InkWell(
+              onTap: () => onSelect(i),
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                decoration: BoxDecoration(
+                  border: Border(
+                    bottom: BorderSide(
+                      color: selected
+                          ? AppTheme.primaryColor
+                          : Colors.transparent,
+                      width: 2,
+                    ),
+                  ),
+                ),
+                child: Text(
+                  tabs[i],
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight:
+                        selected ? FontWeight.w700 : FontWeight.w500,
+                    color: selected ? AppTheme.primaryDark : AppTheme.inkFaint,
+                  ),
+                ),
               ),
             ),
-            const SizedBox(width: 12),
-            FilledButton(
-              onPressed: _isSubmitting ? null : () => _submit(_canvasSize),
-              child: _isSubmitting
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                    )
-                  : const Text('분석하기'),
-            ),
+          );
+        }),
+      ),
+    );
+  }
+}
+
+class _ToolChip extends StatelessWidget {
+  final IconData icon;
+  final Color? iconColor;
+  final String label;
+  final VoidCallback? onTap;
+  const _ToolChip(
+      {required this.icon, required this.label, this.iconColor, this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final disabled = onTap == null;
+    return InkWell(
+      borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+          border: Border.all(color: AppTheme.line),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon,
+                size: 15,
+                color: disabled
+                    ? AppTheme.inkFaint
+                    : (iconColor ?? AppTheme.inkMuted)),
+            const SizedBox(width: 5),
+            Text(label,
+                style: TextStyle(
+                    fontSize: 12,
+                    color: disabled ? AppTheme.inkFaint : AppTheme.ink)),
           ],
         ),
       ),

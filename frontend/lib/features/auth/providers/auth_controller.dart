@@ -116,6 +116,23 @@ class AuthController extends Notifier<AuthState> {
     }
   }
 
+  /// Apple 로그인 (UI 시안 대응).
+  /// ⚠️ 백엔드에 Apple → Firebase 연동이 아직 없으므로, 실연동 모드에서는
+  ///    Kakao와 동일하게 미구현으로 처리한다(백엔드 협의 후 구현). mock 모드에서는
+  ///    화면 흐름 확인을 위해 테스트 계정으로 로그인한다.
+  Future<void> signInWithApple() async {
+    state = const AuthLoading();
+    try {
+      if (AppConfig.useMockApi) {
+        await _loginWithBackend(AuthProviderType.apple, idToken: 'mock-id-token');
+        return;
+      }
+      throw UnimplementedError('백엔드에 Apple 로그인 연동이 필요합니다.');
+    } catch (e) {
+      state = const AuthError('Apple 로그인은 현재 준비 중입니다.');
+    }
+  }
+
   Future<void> signOut() async {
     if (!AppConfig.useMockApi) {
       await FirebaseAuth.instance.signOut();

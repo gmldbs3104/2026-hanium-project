@@ -4,263 +4,283 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/analytics_service.dart';
 import '../../../core/app_theme.dart';
-import '../../../core/theme_provider.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../../auth/providers/auth_state.dart';
 import '../providers/mode_provider.dart';
 
-/// 메인 화면 - 모드 분기 (SFR-002)
+/// 홈 화면 (메인 셸 탭 0)
 ///
-/// REQ-002-1: 두 가지 모드를 명확히 구분하여 표시
-/// REQ-002-2: 모드 선택 후 화면 전환은 500ms 이내 완료
-/// REQ-002-3: 두 모드는 서로 다른 독립된 파이프라인으로 연결 (로직 공유 X)
-/// Side Effect: 모드 선택 이벤트가 Firebase Analytics에 로깅됨 (현재는 로그 출력으로 대체)
+/// SFR-002: 두 가지 분석 모드(연습/실전)로 진입. 모드 선택 이벤트는 Analytics에 로깅.
+/// 학습 카테고리 카드에서 각 연습/실전 플로우로 진입한다.
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
 
-  void _selectMode(BuildContext context, WidgetRef ref, AnalysisMode mode) {
+  void _goPractice(BuildContext context, WidgetRef ref, AnalysisMode mode,
+      String route) {
     ref.read(selectedModeProvider.notifier).state = mode;
-
-    // SFR-002 Side Effect: 모드 선택 이벤트를 Firebase Analytics에 로깅.
-    // (mock 모드에서는 AnalyticsService 내부에서 debugPrint로 대체됨)
     AnalyticsService.logModeSelected(mode.name);
-
-    if (mode == AnalysisMode.canvas) {
-      context.go('/canvas');
+    if (route == '/image-capture') {
+      context.push(route);
     } else {
-      context.go('/image-capture');
+      context.go(route);
     }
-  }
-
-  /// SFR-001: 로그아웃. signOut()이 인증 상태를 초기화하면 라우터 가드가
-  /// 자동으로 /login 으로 되돌리므로 별도 화면 이동은 필요 없다.
-  Future<void> _confirmSignOut(BuildContext context, WidgetRef ref) async {
-    final shouldSignOut = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('로그아웃'),
-        content: const Text('로그아웃하시겠어요?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('취소'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('로그아웃'),
-          ),
-        ],
-      ),
-    );
-
-    if (shouldSignOut == true) {
-      await ref.read(authControllerProvider.notifier).signOut();
-    }
-  }
-
-  /// REQ-009-7: 계정 삭제 진입점. 되돌릴 수 없는 작업이므로 명시적 경고 후 진행한다.
-  /// 실제 데이터 삭제는 백엔드가 수행하며, 성공 시 라우터 가드가 /login 으로 되돌린다.
-  Future<void> _confirmDeleteAccount(BuildContext context, WidgetRef ref) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('계정 삭제'),
-        content: const Text(
-          '계정을 삭제하면 학습 기록과 저장된 이미지를 포함한 모든 데이터가 삭제되며, '
-          '이 작업은 되돌릴 수 없습니다.\n\n정말 삭제하시겠어요?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('취소'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            style: TextButton.styleFrom(foregroundColor: AppTheme.errorColor),
-            child: const Text('삭제'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed != true || !context.mounted) return;
-
-    // context가 삭제 성공 시 /login 으로 사라질 수 있으므로 messenger를 미리 확보한다.
-    final messenger = ScaffoldMessenger.of(context);
-    final success = await ref.read(authControllerProvider.notifier).deleteAccount();
-
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(
-          success ? '계정이 삭제되었습니다.' : '계정 삭제에 실패했습니다. 잠시 후 다시 시도해주세요.',
-        ),
-      ),
-    );
   }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final authState = ref.watch(authControllerProvider);
-    final userLabel =
-        authState is AuthAuthenticated ? (authState.user.name ?? authState.user.email) : null;
+    final name = authState is AuthAuthenticated
+        ? (authState.user.name ?? authState.user.email)
+        : '사용자';
+    final initial = name.isNotEmpty ? name.substring(0, 1) : '유';
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('AI 손글씨 교정'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.bar_chart_rounded),
-            tooltip: '학습 대시보드',
-            onPressed: () => context.go('/dashboard'),
-          ),
-          // SFR-007 Inputs: 테마(light/dark) 선택
-          PopupMenuButton<ThemeMode>(
-            icon: const Icon(Icons.brightness_6_rounded),
-            tooltip: '테마',
-            initialValue: ref.watch(themeModeProvider),
-            onSelected: (mode) =>
-                ref.read(themeModeProvider.notifier).state = mode,
-            itemBuilder: (context) => const [
-              PopupMenuItem(value: ThemeMode.system, child: Text('시스템 설정')),
-              PopupMenuItem(value: ThemeMode.light, child: Text('라이트')),
-              PopupMenuItem(value: ThemeMode.dark, child: Text('다크')),
-            ],
-          ),
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.account_circle_rounded),
-            tooltip: '계정',
-            onSelected: (value) {
-              if (value == 'logout') _confirmSignOut(context, ref);
-              if (value == 'delete_account') _confirmDeleteAccount(context, ref);
-            },
-            itemBuilder: (context) => [
-              if (userLabel != null)
-                PopupMenuItem<String>(
-                  enabled: false,
-                  child: Text(
-                    userLabel,
-                    style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
-                  ),
-                ),
-              if (userLabel != null) const PopupMenuDivider(),
-              const PopupMenuItem<String>(
-                value: 'logout',
-                child: Row(
-                  children: [
-                    Icon(Icons.logout_rounded, size: 20),
-                    SizedBox(width: 12),
-                    Text('로그아웃'),
-                  ],
-                ),
-              ),
-              const PopupMenuItem<String>(
-                value: 'delete_account',
-                child: Row(
-                  children: [
-                    Icon(Icons.delete_forever_rounded, size: 20, color: AppTheme.errorColor),
-                    SizedBox(width: 12),
-                    Text('계정 삭제', style: TextStyle(color: AppTheme.errorColor)),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                '오늘은 어떤 모드로\n글씨를 교정해볼까요?',
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, height: 1.3),
-              ),
-              const SizedBox(height: 24),
-              Expanded(
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: _ModeCard(
-                        title: '글씨 연습',
-                        subtitle: '캔버스에 직접 필기하며\n획순·자간·크기를 분석합니다',
-                        icon: Icons.draw_rounded,
-                        color: AppTheme.canvasModeColor,
-                        onTap: () => _selectMode(context, ref, AnalysisMode.canvas),
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: _ModeCard(
-                        title: '실전 모드',
-                        subtitle: '사진을 촬영해\n크기 균일성·기울기를 분석합니다',
-                        icon: Icons.camera_alt_rounded,
-                        color: AppTheme.imageModeColor,
-                        onTap: () => _selectMode(context, ref, AnalysisMode.image),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
+    return Container(
+      color: Colors.white,
+      child: SafeArea(
+        bottom: false,
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+          children: [
+            _Header(name: name, initial: initial, level: 'LV5', title: '손글씨 마스터'),
+            const SizedBox(height: 20),
+            _StreakBanner(
+              days: 21,
+              onStart: () =>
+                  _goPractice(context, ref, AnalysisMode.canvas, '/character-practice'),
+            ),
+            const SizedBox(height: 28),
+            const Text(
+              '학습 카테고리',
+              style: TextStyle(
+                  fontSize: 18, fontWeight: FontWeight.bold, color: AppTheme.ink),
+            ),
+            const SizedBox(height: 14),
+            _CategoryCard(
+              title: '손글씨 기초',
+              subtitle: '필기구 쥐는 올바른 자세',
+              icon: Icons.menu_book_rounded,
+              onTap: () => context.go('/basics'),
+            ),
+            const SizedBox(height: 12),
+            _CategoryCard(
+              title: '손글씨 연습',
+              subtitle: '자음, 모음, 받침 글자 연습',
+              icon: Icons.edit_rounded,
+              onTap: () =>
+                  _goPractice(context, ref, AnalysisMode.canvas, '/character-practice'),
+            ),
+            const SizedBox(height: 12),
+            _CategoryCard(
+              title: '문장 쓰기',
+              subtitle: '짧은 문장부터 캘리그라피까지',
+              icon: Icons.description_rounded,
+              onTap: () =>
+                  _goPractice(context, ref, AnalysisMode.canvas, '/sentence-practice'),
+            ),
+            const SizedBox(height: 12),
+            _CategoryCard(
+              title: '실전 모드',
+              subtitle: 'AI분석을 통해 실전처럼 글쓰기',
+              icon: Icons.assignment_rounded,
+              onTap: () =>
+                  _goPractice(context, ref, AnalysisMode.image, '/image-capture'),
+            ),
+          ],
         ),
       ),
     );
   }
 }
 
-class _ModeCard extends StatelessWidget {
+class _Header extends StatelessWidget {
+  final String name;
+  final String initial;
+  final String level;
+  final String title;
+  const _Header(
+      {required this.name,
+      required this.initial,
+      required this.level,
+      required this.title});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('안녕하세요,',
+                  style: TextStyle(fontSize: 14, color: AppTheme.inkMuted)),
+              const SizedBox(height: 2),
+              Text('$name님',
+                  style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      color: AppTheme.ink)),
+            ],
+          ),
+        ),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Text(level,
+                style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                    color: AppTheme.ink)),
+            Text(title,
+                style: const TextStyle(fontSize: 11, color: AppTheme.inkMuted)),
+          ],
+        ),
+        const SizedBox(width: 10),
+        CircleAvatar(
+          radius: 20,
+          backgroundColor: AppTheme.mint,
+          child: Text(initial,
+              style: const TextStyle(
+                  color: Colors.white, fontWeight: FontWeight.bold)),
+        ),
+      ],
+    );
+  }
+}
+
+class _StreakBanner extends StatelessWidget {
+  final int days;
+  final VoidCallback onStart;
+  const _StreakBanner({required this.days, required this.onStart});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [AppTheme.bannerStart, AppTheme.bannerEnd],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(AppTheme.radiusLg),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('놀라워요!',
+                    style: TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF14503F))),
+                const SizedBox(height: 8),
+                Text(
+                  '$days일동안 연속으로 출석하셨어요.\n의지가 대단하시네요! 곧 글쓰기 마스터!\n오늘의 글쓰기를 시작하러 가볼까요?',
+                  style: const TextStyle(
+                      fontSize: 12.5, height: 1.5, color: Color(0xFF2C6B57)),
+                ),
+                const SizedBox(height: 14),
+                ElevatedButton(
+                  onPressed: onStart,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.mintStrong,
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(AppTheme.radiusMd)),
+                  ),
+                  child: const Text('지금 시작하기',
+                      style: TextStyle(
+                          fontSize: 13, fontWeight: FontWeight.w700)),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Column(
+            children: [
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text('D-$days',
+                    style: const TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
+                        color: AppTheme.primaryDark)),
+              ),
+              const SizedBox(height: 10),
+              const Icon(Icons.edit_rounded, color: Color(0xFF3E8A72), size: 28),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CategoryCard extends StatelessWidget {
   final String title;
   final String subtitle;
   final IconData icon;
-  final Color color;
   final VoidCallback onTap;
-
-  const _ModeCard({
+  const _CategoryCard({
     required this.title,
     required this.subtitle,
     required this.icon,
-    required this.color,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: color.withValues(alpha: 0.08),
-      borderRadius: BorderRadius.circular(20),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(20),
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 28),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: color.withValues(alpha: 0.25)),
-          ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-                child: Icon(icon, size: 32, color: Colors.white),
+    return InkWell(
+      borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+          border: Border.all(color: AppTheme.line),
+          boxShadow: AppTheme.cardShadow,
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: AppTheme.ink)),
+                  const SizedBox(height: 4),
+                  Text(subtitle,
+                      style: const TextStyle(
+                          fontSize: 13, color: AppTheme.inkMuted)),
+                ],
               ),
-              const SizedBox(height: 16),
-              Text(
-                title,
-                style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: color),
+            ),
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: AppTheme.mintSurface,
+                borderRadius: BorderRadius.circular(12),
               ),
-              const SizedBox(height: 8),
-              Text(
-                subtitle,
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 12, color: Colors.grey.shade700, height: 1.4),
-              ),
-            ],
-          ),
+              child: Icon(icon, color: AppTheme.primaryDark, size: 22),
+            ),
+          ],
         ),
       ),
     );
