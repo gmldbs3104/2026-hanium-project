@@ -2,6 +2,8 @@
 
 > 작성일: 2026-07-26
 > 목적: 지금까지 뭐가 연결됐는지, 그리고 AI팀 브랜치(`feature/ai-setup`)를 합치려면 뭘 해야 하는지 정리
+>
+> **새 컴퓨터에서 처음 세팅하는 경우**: 이 문서 말고 [`SETUP.md`](SETUP.md)와 `scripts/setup.ps1`(Windows) / `scripts/setup.sh`(Mac/Linux)를 먼저 보세요.
 
 ---
 
@@ -104,6 +106,12 @@ git merge origin/feature/ai-setup
 **③ 의존성 추가**
 - `backend/requirements.txt`에 `torch`, `craft-text-detector` 등 추가 필요
 - 용량이 꽤 크고, CPU 환경에서 추론 속도가 1.8~11초로 측정됨(목표는 500ms) → GPU 없이 쓸 만한 속도가 나올지 팀 논의 필요. 최초 로드는 프로세스 시작 후 첫 요청에서 ~10초 걸리고 이후론 빨라짐(싱글턴 로딩)
+
+**⚠️ Windows에서만 발생하는 함정 — 260자 경로 제한**
+- 이 저장소 경로가 깊으면(`...\2026-hanium-project\2026-hanium-project\backend\venv\...`), `torch` 설치 중 라이선스 파일의 깊은 하위 경로(`.../third_party/kineto/.../googlemock/scripts/generator`)가 Windows 기본 260자 경로 제한(`MAX_PATH`)에 걸려 `WinError 206`으로 설치가 중간에 실패한다.
+- 정석 해결책은 관리자 권한으로 레지스트리 `HKLM\SYSTEM\CurrentControlSet\Control\FileSystem\LongPathsEnabled=1`을 켜는 것이지만, 관리자 권한이 없으면 불가능하다.
+- 우회법: `torch`/`opencv`/`craft-text-detector` 등을 저장소 밖의 **짧은 경로**(예: `C:\ai_venv`)에 별도 venv로 설치한 뒤, `backend/venv/Lib/site-packages/`에 그 경로를 가리키는 `.pth` 파일(한 줄짜리 텍스트 파일, 내용은 그 경로 하나)을 만들어 `backend/venv`가 그 패키지들을 참조하도록 연결한다. 이 우회는 **git에 안 잡히는 로컬 상태**라 컴퓨터마다 다시 해야 한다 (아래 `scripts/setup.ps1`이 자동으로 감지해서 처리해줌).
+- Mac/Linux는 이 문제 자체가 없다 (경로 길이 제한이 훨씬 김).
 
 **④ 캔버스 모드는 사실 지금과 크게 안 달라짐**
 - LSTM 2곳은 여전히 스텁이라, 캔버스 쪽은 병합해도 실질적 동작 변화는 거의 없음 (지금처럼 규칙/기하 기반 근사치 그대로 사용)
