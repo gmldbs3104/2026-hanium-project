@@ -30,3 +30,7 @@ class DashboardResponse(BaseModel):
     score_trend: List[ScoreTrendPoint]
     recommended_exercises: List[Any] = []  # TODO: 연습 예문 DB 구축 후 구현
     is_new_user: bool = False              # True이면 프론트에서 온보딩 뷰 표시 (REQ-008-5)
+    # 게이미피케이션(요구사항 문서에 없는 프론트 자체 추가 기능) — period/mode 필터와 무관하게
+    # 항상 "전체 기간" 기준으로 계산한다.
+    level: int = 1                # 1 + 전체 누적 세션 수 // 5
+    streak_days: int = 0          # 오늘(또는 어제까지) 기준 연속 연습일 수

@@ -4,12 +4,13 @@ from typing import Optional
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from app.models.correction import CanvasAnalysisResult, ImageAnalysisResult
 from app.core.config import settings
 
 DASHBOARD_CACHE_TTL = 3600  # SFR-008: 집계 결과 1시간 캐시
+SESSIONS_PER_LEVEL = 5  # 게이미피케이션: 누적 세션 5회당 1레벨
 
 
 def _since(period: str) -> Optional[datetime]:
@@ -44,6 +45,61 @@ def _improvement_rate(ordered_scores: list[float]) -> float:
     if first_avg == 0:
         return 0.0
     return round((second_avg - first_avg) / first_avg * 100, 1)
+
+
+def _consecutive_streak(active_dates: set[date_type]) -> int:
+    """오늘(아직 연습 안 했으면 어제)부터 거꾸로 훑어 끊기지 않고 이어진 날짜 수."""
+    if not active_dates:
+        return 0
+    today = datetime.utcnow().date()
+    cursor = today if today in active_dates else today - timedelta(days=1)
+    streak = 0
+    while cursor in active_dates:
+        streak += 1
+        cursor -= timedelta(days=1)
+    return streak
+
+
+async def _compute_level_and_streak(db: AsyncSession, user_id: UUID) -> tuple[int, int]:
+    """
+    게이미피케이션 요약치. period/mode 필터와 무관하게 항상 전체 기간 기준으로 계산한다
+    (요구사항 문서에 없는 프론트 자체 추가 기능 — 정의는 팀 협의 결과).
+
+    레벨 = 1 + 전체 누적 세션 수 // SESSIONS_PER_LEVEL
+      - 캔버스는 session_id 단위(문자별로 여러 행 존재), 이미지는 행 하나 = 세션 하나
+    연속 출석 = 캔버스/이미지 어느 쪽이든 하루에 한 번 이상 연습을 완료한 날의 연속 일수
+    """
+    canvas_session_ids = (
+        await db.execute(
+            select(CanvasAnalysisResult.session_id)
+            .where(CanvasAnalysisResult.user_id == user_id)
+            .distinct()
+        )
+    ).scalars().all()
+    image_session_count = (
+        await db.execute(
+            select(func.count())
+            .select_from(ImageAnalysisResult)
+            .where(ImageAnalysisResult.user_id == user_id)
+        )
+    ).scalar_one()
+    total_sessions = len(canvas_session_ids) + image_session_count
+    level = 1 + total_sessions // SESSIONS_PER_LEVEL
+
+    canvas_dates = (
+        await db.execute(
+            select(CanvasAnalysisResult.created_at).where(CanvasAnalysisResult.user_id == user_id)
+        )
+    ).scalars().all()
+    image_dates = (
+        await db.execute(
+            select(ImageAnalysisResult.created_at).where(ImageAnalysisResult.user_id == user_id)
+        )
+    ).scalars().all()
+    active_dates = {d.date() for d in canvas_dates} | {d.date() for d in image_dates}
+    streak_days = _consecutive_streak(active_dates)
+
+    return level, streak_days
 
 
 async def get_dashboard_data(
@@ -113,8 +169,11 @@ async def get_dashboard_data(
     total_canvas = len(c_sessions)
     total_image = len(i_sessions)
 
+    # period/mode 필터와 무관하게 항상 전체 기간 기준 (이번 조회가 텅 비어도 레벨/연속출석은 유지)
+    level, streak_days = await _compute_level_and_streak(db, user_id)
+
     if total_canvas + total_image == 0:
-        return _empty_dashboard()
+        return _empty_dashboard(level, streak_days)
 
     # --- period_summary ---
     # 날짜 순으로 정렬된 전체 점수 (improvement_rate 계산용)
@@ -177,10 +236,12 @@ async def get_dashboard_data(
         "score_trend": score_trend,
         "recommended_exercises": [],  # TODO: 연습 예문 DB 구축 후 구현
         "is_new_user": False,
+        "level": level,
+        "streak_days": streak_days,
     }
 
 
-def _empty_dashboard() -> dict:
+def _empty_dashboard(level: int = 1, streak_days: int = 0) -> dict:
     return {
         "period_summary": {
             "total_sessions": 0,
@@ -193,4 +254,6 @@ def _empty_dashboard() -> dict:
         "score_trend": [],
         "recommended_exercises": [],
         "is_new_user": True,
+        "level": level,
+        "streak_days": streak_days,
     }
