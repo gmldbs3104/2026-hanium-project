@@ -12,13 +12,22 @@ class BoundingBox(BaseModel):
 class DetectedChar(BaseModel):
     char_id: str
     bounding_box: BoundingBox
+    angle: Optional[float] = None            # 세로획 slant (CRAFT). 측정 불가 시 None
+    angle_reliable: Optional[bool] = None    # False면 angle 측정 불가 글자
+    confidence: Optional[float] = None       # 탐지 신뢰도 0.0~1.0
 
 
 class ImagePreprocessResponse(BaseModel):
     image_session_id: str
     width: int
     height: int
-    s3_image_url: Optional[str] = None  # S3 미설정 시 null
+    s3_image_url: Optional[str] = None  # S3 미설정 시 null (원본 사진)
+    quality_score: Optional[int] = None      # REQ-003I-4, 40점 미만이면 재촬영 권장
+    retake_required: Optional[bool] = None
+    # ⚠️ AI 전처리(deskew+리사이즈) 후 이미지 — width/height 및 이후 detect의
+    # bounding_box는 전부 이 이미지 기준 좌표계다. 오버레이는 원본 사진이 아니라
+    # 이 이미지 위에 그려야 한다 (ai/BACKEND_INTEGRATION.md §5-2).
+    preprocessed_image_base64: Optional[str] = None  # PNG, base64
 
 
 class ImageDetectResponse(BaseModel):
@@ -42,6 +51,9 @@ class ImageAnalysisResponse(BaseModel):
     overall_score: int
     char_analyses: List[ImageCharAnalysis]
     s3_image_url: Optional[str] = None
+    overall_tilt: Optional[str] = None            # "straight" | "leaning_right" | "leaning_left"
+    total_grade: Optional[str] = None             # "우수" | "보통" | "불량"
+    clarity_warnings: List[str] = []              # 명료도 경고 (점수엔 반영 안 됨)
 
 
 class ImageFeedbackItem(BaseModel):

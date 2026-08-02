@@ -1,3 +1,7 @@
+import base64
+
+import cv2
+import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from uuid import uuid4
 from datetime import datetime
@@ -10,12 +14,10 @@ from app.models.user import User
 from app.models.correction import ImageAnalysisResult
 from app.services.session_cache import get_session, set_session, delete_pattern
 from app.services.s3_service import upload_handwriting_image
-from app.services.image_preprocessing import preprocess_image, detect_char_bboxes
-from app.services.image_analysis import (
-    analyze_size_uniformity,
-    analyze_slant,
-    analyze_line_alignment,
-    calculate_overall_score,
+from app.services.ai_adapters import (
+    preprocess_image_full,
+    craft_detect_chars,
+    analyze_size_angle,
 )
 from app.schemas.image import (
     ImagePreprocessResponse,
@@ -38,63 +40,82 @@ class ImageConfirmRequest(BaseModel):
     save_image: bool = False
 
 
+def _encode_png_base64(binary_image: np.ndarray) -> str:
+    ok, buf = cv2.imencode(".png", binary_image)
+    if not ok:
+        raise RuntimeError("전처리 이미지를 PNG로 인코딩하지 못했습니다.")
+    return base64.b64encode(buf.tobytes()).decode("ascii")
+
+
 @router.post("/preprocess", response_model=ImagePreprocessResponse)
 async def preprocess(file: UploadFile = File(...)):
     """
-    SFR-003I: 카메라 이미지 입력 및 OpenCV 전처리.
-    이진화된 이미지 메타데이터를 캐시에 저장하고 image_session_id를 발급한다.
+    SFR-003I: 카메라 이미지 입력 및 AI 전처리(이진화+deskew+리사이즈).
+
+    ⚠️ 이후 /detect(CRAFT)는 이 전처리 출력을 전제로 정확도가 검증되어 있다
+    (ai/BACKEND_INTEGRATION.md §5-1) — 다른 이진화 방식과 섞지 않는다.
     """
     if file.content_type not in ALLOWED_CONTENT_TYPES:
         raise HTTPException(status_code=400, detail="JPG, PNG, WEBP 형식만 지원합니다.")
 
     image_bytes = await file.read()
     try:
-        binary_image, width, height = preprocess_image(image_bytes)
+        pre = preprocess_image_full(image_bytes)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
     image_session_id = str(uuid4())
+    binary_image = pre["binary_image"]
 
-    # S3 업로드 (미설정 시 None 반환 — 서비스 계속 동작)
+    # S3 업로드 (미설정 시 None 반환 — 서비스 계속 동작). 원본 촬영 이미지를 그대로 보관.
     s3_url = await upload_handwriting_image(image_bytes, image_session_id, file.content_type)
 
-    # numpy 배열은 tolist()로 직렬화해서 캐시 저장
+    # numpy 배열은 tolist()로 직렬화해서 캐시 저장 (전처리 후 이미지 — 이후 좌표계 기준)
     await set_session(image_session_id, {
         "binary_image": binary_image.tolist(),
-        "width": width,
-        "height": height,
+        "width": pre["width"],
+        "height": pre["height"],
         "s3_image_url": s3_url,
     })
 
     return ImagePreprocessResponse(
         image_session_id=image_session_id,
-        width=width,
-        height=height,
+        width=pre["width"],
+        height=pre["height"],
         s3_image_url=s3_url,
+        quality_score=round(pre["quality_score"]["total"]),
+        retake_required=pre["retake_required"],
+        preprocessed_image_base64=_encode_png_base64(binary_image),
     )
 
 
 @router.post("/{image_session_id}/detect", response_model=ImageDetectResponse)
 async def detect(image_session_id: str):
     """
-    SFR-004I: 문자 영역 Bounding Box 탐지.
-    현재는 OpenCV contour 기반 placeholder — 추후 CRAFT 모델로 교체 예정.
+    SFR-004I: 문자 영역 Bounding Box 탐지 (CRAFT, ai/detection/craft_detector.py).
     """
     session_data = await get_session(image_session_id)
     if session_data is None:
         raise HTTPException(status_code=404, detail="유효하지 않거나 만료된 session_id 입니다.")
 
-    import numpy as np
-    binary_image = np.array(session_data["binary_image"], dtype=np.uint8)
-    detected = detect_char_bboxes(binary_image)
+    detected = craft_detect_chars(
+        session_data["binary_image"], session_data["width"], session_data["height"]
+    )
 
+    # analyze()가 angle/confidence 등 전체 필드를 그대로 참조하므로 원본 그대로 캐시
     session_data["detected_chars"] = detected
     await set_session(image_session_id, session_data)
 
     return ImageDetectResponse(
         image_session_id=image_session_id,
         detected_chars=[
-            DetectedChar(char_id=c["char_id"], bounding_box=BoundingBox(**c["bounding_box"]))
+            DetectedChar(
+                char_id=c["char_id"],
+                bounding_box=BoundingBox(**c["bounding_box"]),
+                angle=c.get("angle"),
+                angle_reliable=c.get("angle_reliable"),
+                confidence=c.get("confidence"),
+            )
             for c in detected
         ],
         total_detected=len(detected),
@@ -108,7 +129,7 @@ async def analyze(
     current_user: User = Depends(get_current_user),
 ):
     """
-    SFR-005I: 크기 균일성 / 기울기 / 줄 정렬 분석 후 DB 저장.
+    SFR-005I: 크기 균일성 / 기울기 / 줄 정렬 분석 후 DB 저장 (ai/analysis/handwriting_analyzer.py).
     """
     session_data = await get_session(image_session_id)
     if session_data is None:
@@ -118,22 +139,24 @@ async def analyze(
     if detected_chars is None:
         raise HTTPException(status_code=400, detail="먼저 /detect 엔드포인트를 호출해야 합니다.")
 
-    height = session_data.get("height", 1000)
+    binary_image = np.array(session_data["binary_image"], dtype=np.uint8)
+    ana = analyze_size_angle(detected_chars, binary_image)
 
-    size_uniformity_score, char_size_analyses = analyze_size_uniformity(detected_chars)
-    avg_slant_angle, slant_consistency_score = analyze_slant(detected_chars)
-    line_alignment_score = analyze_line_alignment(detected_chars, height)
-    overall_score = calculate_overall_score(
-        size_uniformity_score, slant_consistency_score, line_alignment_score
-    )
+    # DB의 점수 컬럼은 Integer라 반올림해서 저장 (응답 스키마도 기존 계약 유지를 위해 int)
+    size_uniformity_score = round(ana["size_uniformity_score"])
+    slant_consistency_score = round(ana["tilt_consistency_score"])
+    line_alignment_score = round(ana["line_alignment_score"])
+    overall_score = round(ana["total_score"])
+    avg_slant_angle = ana["mean_angle"]
 
     char_analyses = [
         ImageCharAnalysis(
             char_id=c["char_id"],
-            size_deviation=c["size_deviation"],
-            slant_angle=avg_slant_angle,
+            # size_ratio(1.0=정상)를 기존 계약의 "편차(%)" 의미로 변환
+            size_deviation=round((c["size_ratio"] - 1.0) * 100, 1),
+            slant_angle=c["angle"],
         )
-        for c in char_size_analyses
+        for c in ana["chars"]
     ]
 
     result_row = ImageAnalysisResult(
@@ -159,6 +182,9 @@ async def analyze(
         "slant_consistency_score": slant_consistency_score,
         "line_alignment_score": line_alignment_score,
         "overall_score": overall_score,
+        "overall_tilt": ana["overall_tilt"],
+        "total_grade": ana["total_grade"],
+        "clarity_warnings": ana["clarity_warnings"],
         "char_analyses": [c.model_dump() for c in char_analyses],
     }
     await set_session(image_session_id, session_data)
@@ -172,6 +198,9 @@ async def analyze(
         overall_score=overall_score,
         char_analyses=char_analyses,
         s3_image_url=session_data.get("s3_image_url"),
+        overall_tilt=ana["overall_tilt"],
+        total_grade=ana["total_grade"],
+        clarity_warnings=ana["clarity_warnings"],
     )
 
 
@@ -227,6 +256,14 @@ async def feedback(image_session_id: str):
             target_id="global",
             feedback_message="줄 정렬이 잘 되어 있습니다!",
             severity="good",
+        ))
+
+    # 명료도 경고 — 점수엔 반영하지 않고 경고 문구로만 안내 (팀 결정, ai/BACKEND_INTEGRATION.md §1.1)
+    for warning in results.get("clarity_warnings") or []:
+        feedback_items.append(ImageFeedbackItem(
+            target_id="global",
+            feedback_message=warning,
+            severity="warning",
         ))
 
     overall_score = results["overall_score"]
