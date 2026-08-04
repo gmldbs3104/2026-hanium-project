@@ -27,6 +27,8 @@ alembic upgrade head
 ### 4. 서버 실행
 uvicorn app.main:app --reload --port 8000
 
+http://localhost:8000/docs
+
 ## 브랜치 전략
 - main: 배포용
 - dev: 통합 개발
