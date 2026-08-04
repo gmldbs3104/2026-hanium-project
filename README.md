@@ -37,15 +37,12 @@ http://localhost:8000/docs
 ### Frontend Flutter 실행 방법
 ---
 ### 1. 처음 한 번만
-Flutter SDK 설치
+- Flutter SDK 설치
+- cd frontend
+- flutter pub get
 
-cd frontend
-
-flutter pub get
----
-### test때마다
-기본으로 DB·Redis, backend 가상환경 켜기
-
-(cd frontend에서) flutter run -d chrome
+### 2. test때마다
+- 기본으로 DB·Redis, backend 가상환경 켜기
+- (cd frontend에서) flutter run -d chrome
 
 http://127.0.0.1:8080
