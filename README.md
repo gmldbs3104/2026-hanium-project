@@ -8,12 +8,15 @@
 
 ### 1. 환경변수 설정
 cd backend
+
 cp .env.example .env
 # .env 파일을 열어서 실제 값 입력
 
 ### 2. 가상환경 및 패키지 설치
 python -m venv venv
+
 source venv/bin/activate  # Windows: venv\Scripts\activate
+
 pip install -r requirements.txt
 
 ### 3. DB 마이그레이션
