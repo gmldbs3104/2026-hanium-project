@@ -33,3 +33,20 @@ http://localhost:8000/docs
 - main: 배포용
 - dev: 통합 개발
 - feature/*: 기능 개발
+
+### Frontend Flutter 실행 방법
+
+### 1. 처음 한 번만
+Flutter SDK 설치 → 환경변수 Path에 flutter\bin 추가
+cd frontend
+
+flutter pub get
+
+### test때마다
+기본으로 DB·Redis, backend 가상환경 켜기
+
+cd frontend
+
+flutter run -d chrome
+
+http://127.0.0.1:8080
