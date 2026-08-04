@@ -43,6 +43,6 @@ http://localhost:8000/docs
 
 ### 2. test때마다
 - 기본으로 DB·Redis, backend 가상환경 켜기
-- (cd frontend에서) flutter run -d chrome
+- (cd frontend에서) flutter run -d chrome --web-port=5000
 
 http://127.0.0.1:8080
