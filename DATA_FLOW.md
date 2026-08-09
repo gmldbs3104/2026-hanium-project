@@ -153,12 +153,12 @@
 
 지금 당장 망가지진 않지만 **AI가 보내는 값이 버려지고 있는 것.**
 
-| # | 안 맞는 곳 | 고칠 파트 |
-|---|---|---|
-| 8 | 자간·행간 점수가 백엔드에 도달하지 않는다 (종합 점수 안에만 녹아 있음) | 백엔드 |
-| 9 | 탐지 각도·신뢰도가 프론트에 도달하지 않는다 (**프론트는 이미 받을 준비 완료**) | 백엔드 |
-| 10 | 전처리 방식(연한 글씨 보존 모드 여부)이 응답에 안 실린다 — 유령 박스 경고의 재료 | 백엔드 |
-| 11 | 설정 파일의 이미지 점수 가중치 3개가 **아무 데서도 안 쓰인다** | 백엔드 (문서화) |
+| # | 안 맞는 곳 | 고칠 파트 | 상태 |
+|---|---|---|---|
+| 8 | 자간·행간 점수가 백엔드에 도달하지 않는다 (종합 점수 안에만 녹아 있음) | 백엔드 | ✅ 2026-08-09 해결 — `ImageAnalysisResponse.spacing_uniformity_score`/`line_spacing_uniformity_score` 추가, `analyze_size_angle()`의 `metrics["spacing_uniformity"|"line_spacing_uniformity"]`를 그대로 노출. DB 컬럼·대시보드 적립은 아직 없음(응답 레벨만 연결) |
+| 9 | 탐지 각도·신뢰도가 프론트에 도달하지 않는다 (**프론트는 이미 받을 준비 완료**) | 백엔드 | ✅ 이미 해결돼 있었음(문서가 낡아 있었다) — `/detect`가 `angle`/`angle_reliable`/`confidence`를 이미 채워 보냄. 프론트가 `angle_reliable`만 안 읽고 있어서 2026-08-09에 `DetectedChar.angleReliable` 파싱 추가 |
+| 10 | 전처리 방식(연한 글씨 보존 모드 여부)이 응답에 안 실린다 — 유령 박스 경고의 재료 | 백엔드 | ✅ 2026-08-09 해결 — `ImagePreprocessResponse.preservation_mode` 추가(`applied_filters`에 `"gentle_stretch"` 포함 여부로 판정) |
+| 11 | 설정 파일의 이미지 점수 가중치 3개가 **아무 데서도 안 쓰인다** | 백엔드 (문서화) | 미해결 |
 
 ---
 
@@ -258,6 +258,14 @@
 - A를 고칠 때 걸림 — 글자 영역 표기가 백엔드 `w/h` vs AI `width/height`.
 - ⚠️ STATUS·CLAUDE.md의 **"스텁 대신 `analyze_stroke_order_by_position`이 대신 동작한다"** 는
   **AI 패키지 안에서만 참**이고 통합본에서는 거짓이다.
+- **A·B·C·E·F는 사실상 한 뿌리**다 — `ai/canvas/canvas_quality_analyzer.py`의
+  `analyze_canvas_writing()`이 이미 다 계산해서 반환하지만(획순 위치·모양 비교, 필압·속도
+  프로필, 교정 플래그, 자간 40%, 크기 상대 기준 전부 포함) `backend/app/services/ai_adapters.py`가
+  이 함수를 아예 import하지 않는다. `analyze-detail` 라우트를 이 함수 호출로 바꾸면 A·C·E·F가
+  한 번에 딸려 온다. B는 독립적으로도 뺄 수 있지만(`_stroke_speed_stats`는 `target_text` 불필요)
+  현재 private 헬퍼라 어댑터에 노출하는 작업이 별도로 필요하다. 2026-08-09 재확인: 여전히 미해결
+  — target_text 미전달(§4-3), `w/h` vs `width/height` 키 불일치, 응답 스키마·DB 컬럼 추가가
+  걸려 있어 §5의 8·10번 같은 "몇 줄 연결"이 아니라 별도 설계가 필요한 작업이다.
 
 ---
 

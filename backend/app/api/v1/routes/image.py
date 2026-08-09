@@ -47,6 +47,14 @@ def _encode_png_base64(binary_image: np.ndarray) -> str:
     return base64.b64encode(buf.tobytes()).decode("ascii")
 
 
+def _metric_score(metric: dict | None) -> int | None:
+    """analyze_size_angle()의 metrics[...] 항목에서 점수를 뽑는다.
+    측정 불가(글자/행 수 부족)면 {"skipped": 사유}라 "score" 키가 없다."""
+    if not metric or "score" not in metric:
+        return None
+    return round(metric["score"])
+
+
 @router.post("/preprocess", response_model=ImagePreprocessResponse)
 async def preprocess(file: UploadFile = File(...)):
     """
@@ -86,6 +94,7 @@ async def preprocess(file: UploadFile = File(...)):
         quality_score=round(pre["quality_score"]["total"]),
         retake_required=pre["retake_required"],
         preprocessed_image_base64=_encode_png_base64(binary_image),
+        preservation_mode="gentle_stretch" in pre["applied_filters"],
     )
 
 
@@ -149,6 +158,11 @@ async def analyze(
     overall_score = round(ana["total_score"])
     avg_slant_angle = ana["mean_angle"]
 
+    # AI는 5지표(높이·기울기·자간·행간·기준선)를 채점하지만 기존 계약엔 3개뿐이었다.
+    # 측정 불가(글자/행 수 부족)면 metrics[...]가 {"skipped": 사유}라 "score" 키가 없다.
+    spacing_uniformity_score = _metric_score(ana["metrics"].get("spacing_uniformity"))
+    line_spacing_uniformity_score = _metric_score(ana["metrics"].get("line_spacing_uniformity"))
+
     char_analyses = [
         ImageCharAnalysis(
             char_id=c["char_id"],
@@ -186,6 +200,8 @@ async def analyze(
         "total_grade": ana["total_grade"],
         "clarity_warnings": ana["clarity_warnings"],
         "char_analyses": [c.model_dump() for c in char_analyses],
+        "spacing_uniformity_score": spacing_uniformity_score,
+        "line_spacing_uniformity_score": line_spacing_uniformity_score,
     }
     await set_session(image_session_id, session_data)
 
@@ -201,6 +217,8 @@ async def analyze(
         overall_tilt=ana["overall_tilt"],
         total_grade=ana["total_grade"],
         clarity_warnings=ana["clarity_warnings"],
+        spacing_uniformity_score=spacing_uniformity_score,
+        line_spacing_uniformity_score=line_spacing_uniformity_score,
     )
 
 

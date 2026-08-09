@@ -14,7 +14,7 @@ class ImageBBoxOverlayItem {
   final BoundingBox boundingBox;
   final FeedbackItem? feedback;
 
-  /// DetectedChar.confidence 그대로 전달 (현재 백엔드는 대부분 null).
+  /// DetectedChar.confidence 그대로 전달.
   /// severity가 없을 때(feedback == null) 색상 힌트로 보조 사용.
   final double? confidence;
 
