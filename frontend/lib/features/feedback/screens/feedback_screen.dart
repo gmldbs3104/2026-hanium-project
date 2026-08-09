@@ -148,6 +148,10 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
       } else {
         await _loadImageFeedback();
       }
+    } on ApiException catch (e) {
+      debugPrint('[Feedback] _loadFeedback error: $e');
+      setState(() => _errorMessage =
+          e.serverMessage ?? '피드백을 불러오지 못했습니다. 다시 시도해주세요.');
     } catch (e, st) {
       debugPrint('[Feedback] _loadFeedback error: $e\n$st');
       setState(() => _errorMessage = '피드백을 불러오지 못했습니다. 다시 시도해주세요.');
@@ -245,7 +249,8 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
       if (e.statusCode == null) {
         await _enqueueForRetry();
       } else {
-        _showSaveFailed('저장에 실패했습니다 (오류 ${e.statusCode}). 잠시 후 다시 시도해주세요.');
+        _showSaveFailed(e.serverMessage ??
+            '저장에 실패했습니다 (오류 ${e.statusCode}). 잠시 후 다시 시도해주세요.');
       }
     } catch (e) {
       // 예상치 못한 예외 — 네트워크 장애로 단정할 수 없으므로 큐에 넣지 않고 실패로 안내한다.
@@ -790,8 +795,8 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
       background: FittedBox(
         fit: BoxFit.contain,
         child: SizedBox(
-          width: metadata.width,
-          height: metadata.height,
+          width: metadata.width.toDouble(),
+          height: metadata.height.toDouble(),
           child: CustomPaint(
             // 격자(showGrid)는 필기 보조선이므로 결과 배경에는 넣지 않는다.
             painter: StrokePainter(
@@ -801,8 +806,8 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
           ),
         ),
       ),
-      sourceWidth: metadata.width,
-      sourceHeight: metadata.height,
+      sourceWidth: metadata.width.toDouble(),
+      sourceHeight: metadata.height.toDouble(),
       items: _canvasItems,
       showOverlay: _showOverlay,
       onItemTap: (item) => _showFeedbackSheet(

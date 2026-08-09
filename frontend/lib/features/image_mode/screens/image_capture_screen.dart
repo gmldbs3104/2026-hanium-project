@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -54,51 +56,52 @@ class _ImageCaptureScreenState extends ConsumerState<ImageCaptureScreen> {
   }
 
   Future<void> _captureAndSend() async {
+    if (_cameraUnavailable || _controller == null) {
+      return;
+    }
+
     setState(() {
       _isProcessing = true;
       _errorMessage = null;
     });
 
     try {
-      List<int> bytes;
-      bool isRealCapture;
+      final file = await _controller!.takePicture();
+      final bytes = await file.readAsBytes();
 
-      if (_cameraUnavailable || _controller == null) {
-        bytes = List<int>.filled(100, 0);
-        isRealCapture = false;
-      } else {
-        final file = await _controller!.takePicture();
-        bytes = await file.readAsBytes();
-        isRealCapture = true;
-      }
-
-      if (isRealCapture) {
-        final validationError = _validateImage(bytes);
-        if (validationError != null) {
-          setState(() => _errorMessage = validationError);
-          return;
-        }
+      final validationError = _validateImage(bytes);
+      if (validationError != null) {
+        setState(() => _errorMessage = validationError);
+        return;
       }
 
       final result = await ImageApiService.preprocess(imageBytes: bytes);
 
-      if (result.qualityScore != null && result.qualityScore! < 40) {
-        setState(() => _errorMessage =
-            '이미지 품질이 낮습니다 (${result.qualityScore}점). 다시 촬영해주세요.');
+      final needsRetake = result.retakeRequired ??
+          (result.qualityScore != null && result.qualityScore! < 40);
+      if (needsRetake) {
+        setState(() => _errorMessage = result.qualityScore != null
+            ? '이미지 품질이 낮습니다 (${result.qualityScore}점). 다시 촬영해주세요.'
+            : '사진 상태를 확인하기 어렵습니다. 다시 촬영해주세요.');
         return;
       }
 
       if (mounted) {
+        // 오버레이는 원본 사진이 아니라 백엔드가 보낸 전처리(이진화) 이미지 위에
+        // 그려야 좌표계가 맞는다 (backend/app/schemas/image.py 참고).
+        final overlayBytes = result.preprocessedImageBase64 != null
+            ? base64Decode(result.preprocessedImageBase64!)
+            : bytes;
         context.go('/feedback', extra: {
           'mode': 'image',
           'sessionId': result.imageSessionId,
-          'imageBytes': bytes,
+          'imageBytes': overlayBytes,
           'imageWidth': result.width,
           'imageHeight': result.height,
         });
       }
     } on ApiException catch (e) {
-      setState(() => _errorMessage = e.message);
+      setState(() => _errorMessage = e.serverMessage ?? e.message);
     } finally {
       if (mounted) setState(() => _isProcessing = false);
     }
@@ -231,17 +234,22 @@ class _ImageCaptureScreenState extends ConsumerState<ImageCaptureScreen> {
                       ),
                       const SizedBox(height: 16),
                     ],
-                    const Text('정면에서 흔들리지 않게 촬영해주세요',
+                    Text(
+                        _cameraUnavailable
+                            ? '카메라를 사용할 수 없어 촬영할 수 없습니다'
+                            : '정면에서 흔들리지 않게 촬영해주세요',
                         style:
-                            TextStyle(color: Colors.white70, fontSize: 13)),
+                            const TextStyle(color: Colors.white70, fontSize: 13)),
                     const SizedBox(height: 18),
                     GestureDetector(
-                      onTap: _captureAndSend,
+                      onTap: _cameraUnavailable ? null : _captureAndSend,
                       child: Container(
                         width: 68,
                         height: 68,
                         decoration: BoxDecoration(
-                          color: AppTheme.primaryColor,
+                          color: _cameraUnavailable
+                              ? Colors.white24
+                              : AppTheme.primaryColor,
                           shape: BoxShape.circle,
                           border:
                               Border.all(color: Colors.white, width: 4),
@@ -296,9 +304,9 @@ class _ImageCaptureScreenState extends ConsumerState<ImageCaptureScreen> {
                 Icon(Icons.camera_alt_outlined, size: 56, color: Colors.white24),
                 SizedBox(height: 12),
                 Text(
-                  '이 기기/에뮬레이터에서는 카메라를 사용할 수 없습니다.\n'
-                  '실제 기기에서 실행하면 카메라 미리보기가 표시됩니다.\n'
-                  '(아래 촬영 버튼으로 흐름은 계속 테스트할 수 있습니다)',
+                  '카메라를 사용할 수 없습니다.\n'
+                  '카메라가 없는 기기이거나 카메라 권한이 거부되었습니다.\n'
+                  '설정에서 카메라 권한을 허용한 뒤 다시 시도해주세요.',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Colors.white38, fontSize: 12),
                 ),

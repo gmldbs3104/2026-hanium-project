@@ -112,7 +112,7 @@ class ImageApiService {
     return ImagePreprocessResult(
       imageSessionId: 'mock-image-session-${const Uuid().v4().substring(0, 8)}',
       qualityScore: 82,
-      detectedSlantAngle: 2.5,
+      retakeRequired: false,
       width: 1200,
       height: 1600,
     );

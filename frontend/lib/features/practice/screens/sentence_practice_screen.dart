@@ -113,8 +113,8 @@ class _SentencePracticeScreenState extends State<SentencePracticeScreen> {
     });
     try {
       final metadata = CanvasMetadata(
-        width: _canvasSize.width,
-        height: _canvasSize.height,
+        width: _canvasSize.width.round(),
+        height: _canvasSize.height.round(),
         strokeCount: _strokes.length,
       );
       final result =

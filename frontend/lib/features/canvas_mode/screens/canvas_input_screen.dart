@@ -142,8 +142,8 @@ class _CanvasInputScreenState extends State<CanvasInputScreen> {
     });
     try {
       final metadata = CanvasMetadata(
-        width: canvasSize.width,
-        height: canvasSize.height,
+        width: canvasSize.width.round(),
+        height: canvasSize.height.round(),
         strokeCount: _strokes.length,
       );
       final result =
@@ -164,7 +164,7 @@ class _CanvasInputScreenState extends State<CanvasInputScreen> {
         });
       }
     } on ApiException catch (e) {
-      setState(() => _errorMessage = e.message);
+      setState(() => _errorMessage = e.serverMessage ?? e.message);
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
     }
@@ -232,7 +232,7 @@ class _CanvasInputScreenState extends State<CanvasInputScreen> {
                   borderRadius: BorderRadius.circular(AppTheme.radiusSm),
                 ),
                 child: Text(
-                  "번호 순서와 화살표 방향대로 '$_currentChar' 글자를 써보세요",
+                  "번호 순서대로 '$_currentChar' 글자를 써보세요",
                   textAlign: TextAlign.center,
                   style: const TextStyle(
                       fontSize: 13,
