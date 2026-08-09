@@ -13,7 +13,7 @@ cp .env.example .env
 # .env 파일을 열어서 실제 값 입력
 
 ### 2. 가상환경 및 패키지 설치
-python -m venv venv
+python -m venv venv # 이지우는보아라: py -3.13 -m venv venv
 
 source venv/bin/activate  # Windows: venv\Scripts\activate
 
