@@ -14,7 +14,10 @@ import '../../canvas_mode/widgets/stroke_painter.dart';
 /// 짧은/긴/캘리그라피 탭 + 따라쓰기 가이드 문장 + 필기 캔버스.
 /// 저장 시 캔버스 모드 분석(CanvasApiService.analyze)을 그대로 사용한다(백엔드 연동 유지).
 class SentencePracticeScreen extends StatefulWidget {
-  const SentencePracticeScreen({super.key});
+  /// 결과 화면 탭에서 특정 문장 탭으로 진입할 때 전달(없으면 첫 탭).
+  final int? initialTabIndex;
+
+  const SentencePracticeScreen({super.key, this.initialTabIndex});
 
   @override
   State<SentencePracticeScreen> createState() => _SentencePracticeScreenState();
@@ -51,6 +54,14 @@ class _SentencePracticeScreenState extends State<SentencePracticeScreen> {
   String get _sentence => _sentences[_tabIndex];
 
   static const _uuid = Uuid();
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.initialTabIndex != null) {
+      _tabIndex = widget.initialTabIndex!.clamp(0, _tabs.length - 1);
+    }
+  }
 
   void _onPanStart(DragStartDetails d) {
     setState(() {
@@ -102,8 +113,8 @@ class _SentencePracticeScreenState extends State<SentencePracticeScreen> {
     });
     try {
       final metadata = CanvasMetadata(
-        width: _canvasSize.width,
-        height: _canvasSize.height,
+        width: _canvasSize.width.round(),
+        height: _canvasSize.height.round(),
         strokeCount: _strokes.length,
       );
       final result =
@@ -115,6 +126,11 @@ class _SentencePracticeScreenState extends State<SentencePracticeScreen> {
           'strokes': List<Stroke>.from(_strokes),
           'canvasMetadata': metadata,
           'strokeWidth': _strokeWidth,
+          // 결과 화면 상단에 탭을 그대로 보여주기 위한 컨텍스트
+          // (문장 연습은 글자 단위 진행률이 없어 step/total은 넘기지 않는다)
+          'practiceTabs': _tabs,
+          'practiceTabIndex': _tabIndex,
+          'practiceRoute': '/sentence-practice',
         });
       }
     } on ApiException catch (e) {

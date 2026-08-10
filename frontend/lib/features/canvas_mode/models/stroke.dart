@@ -35,8 +35,8 @@ class Stroke {
 
 /// 캔버스 메타데이터 (SFR-003C Outputs 기준)
 class CanvasMetadata {
-  final double width;
-  final double height;
+  final int width;
+  final int height;
   final int strokeCount;
 
   const CanvasMetadata({

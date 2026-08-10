@@ -6,16 +6,16 @@ import '../../../core/app_theme.dart';
 import '../../../shared/widgets/ui_kit.dart';
 import '../providers/onboarding_provider.dart';
 
-/// 온보딩2 — 연습 목표(복수 선택) + 교정 기준 폰트 선택
+/// 온보딩2 — 연습 목표(복수 선택)
 ///
 /// 순수 클라이언트 화면(백엔드 호출 없음). 선택 값은 onboarding_provider에 저장한다.
+/// 교정 기준 폰트는 명조체로 고정이라 선택 UI가 없다.
 class OnboardingScreen extends ConsumerWidget {
   const OnboardingScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final goals = ref.watch(selectedGoalsProvider);
-    final font = ref.watch(selectedFontProvider);
     final canStart = goals.isNotEmpty;
 
     return Scaffold(
@@ -57,25 +57,6 @@ class OnboardingScreen extends ConsumerWidget {
                           },
                         );
                       }).toList(),
-                    ),
-                    const SizedBox(height: 32),
-                    const Text(
-                      '교정 기준 폰트를\n선택하세요',
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                        height: 1.3,
-                        color: AppTheme.ink,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    const Text('AI가 이 폰트를 기준으로 교정합니다',
-                        style: TextStyle(fontSize: 13, color: AppTheme.inkMuted)),
-                    const SizedBox(height: 16),
-                    _FontGrid(
-                      selected: font,
-                      onSelect: (f) =>
-                          ref.read(selectedFontProvider.notifier).state = f,
                     ),
                   ],
                 ),
@@ -135,108 +116,3 @@ class _GoalChip extends StatelessWidget {
   }
 }
 
-class _FontGrid extends StatelessWidget {
-  final CorrectionFont selected;
-  final ValueChanged<CorrectionFont> onSelect;
-  const _FontGrid({required this.selected, required this.onSelect});
-
-  @override
-  Widget build(BuildContext context) {
-    return Wrap(
-      spacing: 12,
-      runSpacing: 12,
-      children: CorrectionFont.values.map((f) {
-        return SizedBox(
-          width: (MediaQuery.of(context).size.width - 24 * 2 - 12) / 2,
-          child: _FontCard(
-            font: f,
-            selected: selected == f,
-            onTap: () => onSelect(f),
-          ),
-        );
-      }).toList(),
-    );
-  }
-}
-
-class _FontCard extends StatelessWidget {
-  final CorrectionFont font;
-  final bool selected;
-  final VoidCallback onTap;
-  const _FontCard(
-      {required this.font, required this.selected, required this.onTap});
-
-  TextStyle get _previewStyle => switch (font) {
-        CorrectionFont.gothic => const TextStyle(
-            fontSize: 20, fontWeight: FontWeight.w700, color: AppTheme.ink),
-        CorrectionFont.myeongjo => const TextStyle(
-            fontSize: 20,
-            fontWeight: FontWeight.w600,
-            fontFamily: 'serif',
-            color: AppTheme.ink),
-        CorrectionFont.round => const TextStyle(
-            fontSize: 20,
-            fontWeight: FontWeight.w500,
-            letterSpacing: 0.5,
-            color: AppTheme.ink),
-      };
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: selected ? AppTheme.mintSurface : Colors.white,
-          borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-          border: Border.all(
-            color: selected ? AppTheme.primaryColor : AppTheme.line,
-            width: selected ? 1.5 : 1,
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(font.label,
-                    style: const TextStyle(
-                        fontSize: 12, color: AppTheme.inkMuted)),
-                _RadioDot(selected: selected),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text('안녕하세요', style: _previewStyle),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _RadioDot extends StatelessWidget {
-  final bool selected;
-  const _RadioDot({required this.selected});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 20,
-      height: 20,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        border: Border.all(
-          color: selected ? AppTheme.primaryColor : AppTheme.inkFaint,
-          width: 2,
-        ),
-        color: selected ? AppTheme.primaryColor : Colors.transparent,
-      ),
-      child: selected
-          ? const Icon(Icons.circle, size: 8, color: Colors.white)
-          : null,
-    );
-  }
-}

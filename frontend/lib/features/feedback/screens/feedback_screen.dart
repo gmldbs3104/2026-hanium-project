@@ -6,7 +6,11 @@ import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/app_theme.dart';
+import '../../../core/target_score_provider.dart';
 import '../../../shared/services/api_client.dart';
+import '../../../shared/widgets/ui_kit.dart';
+import '../../../shared/models/weak_habit.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../utils/image_download.dart';
 import '../../canvas_mode/models/stroke.dart';
@@ -31,6 +35,13 @@ import '../widgets/image_bbox_overlay_view.dart';
 /// analyze()/preprocess() 단계 응답에는 원래 점수가 없습니다 (백엔드 스키마 참고).
 /// 반드시 GET /{canvas|image}/{id}/feedback 응답에서만 점수를 받습니다.
 ///
+/// [UI 리디자인] 목업 기준 2단 레이아웃:
+///   상단  : 연습 종류 탭 + 진행률 (연습 화면에서 넘어온 컨텍스트가 있을 때)
+///   좌측  : 필기 재현 + 교정 오버레이
+///   우측 상단 : 현재 점수 카드 (목표 대비 진행바 + 추세 배지)
+///   우측 하단 : AI 분석 "취약한 습관" 패널
+/// 좁은 화면(< 720px)에서는 세로로 쌓아 스크롤한다.
+///
 /// SFR-009: 하단 "학습 기록 저장" 버튼을 탭하면 저장을 트리거한다 (requirement.md
 /// SFR-007 Post-condition: "사용자가 피드백을 확인하면 SFR-009가 트리거된다").
 /// 저장 요청이 네트워크 문제로 실패하면 로컬 큐에 쌓아두고, 다음에 이 화면을
@@ -51,6 +62,16 @@ class FeedbackScreen extends ConsumerStatefulWidget {
   final int? imageWidth;
   final int? imageHeight;
 
+  // 연습 화면에서 넘어온 컨텍스트 (있으면 상단에 탭/진행률을 그대로 보여준다).
+  // 없으면(null) 헤더를 생략한다 — 이미지 모드 등.
+  final List<String>? practiceTabs;
+  final int? practiceTabIndex;
+  final int? practiceStep;
+  final int? practiceTotal;
+
+  // 헤더 탭/다음 글자에서 돌아갈 연습 화면 경로 (예: '/character-practice').
+  final String? practiceRoute;
+
   const FeedbackScreen({
     super.key,
     required this.mode,
@@ -61,6 +82,11 @@ class FeedbackScreen extends ConsumerStatefulWidget {
     this.imageBytes,
     this.imageWidth,
     this.imageHeight,
+    this.practiceTabs,
+    this.practiceTabIndex,
+    this.practiceStep,
+    this.practiceTotal,
+    this.practiceRoute,
   });
 
   @override
@@ -74,6 +100,11 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
   // /feedback 응답에서만 받아오는 진짜 결과 (score, 메시지)
   int? _overallScore;
   String? _achievementMessage;
+
+  // AI 분석 "취약한 습관" + 점수 추세 (백엔드 신규 필드, 없으면 기본값)
+  // ⚠️ 목표 점수는 응답이 아니라 사용자 설정(targetScoreProvider)을 사용한다.
+  List<WeakHabit> _weakHabits = [];
+  int? _scoreTrend;
 
   // 캔버스 모드 오버레이 항목
   List<CanvasCorrectionOverlayItem> _canvasItems = [];
@@ -106,6 +137,10 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
 
   bool get _isCanvas => widget.mode == 'canvas';
 
+  /// 상단 연습 컨텍스트 헤더(탭/진행률)를 그릴 수 있는지 여부.
+  bool get _hasPracticeHeader =>
+      widget.practiceTabs != null && widget.practiceTabs!.isNotEmpty;
+
   Future<void> _loadFeedback() async {
     try {
       if (_isCanvas) {
@@ -113,6 +148,10 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
       } else {
         await _loadImageFeedback();
       }
+    } on ApiException catch (e) {
+      debugPrint('[Feedback] _loadFeedback error: $e');
+      setState(() => _errorMessage =
+          e.serverMessage ?? '피드백을 불러오지 못했습니다. 다시 시도해주세요.');
     } catch (e, st) {
       debugPrint('[Feedback] _loadFeedback error: $e\n$st');
       setState(() => _errorMessage = '피드백을 불러오지 못했습니다. 다시 시도해주세요.');
@@ -137,6 +176,8 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
       );
       _overallScore = feedbackResponse.overallScore;
       _achievementMessage = feedbackResponse.achievementMessage;
+      _weakHabits = feedbackResponse.weakHabits;
+      _scoreTrend = feedbackResponse.scoreTrend;
       _lowConfidenceCount = groupResponse.lowConfidenceCount;
     });
   }
@@ -157,6 +198,8 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
       );
       _overallScore = feedbackResponse.overallScore;
       _achievementMessage = feedbackResponse.achievementMessage;
+      _weakHabits = feedbackResponse.weakHabits;
+      _scoreTrend = feedbackResponse.scoreTrend;
       _detectedCount = detectResponse.totalDetected;
     });
   }
@@ -194,9 +237,9 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
       }
 
       if (mounted) {
+        // 저장 완료 안내는 FeedbackActionBar의 초록 체크 문구로만 노출한다.
+        // (하단 SnackBar까지 띄우면 "학습 기록을 저장했어요."가 중복돼 제거함)
         setState(() => _confirmed = true);
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('학습 기록을 저장했어요.')));
       }
     } on ApiException catch (e) {
       // REQ-009-5는 "네트워크 장애" 시에만 로컬 큐에 저장하도록 요구한다.
@@ -206,7 +249,8 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
       if (e.statusCode == null) {
         await _enqueueForRetry();
       } else {
-        _showSaveFailed('저장에 실패했습니다 (오류 ${e.statusCode}). 잠시 후 다시 시도해주세요.');
+        _showSaveFailed(e.serverMessage ??
+            '저장에 실패했습니다 (오류 ${e.statusCode}). 잠시 후 다시 시도해주세요.');
       }
     } catch (e) {
       // 예상치 못한 예외 — 네트워크 장애로 단정할 수 없으므로 큐에 넣지 않고 실패로 안내한다.
@@ -244,6 +288,7 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.white,
       appBar: AppBar(
         title: const Text('분석 결과'),
         // 다운로드는 하단 FeedbackActionBar로 옮겼다 — 서버 저장과 나란히 놓아
@@ -274,9 +319,8 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
       children: [
         if (_pendingQueueCount > 0) _buildPendingQueueBanner(),
         ..._buildCaseNotices(),
-        _buildScoreHeader(context),
-        const Divider(height: 1),
-        Expanded(child: _buildOverlayArea(context)),
+        if (_hasPracticeHeader) _buildPracticeHeader(),
+        Expanded(child: _buildResultArea(context)),
         const Divider(height: 1),
         FeedbackActionBar(
           isCanvas: _isCanvas,
@@ -290,6 +334,328 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
           onGoHome: () => context.go('/home'),
         ),
       ],
+    );
+  }
+
+  /// 결과 본문 — 넓으면 좌(캔버스)/우(점수·AI분석) 2단, 좁으면 세로 스택.
+  Widget _buildResultArea(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final wide = constraints.maxWidth >= 720;
+        if (wide) {
+          return Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(flex: 3, child: _buildOverlayCard(context)),
+                const SizedBox(width: 16),
+                Expanded(
+                  flex: 2,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _buildScoreCard(context),
+                      const SizedBox(height: 16),
+                      Expanded(child: _buildWeakHabitCard(context, scrollable: true)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        // 좁은 화면: 세로로 쌓아 스크롤
+        return SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(height: 300, child: _buildOverlayCard(context)),
+              const SizedBox(height: 16),
+              _buildScoreCard(context),
+              const SizedBox(height: 16),
+              _buildWeakHabitCard(context, scrollable: false),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// 헤더 탭을 눌러 해당 연습 탭(자음/모음/받침)으로 자유롭게 이동한다.
+  /// (연습 화면 첫 글자부터 시작 — charIndex 0)
+  void _goToTab(int tabIndex) {
+    final route = widget.practiceRoute ?? '/character-practice';
+    context.go(route, extra: {'tabIndex': tabIndex, 'charIndex': 0});
+  }
+
+  /// 진행률 옆 "다음 글자 →": 같은 탭의 다음 글자로 이동한다(마지막이면 처음으로 순환).
+  void _goNextChar() {
+    final step = widget.practiceStep;
+    final total = widget.practiceTotal;
+    if (step == null || total == null || total <= 0) return;
+    final route = widget.practiceRoute ?? '/character-practice';
+    final nextIndex = step % total; // step은 1-based 현재 위치 → 다음 0-based 인덱스
+    context.go(route,
+        extra: {'tabIndex': widget.practiceTabIndex ?? 0, 'charIndex': nextIndex});
+  }
+
+  /// 상단 연습 컨텍스트 헤더: 탭(탭하면 이동) + 진행률 + 다음 글자.
+  Widget _buildPracticeHeader() {
+    final tabs = widget.practiceTabs!;
+    final index = widget.practiceTabIndex ?? 0;
+    final step = widget.practiceStep;
+    final total = widget.practiceTotal;
+    final hasProgress = step != null && total != null && total > 0;
+    final progress = hasProgress ? (step! / total!).clamp(0.0, 1.0) : null;
+
+    return Container(
+      color: Colors.white,
+      child: Column(
+        children: [
+          // 탭 바 — 탭하면 해당 연습 탭으로 이동(자유 이동)
+          Container(
+            decoration: const BoxDecoration(
+              border: Border(bottom: BorderSide(color: AppTheme.line)),
+            ),
+            child: Row(
+              children: List.generate(tabs.length, (i) {
+                final selected = i == index;
+                return Expanded(
+                  child: InkWell(
+                    onTap: () => _goToTab(i),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      decoration: BoxDecoration(
+                        border: Border(
+                          bottom: BorderSide(
+                            color: selected ? AppTheme.primaryColor : Colors.transparent,
+                            width: 2,
+                          ),
+                        ),
+                      ),
+                      child: Text(
+                        tabs[i],
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                          color: selected ? AppTheme.primaryDark : AppTheme.inkMuted,
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              }),
+            ),
+          ),
+          if (hasProgress) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+              child: Row(
+                children: [
+                  Text('진행률: $step/$total',
+                      style: const TextStyle(fontSize: 12, color: AppTheme.inkMuted)),
+                  const Spacer(),
+                  Text('${(progress! * 100).round()}%',
+                      style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: AppTheme.primaryDark)),
+                  const SizedBox(width: 12),
+                  InkWell(
+                    onTap: _goNextChar,
+                    borderRadius: BorderRadius.circular(6),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                      // 마지막 글자면 "처음 자음/모음/받침으로", 아니면 "다음 글자 →"
+                      // (단위는 현재 탭 라벨 첫 단어에서 가져온다: '자음 쓰기' → '자음')
+                      child: Text(
+                        step == total
+                            ? '↺ 처음 ${tabs[index].split(' ').first}으로'
+                            : '다음 글자 →',
+                        style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: AppTheme.primaryDark),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  value: progress,
+                  minHeight: 6,
+                  backgroundColor: AppTheme.line,
+                  valueColor: const AlwaysStoppedAnimation(AppTheme.primaryColor),
+                ),
+              ),
+            ),
+          ] else
+            const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
+
+  /// 좌측: 필기 재현 + 교정 오버레이를 카드에 담아 표시.
+  Widget _buildOverlayCard(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+      // 다운로드 시 이 RepaintBoundary 하위(배경 + 교정 오버레이)를 PNG로 캡처한다.
+      child: RepaintBoundary(
+        key: _overlayCaptureKey,
+        child: Container(
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            border: Border.all(color: AppTheme.line),
+            borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: _isCanvas ? _buildCanvasOverlay() : _buildImageOverlay(),
+        ),
+      ),
+    );
+  }
+
+  /// 우측 상단: 현재 점수 카드 (목표 대비 진행바 + 추세 배지).
+  Widget _buildScoreCard(BuildContext context) {
+    final score = _overallScore ?? 0;
+    // 목표 점수는 사용자 설정값(설정 화면에서 변경) — 백엔드 응답이 아님.
+    final target = ref.watch(targetScoreProvider);
+    final safeTarget = target <= 0 ? 90 : target;
+    final ratio = (score / safeTarget).clamp(0.0, 1.0);
+
+    return HaneumCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text('현재 점수',
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.inkMuted)),
+              const Spacer(),
+              if (_scoreTrend != null) _buildTrendBadge(_scoreTrend!),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text('$score',
+                  style: const TextStyle(
+                      fontSize: 40,
+                      height: 1.0,
+                      fontWeight: FontWeight.bold,
+                      color: AppTheme.primaryDark)),
+              const Padding(
+                padding: EdgeInsets.only(bottom: 6, left: 4),
+                child: Text('점',
+                    style: TextStyle(fontSize: 14, color: AppTheme.inkMuted)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: ratio,
+              minHeight: 8,
+              backgroundColor: AppTheme.line,
+              valueColor: const AlwaysStoppedAnimation(AppTheme.primaryColor),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text('목표: $safeTarget점',
+              style: const TextStyle(fontSize: 12, color: AppTheme.inkFaint)),
+          if (_achievementMessage != null && _achievementMessage!.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Text(_achievementMessage!,
+                style: const TextStyle(
+                    fontSize: 12.5, height: 1.35, color: AppTheme.inkMuted)),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// 점수 추세 배지 (↗ +N / ↘ -N). trend가 0이면 변화 없음으로 중립 표시.
+  Widget _buildTrendBadge(int trend) {
+    final up = trend >= 0;
+    final color = up ? AppTheme.primaryDark : AppTheme.errorColor;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: AppTheme.mintSurface,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(up ? Icons.trending_up_rounded : Icons.trending_down_rounded,
+              size: 14, color: color),
+          const SizedBox(width: 3),
+          Text('${up ? '+' : ''}$trend',
+              style: TextStyle(
+                  fontSize: 12, fontWeight: FontWeight.w700, color: color)),
+        ],
+      ),
+    );
+  }
+
+  /// 우측 하단: AI 분석 "취약한 습관" 패널.
+  /// weakHabits가 비어 있으면(백엔드 미연동 등) 안내 문구를 보여준다.
+  Widget _buildWeakHabitCard(BuildContext context, {required bool scrollable}) {
+    final body = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, size: 18, color: AppTheme.amberText),
+            const SizedBox(width: 6),
+            const Text('AI 분석: 취약한 습관',
+                style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    color: AppTheme.ink)),
+          ],
+        ),
+        const SizedBox(height: 14),
+        if (_weakHabits.isEmpty)
+          const Text(
+            'AI 취약 습관 분석을 준비 중이에요.\n잠시 후 다시 확인해 주세요.',
+            style: TextStyle(fontSize: 12.5, height: 1.4, color: AppTheme.inkFaint),
+          )
+        else ...[
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: _weakHabits
+                .map((h) => HabitBadge(label: h.label, count: h.countLabel))
+                .toList(),
+          ),
+          const SizedBox(height: 14),
+          const Text('이 부분들을 신경써서 다시 써볼까요?',
+              style: TextStyle(fontSize: 12, color: AppTheme.inkMuted)),
+        ],
+      ],
+    );
+
+    return HaneumCard(
+      child: scrollable
+          ? SingleChildScrollView(child: body)
+          : body,
     );
   }
 
@@ -373,65 +739,6 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
     );
   }
 
-  Widget _buildScoreHeader(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Icon(
-                _isCanvas ? Icons.draw_rounded : Icons.camera_alt_rounded,
-                size: 32,
-                color: Theme.of(context).colorScheme.primary,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                '${_overallScore ?? 0}',
-                style: TextStyle(
-                  fontSize: 40,
-                  fontWeight: FontWeight.bold,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-              ),
-              const Padding(
-                padding: EdgeInsets.only(bottom: 8, left: 4),
-                child: Text('점', style: TextStyle(color: Colors.grey)),
-              ),
-            ],
-          ),
-          if (_achievementMessage != null) ...[
-            const SizedBox(height: 4),
-            Text(
-              _achievementMessage!,
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 13, color: Colors.grey),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildOverlayArea(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(12),
-        // 다운로드 시 이 RepaintBoundary 하위(배경 + 교정 오버레이)를 PNG로 캡처한다.
-        child: RepaintBoundary(
-          key: _overlayCaptureKey,
-          child: Container(
-            color: Theme.of(context).colorScheme.surfaceContainerHighest,
-            child: _isCanvas ? _buildCanvasOverlay() : _buildImageOverlay(),
-          ),
-        ),
-      ),
-    );
-  }
-
   /// 피드백 오버레이가 그려진 화면을 PNG로 캡처해 사용자 기기에 다운로드한다.
   /// (웹: 브라우저 다운로드 / 그 외 플랫폼: 미지원 안내)
   Future<void> _downloadFeedbackImage() async {
@@ -488,8 +795,8 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
       background: FittedBox(
         fit: BoxFit.contain,
         child: SizedBox(
-          width: metadata.width,
-          height: metadata.height,
+          width: metadata.width.toDouble(),
+          height: metadata.height.toDouble(),
           child: CustomPaint(
             // 격자(showGrid)는 필기 보조선이므로 결과 배경에는 넣지 않는다.
             painter: StrokePainter(
@@ -499,8 +806,8 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
           ),
         ),
       ),
-      sourceWidth: metadata.width,
-      sourceHeight: metadata.height,
+      sourceWidth: metadata.width.toDouble(),
+      sourceHeight: metadata.height.toDouble(),
       items: _canvasItems,
       showOverlay: _showOverlay,
       onItemTap: (item) => _showFeedbackSheet(

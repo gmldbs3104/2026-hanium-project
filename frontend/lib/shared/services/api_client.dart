@@ -8,10 +8,43 @@ import '../../core/app_config.dart';
 class ApiException implements Exception {
   final String message;
   final int? statusCode;
-  ApiException(this.message, [this.statusCode]);
+  /// 서버 응답 본문(FastAPI `detail`)에서 뽑아낸 실제 실패 사유. 파싱 실패/필드
+  /// 없음이면 null이며, 이 경우 화면은 [message]로 폴백해야 한다.
+  final String? serverMessage;
+  ApiException(this.message, [this.statusCode, this.serverMessage]);
+
+  /// 실패한 HTTP 응답에서 FastAPI의 `{"detail": ...}` 사유를 뽑아 [ApiException]을 만든다.
+  /// `detail`은 일반 `HTTPException`이면 문자열, pydantic validation error(422)면
+  /// `[{"msg": "...", ...}, ...]` 배열이라 둘 다 처리한다.
+  factory ApiException.fromResponse(http.Response response) {
+    String? serverMessage;
+    try {
+      final decoded = jsonDecode(response.body);
+      if (decoded is Map<String, dynamic>) {
+        final detail = decoded['detail'];
+        if (detail is String) {
+          serverMessage = detail;
+        } else if (detail is List) {
+          final messages = detail
+              .whereType<Map>()
+              .map((e) => e['msg'])
+              .whereType<String>()
+              .toList();
+          if (messages.isNotEmpty) serverMessage = messages.join(', ');
+        }
+      }
+    } catch (_) {
+      // response.body가 JSON이 아니면 폴백 문구를 쓴다
+    }
+    return ApiException(
+      '요청이 실패했습니다 (${response.statusCode})',
+      response.statusCode,
+      serverMessage,
+    );
+  }
 
   @override
-  String toString() => 'ApiException($statusCode): $message';
+  String toString() => 'ApiException($statusCode): ${serverMessage ?? message}';
 }
 
 /// 백엔드와 통신하는 공통 HTTP 클라이언트
@@ -46,7 +79,7 @@ class ApiClient {
         if (response.body.isEmpty) return {};
         return jsonDecode(response.body) as Map<String, dynamic>;
       }
-      throw ApiException('요청이 실패했습니다 (${response.statusCode})', response.statusCode);
+      throw ApiException.fromResponse(response);
     } on ApiException {
       rethrow;
     } catch (e) {
@@ -84,7 +117,7 @@ class ApiClient {
         if (response.body.isEmpty) return {};
         return jsonDecode(response.body) as Map<String, dynamic>;
       }
-      throw ApiException('요청이 실패했습니다 (${response.statusCode})', response.statusCode);
+      throw ApiException.fromResponse(response);
     } on ApiException {
       rethrow;
     } catch (e) {
@@ -109,7 +142,7 @@ class ApiClient {
         if (response.body.isEmpty) return {};
         return jsonDecode(response.body) as Map<String, dynamic>;
       }
-      throw ApiException('요청이 실패했습니다 (${response.statusCode})', response.statusCode);
+      throw ApiException.fromResponse(response);
     } on ApiException {
       rethrow;
     } catch (e) {
@@ -136,7 +169,7 @@ class ApiClient {
         if (response.body.isEmpty) return {};
         return jsonDecode(response.body) as Map<String, dynamic>;
       }
-      throw ApiException('요청이 실패했습니다 (${response.statusCode})', response.statusCode);
+      throw ApiException.fromResponse(response);
     } on ApiException {
       rethrow;
     } catch (e) {

@@ -5,6 +5,7 @@ import '../../../shared/services/api_client.dart';
 import '../../../shared/models/bounding_box.dart';
 import '../../../shared/models/feedback_item.dart';
 import '../../../shared/models/session_save_result.dart';
+import '../../../shared/models/weak_habit.dart';
 import '../models/image_result.dart';
 import '../models/detected_char.dart';
 import '../models/image_detect_response.dart';
@@ -111,7 +112,7 @@ class ImageApiService {
     return ImagePreprocessResult(
       imageSessionId: 'mock-image-session-${const Uuid().v4().substring(0, 8)}',
       qualityScore: 82,
-      detectedSlantAngle: 2.5,
+      retakeRequired: false,
       width: 1200,
       height: 1600,
     );
@@ -158,6 +159,13 @@ class ImageApiService {
           severity: 'warning',
         ),
       ],
+      // 백엔드 연동 예정 필드 — 목업 데모용 샘플
+      weakHabits: const [
+        WeakHabit(label: '크기 불균일', count: 4, severity: 'warning'),
+        WeakHabit(label: '줄 정렬 흐트러짐', count: 3, severity: 'warning'),
+      ],
+      targetScore: 90,
+      scoreTrend: 3,
     );
   }
 

@@ -5,6 +5,7 @@ import '../../../shared/services/api_client.dart';
 import '../../../shared/models/bounding_box.dart';
 import '../../../shared/models/feedback_item.dart';
 import '../../../shared/models/session_save_result.dart';
+import '../../../shared/models/weak_habit.dart';
 import '../models/stroke.dart';
 import '../models/char_group.dart';
 import '../models/canvas_group_response.dart';
@@ -167,6 +168,15 @@ class CanvasApiService {
       overallScore: 78,
       achievementMessage: '좋아요! 조금만 더 연습하면 완벽해질 거예요.',
       feedbackItems: feedbackItems,
+      // 백엔드 연동 예정 필드 — 목업 데모용 샘플 (backend가 weak_habits/target_score/
+      // score_trend를 내려주면 이 값들이 실제 응답으로 대체된다).
+      weakHabits: const [
+        WeakHabit(label: '선 이탈', count: 3, severity: 'warning'),
+        WeakHabit(label: '좌상향 기울기 심함', count: 2, severity: 'warning'),
+        WeakHabit(label: '밸런스 불균형', count: 6, severity: 'error'),
+      ],
+      targetScore: 90,
+      scoreTrend: 5,
     );
   }
 

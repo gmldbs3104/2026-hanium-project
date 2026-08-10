@@ -5,17 +5,29 @@ import 'package:uuid/uuid.dart';
 import '../../../core/app_theme.dart';
 import '../../../shared/services/api_client.dart';
 import '../../../shared/widgets/ui_kit.dart';
+import '../data/stroke_order_data.dart';
 import '../models/stroke.dart';
 import '../services/canvas_api_service.dart';
+import '../widgets/stroke_order_painter.dart';
 import '../widgets/stroke_painter.dart';
 
 /// 손글씨(글자) 연습 화면 (SFR-003C 대응) — UI 리디자인
 ///
-/// 자음/모음/받침 탭 + 진행률 + 점선 가이드 글자 + 색상/굵기/지우기/저장.
+/// 자음/모음/받침 탭 + 진행률 + 획순 가이드(번호·방향) + 색상/굵기/지우기/저장.
 /// 저장 시 CanvasApiService.analyze()로 분석을 요청하고 결과는 피드백 화면에서 표시한다.
 /// (백엔드 연동/파이프라인은 기존과 동일 — analyze → /feedback)
+///
+/// [initialTabIndex]/[initialCharIndex]: 결과 화면의 "다음 글자"에서 진입할 때
+/// 특정 탭·글자에서 바로 시작하도록 전달받는다(없으면 처음부터).
 class CanvasInputScreen extends StatefulWidget {
-  const CanvasInputScreen({super.key});
+  final int? initialTabIndex;
+  final int? initialCharIndex;
+
+  const CanvasInputScreen({
+    super.key,
+    this.initialTabIndex,
+    this.initialCharIndex,
+  });
 
   @override
   State<CanvasInputScreen> createState() => _CanvasInputScreenState();
@@ -56,6 +68,18 @@ class _CanvasInputScreenState extends State<CanvasInputScreen> {
   String get _currentChar => _chars[_charIndex];
 
   static const _uuid = Uuid();
+
+  @override
+  void initState() {
+    super.initState();
+    // 결과 화면 "다음 글자"에서 넘어온 시작 위치 반영
+    if (widget.initialTabIndex != null) {
+      _tabIndex = widget.initialTabIndex!.clamp(0, _tabs.length - 1);
+    }
+    if (widget.initialCharIndex != null) {
+      _charIndex = widget.initialCharIndex!.clamp(0, _charSets[_tabIndex].length - 1);
+    }
+  }
 
   void _onPanStart(DragStartDetails d) {
     setState(() {
@@ -118,8 +142,8 @@ class _CanvasInputScreenState extends State<CanvasInputScreen> {
     });
     try {
       final metadata = CanvasMetadata(
-        width: canvasSize.width,
-        height: canvasSize.height,
+        width: canvasSize.width.round(),
+        height: canvasSize.height.round(),
         strokeCount: _strokes.length,
       );
       final result =
@@ -131,10 +155,16 @@ class _CanvasInputScreenState extends State<CanvasInputScreen> {
           'strokes': List<Stroke>.from(_strokes),
           'canvasMetadata': metadata,
           'strokeWidth': _strokeWidth,
+          // 결과 화면 상단에 탭/진행률을 그대로 보여주기 위한 컨텍스트
+          'practiceTabs': _tabs,
+          'practiceTabIndex': _tabIndex,
+          'practiceStep': _charIndex + 1,
+          'practiceTotal': _chars.length,
+          'practiceRoute': '/character-practice',
         });
       }
     } on ApiException catch (e) {
-      setState(() => _errorMessage = e.message);
+      setState(() => _errorMessage = e.serverMessage ?? e.message);
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
     }
@@ -202,7 +232,7 @@ class _CanvasInputScreenState extends State<CanvasInputScreen> {
                   borderRadius: BorderRadius.circular(AppTheme.radiusSm),
                 ),
                 child: Text(
-                  "점선을 따라 '$_currentChar' 글자를 연습해보세요",
+                  "번호 순서대로 '$_currentChar' 글자를 써보세요",
                   textAlign: TextAlign.center,
                   style: const TextStyle(
                       fontSize: 13,
@@ -227,30 +257,47 @@ class _CanvasInputScreenState extends State<CanvasInputScreen> {
                         Size(constraints.maxWidth, constraints.maxHeight);
                     return ClipRRect(
                       borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-                      child: RepaintBoundary(
-                        child: GestureDetector(
-                          onPanStart: _onPanStart,
-                          onPanUpdate: _onPanUpdate,
-                          onPanEnd: _onPanEnd,
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              border: Border.all(color: AppTheme.line),
-                              borderRadius:
-                                  BorderRadius.circular(AppTheme.radiusMd),
-                            ),
-                            child: CustomPaint(
-                              size: Size.infinite,
-                              painter: StrokePainter(
-                                strokes: _strokes,
-                                currentStroke: _currentStroke,
-                                strokeWidth: _strokeWidth,
-                                penColor: _penColor,
-                                guideText: _currentChar,
-                                showBaseline: true,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          border: Border.all(color: AppTheme.line),
+                          borderRadius:
+                              BorderRadius.circular(AppTheme.radiusMd),
+                        ),
+                        clipBehavior: Clip.antiAlias,
+                        child: Stack(
+                          children: [
+                            // 뒤: 획순 가이드 (번호 + 방향 화살표). 점선/옅은 글자 대체.
+                            Positioned.fill(
+                              child: IgnorePointer(
+                                child: CustomPaint(
+                                  size: Size.infinite,
+                                  painter: StrokeOrderGuidePainter(
+                                      _currentChar, strokeOrderFor(_currentChar)),
+                                ),
                               ),
                             ),
-                          ),
+                            // 앞: 사용자의 필기 (투명 배경으로 가이드가 비쳐 보이도록)
+                            Positioned.fill(
+                              child: RepaintBoundary(
+                                child: GestureDetector(
+                                  onPanStart: _onPanStart,
+                                  onPanUpdate: _onPanUpdate,
+                                  onPanEnd: _onPanEnd,
+                                  child: CustomPaint(
+                                    size: Size.infinite,
+                                    painter: StrokePainter(
+                                      strokes: _strokes,
+                                      currentStroke: _currentStroke,
+                                      strokeWidth: _strokeWidth,
+                                      penColor: _penColor,
+                                      fillBackground: false,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     );

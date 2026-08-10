@@ -64,10 +64,22 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/basics', builder: (context, state) => const BasicsScreen()),
       GoRoute(
           path: '/character-practice',
-          builder: (context, state) => const CanvasInputScreen()),
+          builder: (context, state) {
+            // 결과 화면 "다음 글자"에서 특정 탭/글자로 진입할 수 있다.
+            final extra = state.extra as Map<String, dynamic>?;
+            return CanvasInputScreen(
+              initialTabIndex: extra?['tabIndex'] as int?,
+              initialCharIndex: extra?['charIndex'] as int?,
+            );
+          }),
       GoRoute(
           path: '/sentence-practice',
-          builder: (context, state) => const SentencePracticeScreen()),
+          builder: (context, state) {
+            final extra = state.extra as Map<String, dynamic>?;
+            return SentencePracticeScreen(
+              initialTabIndex: extra?['tabIndex'] as int?,
+            );
+          }),
       GoRoute(
           path: '/image-capture',
           builder: (context, state) => const ImageCaptureScreen()),
@@ -90,6 +102,12 @@ final routerProvider = Provider<GoRouter>((ref) {
             imageBytes: extra['imageBytes'] as List<int>?,
             imageWidth: extra['imageWidth'] as int?,
             imageHeight: extra['imageHeight'] as int?,
+            // 연습 화면에서 넘어온 탭/진행률 컨텍스트 (없으면 헤더 생략)
+            practiceTabs: (extra['practiceTabs'] as List?)?.cast<String>(),
+            practiceTabIndex: extra['practiceTabIndex'] as int?,
+            practiceStep: extra['practiceStep'] as int?,
+            practiceTotal: extra['practiceTotal'] as int?,
+            practiceRoute: extra['practiceRoute'] as String?,
           );
         },
       ),

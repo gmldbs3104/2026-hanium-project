@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/app_theme.dart';
+import '../../../core/target_score_provider.dart';
 import '../../auth/providers/auth_controller.dart';
 
 /// 상세환경설정 — 계정/필기 환경/사운드 설정 (필기·사운드는 로컬 UI 상태).
@@ -60,6 +61,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final targetScore = ref.watch(targetScoreProvider);
     return Scaffold(
       backgroundColor: AppTheme.scaffold,
       appBar: AppBar(
@@ -69,6 +71,23 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          _Card(
+            title: '학습 목표',
+            titleIcon: Icons.flag_rounded,
+            child: _SliderRow(
+              label: '목표 점수',
+              valueLabel: '$targetScore점',
+              value: targetScore.toDouble(),
+              min: 50,
+              max: 100,
+              divisions: 10,
+              minLabel: '50점',
+              maxLabel: '100점',
+              onChanged: (v) =>
+                  ref.read(targetScoreProvider.notifier).state = v.round(),
+            ),
+          ),
+          const SizedBox(height: 16),
           _Card(
             title: '계정',
             child: Column(
@@ -321,6 +340,7 @@ class _SliderRow extends StatelessWidget {
   final double value;
   final double min;
   final double max;
+  final int? divisions;
   final String minLabel;
   final String maxLabel;
   final ValueChanged<double> onChanged;
@@ -333,6 +353,7 @@ class _SliderRow extends StatelessWidget {
     required this.minLabel,
     required this.maxLabel,
     required this.onChanged,
+    this.divisions,
   });
 
   @override
@@ -364,7 +385,11 @@ class _SliderRow extends StatelessWidget {
             trackHeight: 4,
           ),
           child: Slider(
-              value: value, min: min, max: max, onChanged: onChanged),
+              value: value,
+              min: min,
+              max: max,
+              divisions: divisions,
+              onChanged: onChanged),
         ),
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
