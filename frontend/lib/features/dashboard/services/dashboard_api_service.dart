@@ -115,6 +115,8 @@ class DashboardApiService {
       weakItems: weakItems,
       scoreTrend: trend,
       recommendedExercises: exercises,
+      level: 5,
+      streakDays: 21,
     );
   }
 }

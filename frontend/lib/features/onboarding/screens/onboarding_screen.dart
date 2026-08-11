@@ -24,42 +24,53 @@ class OnboardingScreen extends ConsumerWidget {
         child: Column(
           children: [
             Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      '어떤 목표로 손글씨를\n연습하시나요?',
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                        height: 1.3,
-                        color: AppTheme.ink,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  return SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
+                    child: ConstrainedBox(
+                      // 콘텐츠가 화면보다 작으면 정중앙에, 넘치면 스크롤되도록.
+                      constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                      child: Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              '어떤 목표로 손글씨를\n연습하시나요?',
+                              style: TextStyle(
+                                fontSize: 22,
+                                fontWeight: FontWeight.bold,
+                                height: 1.3,
+                                color: AppTheme.ink,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            const Text('복수 선택 가능합니다',
+                                style: TextStyle(fontSize: 13, color: AppTheme.inkMuted)),
+                            const SizedBox(height: 18),
+                            Wrap(
+                              spacing: 10,
+                              runSpacing: 10,
+                              children: PracticeGoal.values.map((g) {
+                                final selected = goals.contains(g);
+                                return _GoalChip(
+                                  label: g.label,
+                                  selected: selected,
+                                  onTap: () {
+                                    final next = {...goals};
+                                    selected ? next.remove(g) : next.add(g);
+                                    ref.read(selectedGoalsProvider.notifier).state = next;
+                                  },
+                                );
+                              }).toList(),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                    const SizedBox(height: 6),
-                    const Text('복수 선택 가능합니다',
-                        style: TextStyle(fontSize: 13, color: AppTheme.inkMuted)),
-                    const SizedBox(height: 18),
-                    Wrap(
-                      spacing: 10,
-                      runSpacing: 10,
-                      children: PracticeGoal.values.map((g) {
-                        final selected = goals.contains(g);
-                        return _GoalChip(
-                          label: g.label,
-                          selected: selected,
-                          onTap: () {
-                            final next = {...goals};
-                            selected ? next.remove(g) : next.add(g);
-                            ref.read(selectedGoalsProvider.notifier).state = next;
-                          },
-                        );
-                      }).toList(),
-                    ),
-                  ],
-                ),
+                  );
+                },
               ),
             ),
             Padding(
@@ -69,6 +80,8 @@ class OnboardingScreen extends ConsumerWidget {
                 onPressed: canStart
                     ? () {
                         ref.read(onboardingCompletedProvider.notifier).state = true;
+                        // 최초 1회만 — 다음 로그인부터는 이 화면을 건너뛰도록 기기에 저장.
+                        saveOnboardingCompleted();
                         context.go('/main');
                       }
                     : null,

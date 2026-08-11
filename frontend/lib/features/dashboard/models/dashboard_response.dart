@@ -13,11 +13,19 @@ class DashboardResponse {
   final List<ScoreTrendPoint> scoreTrend;
   final List<RecommendedExercise> recommendedExercises;
 
+  /// 게이미피케이션 값 (backend/app/schemas/dashboard.py: level, streak_days).
+  /// period/mode 필터와 무관하게 항상 "전체 기간" 기준. 백엔드는 이미 내려주고 있었지만
+  /// 이 모델이 안 읽고 있었다 — home_screen.dart는 대신 'LV5'/21일을 하드코딩해서 써왔다.
+  final int level;
+  final int streakDays;
+
   const DashboardResponse({
     required this.periodSummary,
     required this.weakItems,
     required this.scoreTrend,
     required this.recommendedExercises,
+    this.level = 1,
+    this.streakDays = 0,
   });
 
   /// REQ-008-5: 교정 세션 이력이 하나도 없는 신규 사용자
@@ -35,6 +43,8 @@ class DashboardResponse {
       recommendedExercises: (json['recommended_exercises'] as List)
           .map((e) => RecommendedExercise.fromJson(e as Map<String, dynamic>))
           .toList(),
+      level: (json['level'] as num?)?.toInt() ?? 1,
+      streakDays: (json['streak_days'] as num?)?.toInt() ?? 0,
     );
   }
 }

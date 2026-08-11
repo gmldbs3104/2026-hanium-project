@@ -146,8 +146,11 @@ class _CanvasInputScreenState extends State<CanvasInputScreen> {
         height: canvasSize.height.round(),
         strokeCount: _strokes.length,
       );
-      final result =
-          await CanvasApiService.analyze(strokes: _strokes, metadata: metadata);
+      final result = await CanvasApiService.analyze(
+        strokes: _strokes,
+        metadata: metadata,
+        targetText: _currentChar,
+      );
       if (mounted) {
         context.go('/feedback', extra: {
           'mode': 'canvas',
@@ -176,7 +179,13 @@ class _CanvasInputScreenState extends State<CanvasInputScreen> {
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
-        leading: const BackButton(),
+        // go_router의 context.go()로 들어온 화면이라 시스템 back이 예측 불가능할
+        // 수 있어(어디서 왔든) 항상 홈으로 명시적으로 이동한다 — 저장/분석 API를
+        // 호출하지 않으므로 기록도 남지 않는다.
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => context.go('/main'),
+        ),
         title: const Text('손글씨 연습'),
       ),
       body: SafeArea(

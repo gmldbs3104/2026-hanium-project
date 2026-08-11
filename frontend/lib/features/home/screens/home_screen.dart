@@ -6,14 +6,57 @@ import '../../../core/analytics_service.dart';
 import '../../../core/app_theme.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../../auth/providers/auth_state.dart';
+import '../../dashboard/models/dashboard_response.dart';
+import '../../dashboard/services/dashboard_api_service.dart';
+import '../../mypage/utils/level_title.dart';
 import '../providers/mode_provider.dart';
 
 /// 홈 화면 (메인 셸 탭 0)
 ///
 /// SFR-002: 두 가지 분석 모드(연습/실전)로 진입. 모드 선택 이벤트는 Analytics에 로깅.
 /// 학습 카테고리 카드에서 각 연습/실전 플로우로 진입한다.
-class HomeScreen extends ConsumerWidget {
+///
+/// 레벨/연속 출석일은 GET /api/v1/dashboard(DashboardResponse.level/streakDays)에서
+/// 가져온다 — report_screen.dart / achievement_screen.dart와 같은 데이터 소스다.
+/// 이전에는 이 API를 아예 호출하지 않고 'LV5'/21일을 화면에 그대로 박아뒀었다.
+class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
+
+  @override
+  ConsumerState<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends ConsumerState<HomeScreen> {
+  int _level = 1;
+  int _streakDays = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDashboardSummary();
+  }
+
+  Future<void> _loadDashboardSummary() async {
+    try {
+      final idToken =
+          await ref.read(authControllerProvider.notifier).getCurrentIdToken();
+      final data = await DashboardApiService.fetch(
+        period: DashboardPeriod.all,
+        mode: DashboardModeFilter.all,
+        idToken: idToken,
+      );
+      if (mounted) {
+        setState(() {
+          _level = data.level;
+          _streakDays = data.streakDays;
+        });
+      }
+    } catch (e) {
+      // 홈 화면의 부가 정보라 실패해도 화면 자체는 그대로 쓸 수 있어야 한다 —
+      // 기본값(레벨 1 / 0일)으로 조용히 남겨둔다.
+      debugPrint('[Home] dashboard summary load failed: $e');
+    }
+  }
 
   void _goPractice(BuildContext context, WidgetRef ref, AnalysisMode mode,
       String route) {
@@ -27,7 +70,7 @@ class HomeScreen extends ConsumerWidget {
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final authState = ref.watch(authControllerProvider);
     final name = authState is AuthAuthenticated
         ? (authState.user.name ?? authState.user.email)
@@ -41,10 +84,16 @@ class HomeScreen extends ConsumerWidget {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
           children: [
-            _Header(name: name, initial: initial, level: 'LV5', title: '손글씨 마스터'),
+            _Header(
+              name: name,
+              initial: initial,
+              level: 'LV$_level',
+              title: levelTitle(_level),
+              onTap: () => context.go('/main/mypage'),
+            ),
             const SizedBox(height: 20),
             _StreakBanner(
-              days: 21,
+              days: _streakDays,
               onStart: () =>
                   _goPractice(context, ref, AnalysisMode.canvas, '/character-practice'),
             ),
@@ -97,11 +146,14 @@ class _Header extends StatelessWidget {
   final String initial;
   final String level;
   final String title;
+  // 레벨/아이콘(계정 영역) 탭 시 마이페이지 탭으로 이동.
+  final VoidCallback onTap;
   const _Header(
       {required this.name,
       required this.initial,
       required this.level,
-      required this.title});
+      required this.title,
+      required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -123,25 +175,37 @@ class _Header extends StatelessWidget {
             ],
           ),
         ),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Text(level,
-                style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w800,
-                    color: AppTheme.ink)),
-            Text(title,
-                style: const TextStyle(fontSize: 11, color: AppTheme.inkMuted)),
-          ],
-        ),
-        const SizedBox(width: 10),
-        CircleAvatar(
-          radius: 20,
-          backgroundColor: AppTheme.mint,
-          child: Text(initial,
-              style: const TextStyle(
-                  color: Colors.white, fontWeight: FontWeight.bold)),
+        InkWell(
+          borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+            child: Row(
+              children: [
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(level,
+                        style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w800,
+                            color: AppTheme.ink)),
+                    Text(title,
+                        style: const TextStyle(
+                            fontSize: 11, color: AppTheme.inkMuted)),
+                  ],
+                ),
+                const SizedBox(width: 10),
+                CircleAvatar(
+                  radius: 20,
+                  backgroundColor: AppTheme.mint,
+                  child: Text(initial,
+                      style: const TextStyle(
+                          color: Colors.white, fontWeight: FontWeight.bold)),
+                ),
+              ],
+            ),
+          ),
         ),
       ],
     );

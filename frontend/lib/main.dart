@@ -8,6 +8,7 @@ import 'core/app_config.dart';
 import 'core/app_theme.dart';
 import 'core/theme_provider.dart';
 import 'features/feedback/services/session_save_queue.dart';
+import 'features/onboarding/providers/onboarding_provider.dart';
 import 'shared/router/app_router.dart';
 
 import 'firebase_options.dart';
@@ -31,7 +32,17 @@ Future<void> main() async {
   // 결과를 기다리지 않고 백그라운드로 흘려보낸다 (앱 시작을 지연시키지 않기 위함).
   unawaited(SessionSaveQueue.flush());
 
-  runApp(const ProviderScope(child: HandwritingApp()));
+  // 온보딩은 최초 1회만 — 로그인 기록(SharedPreferences)이 있으면 온보딩 화면을
+  // 건너뛰고 바로 메인(홈) 화면으로 간다. 라우터의 redirect가 첫 프레임부터 정확히
+  // 판단해야 하므로 runApp 전에 미리 읽어서 provider 초기값으로 override한다.
+  final onboardingDone = await loadOnboardingCompleted();
+
+  runApp(ProviderScope(
+    overrides: [
+      onboardingCompletedProvider.overrideWith((ref) => onboardingDone),
+    ],
+    child: const HandwritingApp(),
+  ));
 }
 
 class HandwritingApp extends ConsumerWidget {

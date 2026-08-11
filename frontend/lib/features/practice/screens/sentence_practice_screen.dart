@@ -45,8 +45,10 @@ class _SentencePracticeScreenState extends State<SentencePracticeScreen> {
   Color get _penColor => _palette[_colorIndex];
 
   static const _tabs = ['짧은 문장', '긴 문장', '캘리그라피'];
+  // "짧은 문장" 탭은 완전한 문장이 아니라 형용사+명사 두 단어가 합쳐진 구(句)를
+  // 보여준다(예: '시원한 선풍기') — 짧게 따라 쓰기 좋은 단위로 시작하기 위함.
   static const _sentences = [
-    '작은 실천이 큰 변화를 만든다',
+    '시원한 선풍기',
     '천 리 길도 한 걸음부터 시작된다는 마음으로',
     '오늘도 좋은 하루 되세요',
   ];
@@ -145,7 +147,11 @@ class _SentencePracticeScreenState extends State<SentencePracticeScreen> {
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
-        leading: const BackButton(),
+        // canvas_input_screen.dart와 동일한 이유 — 항상 홈으로 명시적 이동(기록 미저장).
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => context.go('/main'),
+        ),
         title: const Text('문장 쓰기'),
       ),
       body: SafeArea(

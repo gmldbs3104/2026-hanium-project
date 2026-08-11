@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/app_theme.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../models/dashboard_response.dart';
 import '../services/dashboard_api_service.dart';
@@ -138,7 +139,11 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
         const SizedBox(height: 24),
         _buildSectionTitle('점수 추이'),
         const SizedBox(height: 8),
-        ScoreTrendChart(points: data.scoreTrend),
+        ScoreTrendChart(
+          points: data.scoreTrend,
+          canvasColor: AppTheme.primaryColor,
+          imageColor: const Color(0xFF3B82F6),
+        ),
         const SizedBox(height: 24),
         _buildSectionTitle('취약 항목 TOP ${data.weakItems.length}'),
         const SizedBox(height: 8),

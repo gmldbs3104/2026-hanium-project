@@ -1,16 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../core/app_theme.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../../dashboard/models/dashboard_response.dart';
 import '../../dashboard/services/dashboard_api_service.dart';
+import '../../dashboard/utils/improvement_rate_format.dart';
 import '../../dashboard/widgets/score_trend_chart.dart';
 
 /// 나의 글씨 분석 (메인 셸 탭 2)
 ///
 /// 기존 대시보드 백엔드(GET /api/v1/dashboard)를 그대로 사용한다.
-/// 연속 출석 배지는 백엔드 스키마에 없어 표시용 고정값이다.
+/// ⚠️ 연속 출석/레벨은 period·mode 필터와 무관하게 항상 "전체 기간" 기준으로
+/// 백엔드가 계산해서 내려준다(dashboard_service.py: _compute_level_and_streak) —
+/// 그래서 상단 모드 토글이 캔버스/이미지 어느 쪽이어도 data.streakDays는 그대로 쓸 수 있다.
 class AnalysisScreen extends ConsumerStatefulWidget {
   const AnalysisScreen({super.key});
 
@@ -24,10 +28,15 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
   String? _error;
   DashboardResponse? _data;
 
+  // 성장 그래프는 상단 모드 토글과 무관하게 항상 두 계열(글씨 연습/실전 연습)을
+  // 같이 보여줘야 하므로, 토글에 필터링되는 [_data]와 별도로 mode=all로 한 번만 받아온다.
+  List<ScoreTrendPoint> _growthTrend = [];
+
   @override
   void initState() {
     super.initState();
     _load();
+    _loadGrowthTrend();
   }
 
   Future<void> _load() async {
@@ -48,6 +57,21 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
       if (mounted) setState(() => _error = '분석 데이터를 불러오지 못했습니다.');
     } finally {
       if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _loadGrowthTrend() async {
+    try {
+      final idToken =
+          await ref.read(authControllerProvider.notifier).getCurrentIdToken();
+      final data = await DashboardApiService.fetch(
+        period: DashboardPeriod.all,
+        mode: DashboardModeFilter.all,
+        idToken: idToken,
+      );
+      if (mounted) setState(() => _growthTrend = data.scoreTrend);
+    } catch (e) {
+      debugPrint('[Analysis] growth trend load failed: $e');
     }
   }
 
@@ -105,7 +129,7 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
 
   List<Widget> _leftColumn(DashboardResponse data) {
     return [
-      const _StreakCard(days: 21),
+      _StreakCard(days: data.streakDays),
       const SizedBox(height: 12),
       _ModeToggle(
         mode: _mode,
@@ -123,10 +147,9 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
   List<Widget> _rightColumn(DashboardResponse data) {
     final s = data.periodSummary;
     return [
-      _AvgScoreCard(
-          avg: s.avgScore.round(), delta: s.improvementRate.round()),
+      _AvgScoreCard(avg: s.avgScore.round(), improvementRate: s.improvementRate),
       const SizedBox(height: 12),
-      _GrowthCard(points: data.scoreTrend),
+      _GrowthCard(points: _growthTrend),
       const SizedBox(height: 12),
     ];
   }
@@ -336,7 +359,13 @@ class _WeakCharRow extends StatelessWidget {
             ),
           ),
           ElevatedButton(
-            onPressed: () {},
+            // ⚠️ item.item은 특정 글자가 아니라 채점 항목 카테고리다(백엔드
+            // dashboard_service.py: "획순"/"자간"/"크기" 또는 "크기 균일성"/
+            // "기울기 일관성"/"줄 정렬") — 어떤 글자인지는 알 수 없어서, 어떤
+            // 모드를 더 연습해야 하는지에 맞춰 해당 연습 화면으로 보낸다.
+            onPressed: () => item.mode == 'canvas'
+                ? context.push('/character-practice')
+                : context.push('/image-capture'),
             style: ElevatedButton.styleFrom(
               backgroundColor: AppTheme.mint,
               foregroundColor: Colors.white,
@@ -356,8 +385,8 @@ class _WeakCharRow extends StatelessWidget {
 
 class _AvgScoreCard extends StatelessWidget {
   final int avg;
-  final int delta;
-  const _AvgScoreCard({required this.avg, required this.delta});
+  final double improvementRate;
+  const _AvgScoreCard({required this.avg, required this.improvementRate});
 
   @override
   Widget build(BuildContext context) {
@@ -397,7 +426,7 @@ class _AvgScoreCard extends StatelessWidget {
               ],
             ),
           ),
-          _DeltaBadge(delta: delta),
+          _DeltaBadge(improvementRate: improvementRate),
         ],
       ),
     );
@@ -405,12 +434,12 @@ class _AvgScoreCard extends StatelessWidget {
 }
 
 class _DeltaBadge extends StatelessWidget {
-  final int delta;
-  const _DeltaBadge({required this.delta});
+  final double improvementRate;
+  const _DeltaBadge({required this.improvementRate});
 
   @override
   Widget build(BuildContext context) {
-    final up = delta >= 0;
+    final up = improvementRate >= 0;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
@@ -423,7 +452,7 @@ class _DeltaBadge extends StatelessWidget {
           Icon(up ? Icons.trending_up_rounded : Icons.trending_down_rounded,
               size: 14, color: AppTheme.primaryDark),
           const SizedBox(width: 4),
-          Text('${up ? '+' : ''}$delta',
+          Text(formatImprovementRate(improvementRate),
               style: const TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w700,
@@ -433,6 +462,12 @@ class _DeltaBadge extends StatelessWidget {
     );
   }
 }
+
+// 성장 그래프 2계열 색 — 기존엔 mint(#7BD0B8)와 primaryColor(#35C4B3)로 둘 다 같은
+// 민트/틸 계열이라 구분이 잘 안 됐다. 실전 연습 쪽을 블루(캔버스 필기 팔레트에서도
+// 쓰는 색, canvas_input_screen.dart의 _palette)로 바꿔 확실히 다른 색으로 갈랐다.
+const _canvasTrendColor = AppTheme.primaryColor; // 글씨 연습
+const _imageTrendColor = Color(0xFF3B82F6); // 실전 연습
 
 class _GrowthCard extends StatelessWidget {
   final List<ScoreTrendPoint> points;
@@ -475,13 +510,17 @@ class _GrowthCard extends StatelessWidget {
               ),
             )
           else
-            ScoreTrendChart(points: points),
+            ScoreTrendChart(
+              points: points,
+              canvasColor: _canvasTrendColor,
+              imageColor: _imageTrendColor,
+            ),
           const SizedBox(height: 10),
           const Row(
             children: [
-              _LegendDot(color: AppTheme.mint, label: '글씨 연습'),
+              _LegendDot(color: _canvasTrendColor, label: '글씨 연습'),
               SizedBox(width: 16),
-              _LegendDot(color: AppTheme.primaryColor, label: '실전 연습'),
+              _LegendDot(color: _imageTrendColor, label: '실전 연습'),
             ],
           ),
         ],

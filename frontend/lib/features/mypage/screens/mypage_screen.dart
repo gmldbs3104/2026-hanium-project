@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -5,13 +7,49 @@ import 'package:go_router/go_router.dart';
 import '../../../core/app_theme.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../../auth/providers/auth_state.dart';
+import '../../dashboard/models/dashboard_response.dart';
+import '../../dashboard/services/dashboard_api_service.dart';
+import '../providers/profile_override_provider.dart';
+import '../utils/level_title.dart';
 
 /// 마이페이지 (메인 셸 탭 3)
 ///
 /// 프로필/통계 + 학습 진행·계정 설정·고객 지원 메뉴.
 /// 로그아웃/계정 삭제는 기존 AuthController 로직을 그대로 사용한다(백엔드 연동 유지).
-class MyPageScreen extends ConsumerWidget {
+///
+/// 레벨은 GET /api/v1/dashboard(DashboardResponse.level)에서 가져온다 —
+/// home_screen.dart / achievement_screen.dart와 같은 데이터 소스다. 이전에는
+/// API를 호출하지 않고 'Lv.5'를 화면에 그대로 박아뒀었다.
+class MyPageScreen extends ConsumerStatefulWidget {
   const MyPageScreen({super.key});
+
+  @override
+  ConsumerState<MyPageScreen> createState() => _MyPageScreenState();
+}
+
+class _MyPageScreenState extends ConsumerState<MyPageScreen> {
+  int _level = 1;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadLevel();
+  }
+
+  Future<void> _loadLevel() async {
+    try {
+      final idToken =
+          await ref.read(authControllerProvider.notifier).getCurrentIdToken();
+      final data = await DashboardApiService.fetch(
+        period: DashboardPeriod.all,
+        mode: DashboardModeFilter.all,
+        idToken: idToken,
+      );
+      if (mounted) setState(() => _level = data.level);
+    } catch (e) {
+      debugPrint('[MyPage] level load failed: $e');
+    }
+  }
 
   Future<void> _confirmSignOut(BuildContext context, WidgetRef ref) async {
     final ok = await showDialog<bool>(
@@ -35,11 +73,16 @@ class MyPageScreen extends ConsumerWidget {
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final authState = ref.watch(authControllerProvider);
-    final name = authState is AuthAuthenticated
+    final fallbackName = authState is AuthAuthenticated
         ? (authState.user.name ?? authState.user.email)
         : '사용자';
+    // 로컬 프로필 수정값(닉네임/사진)이 있으면 우선 사용 — profile_override_provider.dart 참고.
+    final override = ref.watch(profileOverrideProvider);
+    final name = override.nickname ?? fallbackName;
+    final avatarImage =
+        override.photoBase64 != null ? MemoryImage(base64Decode(override.photoBase64!)) : null;
 
     return Container(
       color: AppTheme.scaffold,
@@ -56,7 +99,12 @@ class MyPageScreen extends ConsumerWidget {
                       fontWeight: FontWeight.bold,
                       color: AppTheme.ink)),
             ),
-            _ProfileHeader(name: name),
+            _ProfileHeader(
+              name: name,
+              level: _level,
+              avatarImage: avatarImage,
+              onEdit: () => context.push('/profile-edit'),
+            ),
             const SizedBox(height: 12),
             _MenuSection(
               title: '학습 진행 상황',
@@ -65,7 +113,7 @@ class MyPageScreen extends ConsumerWidget {
                     icon: Icons.workspace_premium_rounded,
                     title: '나의 성취도',
                     subtitle: '배지와 학습 기록 보기',
-                    onTap: () {}),
+                    onTap: () => context.push('/achievements')),
               ],
             ),
             _MenuSection(
@@ -74,11 +122,11 @@ class MyPageScreen extends ConsumerWidget {
                 _MenuItem(
                     icon: Icons.person_outline_rounded,
                     title: '프로필 관리',
-                    onTap: () {}),
-                _MenuItem(
+                    onTap: () => context.push('/profile-edit')),
+                const _MenuItem(
                     icon: Icons.notifications_none_rounded,
                     title: '알림 설정',
-                    onTap: () {}),
+                    subtitle: '백엔드 연동 필요 — 준비 중'),
                 _MenuItem(
                     icon: Icons.tune_rounded,
                     title: '상세환경설정',
@@ -144,7 +192,11 @@ class MyPageScreen extends ConsumerWidget {
 
 class _ProfileHeader extends StatelessWidget {
   final String name;
-  const _ProfileHeader({required this.name});
+  final int level;
+  final ImageProvider? avatarImage;
+  final VoidCallback onEdit;
+  const _ProfileHeader(
+      {required this.name, required this.level, required this.onEdit, this.avatarImage});
 
   @override
   Widget build(BuildContext context) {
@@ -167,11 +219,14 @@ class _ProfileHeader extends StatelessWidget {
               CircleAvatar(
                 radius: 26,
                 backgroundColor: Colors.white,
-                child: Text(initial,
-                    style: const TextStyle(
-                        color: AppTheme.primaryDark,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 20)),
+                backgroundImage: avatarImage,
+                child: avatarImage == null
+                    ? Text(initial,
+                        style: const TextStyle(
+                            color: AppTheme.primaryDark,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 20))
+                    : null,
               ),
               const SizedBox(width: 14),
               Expanded(
@@ -184,14 +239,14 @@ class _ProfileHeader extends StatelessWidget {
                             fontSize: 18,
                             fontWeight: FontWeight.bold)),
                     const SizedBox(height: 2),
-                    const Text('손글씨 마스터 Lv.5',
+                    Text('${levelTitle(level)} Lv.$level',
                         style:
-                            TextStyle(color: Colors.white70, fontSize: 12)),
+                            const TextStyle(color: Colors.white70, fontSize: 12)),
                   ],
                 ),
               ),
               OutlinedButton(
-                onPressed: () {},
+                onPressed: onEdit,
                 style: OutlinedButton.styleFrom(
                   foregroundColor: Colors.white,
                   side: const BorderSide(color: Colors.white70),

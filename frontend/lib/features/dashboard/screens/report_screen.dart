@@ -7,6 +7,7 @@ import '../../../shared/widgets/ui_kit.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../models/dashboard_response.dart';
 import '../services/dashboard_api_service.dart';
+import '../utils/improvement_rate_format.dart';
 
 /// 나의 학습 리포트 (결과창)
 ///
@@ -95,7 +96,7 @@ class _ReportScreenState extends ConsumerState<ReportScreen> {
     final left = [
       _ScoreCard(
           score: s.avgScore.round(),
-          delta: s.improvementRate.round(),
+          improvementRate: s.improvementRate,
           goal: _goal),
       const SizedBox(height: 16),
       _WeeklyBarCard(points: recent, weekAvg: weekAvg),
@@ -132,14 +133,15 @@ class _ReportScreenState extends ConsumerState<ReportScreen> {
 
 class _ScoreCard extends StatelessWidget {
   final int score;
-  final int delta;
+  final double improvementRate;
   final int goal;
   const _ScoreCard(
-      {required this.score, required this.delta, required this.goal});
+      {required this.score, required this.improvementRate, required this.goal});
 
   @override
   Widget build(BuildContext context) {
     final ratio = (score / goal).clamp(0.0, 1.0);
+    final up = improvementRate >= 0;
     return HaneumCard(
       padding: const EdgeInsets.all(18),
       child: Column(
@@ -160,10 +162,10 @@ class _ScoreCard extends StatelessWidget {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.trending_up_rounded,
+                    Icon(up ? Icons.trending_up_rounded : Icons.trending_down_rounded,
                         size: 13, color: AppTheme.primaryDark),
                     const SizedBox(width: 3),
-                    Text('${delta >= 0 ? '+' : ''}$delta',
+                    Text(formatImprovementRate(improvementRate),
                         style: const TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w700,

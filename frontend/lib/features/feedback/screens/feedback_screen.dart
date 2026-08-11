@@ -10,9 +10,12 @@ import '../../../core/app_theme.dart';
 import '../../../core/target_score_provider.dart';
 import '../../../shared/services/api_client.dart';
 import '../../../shared/widgets/ui_kit.dart';
+import '../../../shared/models/feedback_item.dart';
 import '../../../shared/models/weak_habit.dart';
 import '../../auth/providers/auth_controller.dart';
+import '../utils/canvas_feedback_parser.dart';
 import '../utils/image_download.dart';
+import '../utils/severity_style.dart';
 import '../../canvas_mode/models/stroke.dart';
 import '../../canvas_mode/services/canvas_api_service.dart';
 import '../../canvas_mode/widgets/stroke_painter.dart';
@@ -614,8 +617,22 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
   }
 
   /// 우측 하단: AI 분석 "취약한 습관" 패널.
-  /// weakHabits가 비어 있으면(백엔드 미연동 등) 안내 문구를 보여준다.
+  ///
+  /// ⚠️ [_weakHabits]는 백엔드 CanvasFeedbackResponse/ImageFeedbackResponse 스키마에
+  /// 아직 `weak_habits` 필드 자체가 없어(schemas/canvas.py, schemas/image.py 확인)
+  /// 항상 빈 리스트다 — 그래서 예전엔 이 카드가 항상 "준비 중"만 보여줬다.
+  /// 대신 이미 화면 왼쪽 오버레이에 쓰고 있는 실제 문자별 피드백
+  /// (_canvasItems/_imageItems의 severity+message)을 여기서도 같은 색으로
+  /// 보여준다 — 캔버스 위 박스를 하나하나 탭하지 않아도 오른쪽에서 한눈에 보이도록.
   Widget _buildWeakHabitCard(BuildContext context, {required bool scrollable}) {
+    final realItems = (_isCanvas
+            ? _canvasItems.map((i) => (charId: i.charId, feedback: i.feedback))
+            : _imageItems.map((i) => (charId: i.charId, feedback: i.feedback)))
+        .where((i) => i.feedback != null && i.feedback!.severity != 'good')
+        .toList();
+    final allGoodCount = (_isCanvas ? _canvasItems.length : _imageItems.length) -
+        realItems.length;
+
     final body = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
@@ -632,12 +649,7 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
           ],
         ),
         const SizedBox(height: 14),
-        if (_weakHabits.isEmpty)
-          const Text(
-            'AI 취약 습관 분석을 준비 중이에요.\n잠시 후 다시 확인해 주세요.',
-            style: TextStyle(fontSize: 12.5, height: 1.4, color: AppTheme.inkFaint),
-          )
-        else ...[
+        if (_weakHabits.isNotEmpty) ...[
           Wrap(
             spacing: 8,
             runSpacing: 8,
@@ -648,7 +660,21 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
           const SizedBox(height: 14),
           const Text('이 부분들을 신경써서 다시 써볼까요?',
               style: TextStyle(fontSize: 12, color: AppTheme.inkMuted)),
-        ],
+        ] else if (realItems.isNotEmpty) ...[
+          ...realItems.map((i) => Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: _FeedbackDetailRow(feedback: i.feedback!),
+              )),
+        ] else if (allGoodCount > 0)
+          const Text(
+            '모든 글자가 기준을 잘 지켰어요! 훌륭해요 🎉',
+            style: TextStyle(fontSize: 12.5, height: 1.4, color: AppTheme.inkMuted),
+          )
+        else
+          const Text(
+            'AI 취약 습관 분석을 준비 중이에요.\n잠시 후 다시 확인해 주세요.',
+            style: TextStyle(fontSize: 12.5, height: 1.4, color: AppTheme.inkFaint),
+          ),
       ],
     );
 
@@ -896,6 +922,77 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// 우측 "AI 분석" 패널의 문자 하나에 대한 피드백.
+///
+/// 캔버스 모드는 획순/자간/크기 세 문장이 공백으로 붙은 문자열 하나로 온다
+/// (feedback_generator.py) — [parseCanvasFeedbackParts]로 다시 나눠서 각 문장을
+/// 그 문장 고유의 색(적절=초록/문제=주황)으로 줄바꿈해 보여준다. 캔버스 위 박스에
+/// 표시되는 char_id 같은 내부 식별자는 사용자에게 의미가 없어 보여주지 않는다.
+/// 패턴이 안 맞으면(이미지 모드 등) 원문 메시지를 그 항목의 종합 severity 색으로
+/// 한 줄에 보여준다.
+class _FeedbackDetailRow extends StatelessWidget {
+  final FeedbackItem feedback;
+  const _FeedbackDetailRow({required this.feedback});
+
+  @override
+  Widget build(BuildContext context) {
+    final parts = parseCanvasFeedbackParts(feedback.feedbackMessage);
+
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: AppTheme.scaffold,
+        borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+      ),
+      child: parts.isNotEmpty
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (var i = 0; i < parts.length; i++)
+                  Padding(
+                    // 문장이 끝날 때마다(각 부분 사이) 줄바꿈 + 들여쓰기로 구분한다.
+                    padding: EdgeInsets.only(top: i == 0 ? 0 : 8, left: 4),
+                    child: _SeverityLine(text: parts[i].text, severity: parts[i].severity),
+                  ),
+              ],
+            )
+          : _SeverityLine(
+              text: feedback.feedbackMessage,
+              severity: feedbackSeverityFromString(feedback.severity),
+            ),
+    );
+  }
+}
+
+/// severity 색 원형 배지 + 아이콘 + 텍스트 한 줄 (SeverityStyle 공용 규칙 사용).
+class _SeverityLine extends StatelessWidget {
+  final String text;
+  final FeedbackSeverity severity;
+  const _SeverityLine({required this.text, required this.severity});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = SeverityStyle.color(severity);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 16,
+          height: 16,
+          margin: const EdgeInsets.only(top: 1),
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          child: Icon(SeverityStyle.icon(severity), size: 10, color: Colors.white),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(text,
+              style: TextStyle(fontSize: 12.5, color: color, fontWeight: FontWeight.w600)),
+        ),
+      ],
     );
   }
 }

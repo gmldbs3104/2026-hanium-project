@@ -29,6 +29,12 @@ class AppConfig {
   //    백엔드가 수행하며, 엔드포인트 경로·응답 스펙은 협의 필요 (임시로 REST 관례를 따름).
   static const String authDeleteAccountEndpoint = '/api/v1/auth/account';
 
+  // 상세환경설정 "데이터 초기화" (mypage_upgrade.md 3.4-1, HTTP DELETE, 인증 필요).
+  // ⚠️ 백엔드 미구현 — 계정은 유지한 채 세션/점수 이력 등 학습 기록만 지우는 엔드포인트가
+  //    아직 없다(계정 삭제 API와는 다름). 경로는 REST 관례를 따른 임시값이라 백엔드와
+  //    협의 후 확정 필요 (settings_api_service.dart 참고).
+  static const String resetHistoryEndpoint = '/api/v1/user/history';
+
   // ---- 캔버스 모드 파이프라인 (SFR-003C ~ SFR-007) ----
   static String canvasGroupEndpoint(String sessionId) =>
       '/api/v1/canvas/$sessionId/group';

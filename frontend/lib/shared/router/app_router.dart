@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../features/analysis/screens/analysis_screen.dart';
 import '../../features/auth/providers/auth_controller.dart';
 import '../../features/auth/providers/auth_state.dart';
 import '../../features/auth/screens/login_screen.dart';
@@ -9,7 +10,11 @@ import '../../features/canvas_mode/models/stroke.dart';
 import '../../features/canvas_mode/screens/canvas_input_screen.dart';
 import '../../features/dashboard/screens/report_screen.dart';
 import '../../features/feedback/screens/feedback_screen.dart';
+import '../../features/home/screens/home_screen.dart';
 import '../../features/image_mode/screens/image_capture_screen.dart';
+import '../../features/mypage/screens/achievement_screen.dart';
+import '../../features/mypage/screens/mypage_screen.dart';
+import '../../features/mypage/screens/profile_edit_screen.dart';
 import '../../features/mypage/screens/settings_screen.dart';
 import '../../features/onboarding/providers/onboarding_provider.dart';
 import '../../features/onboarding/screens/onboarding_screen.dart';
@@ -57,7 +62,28 @@ final routerProvider = Provider<GoRouter>((ref) {
           path: '/onboarding',
           builder: (context, state) => const OnboardingScreen()),
       // 하단 네비게이션 메인 셸 (홈 · AI 교정 · 분석 · 마이)
-      GoRoute(path: '/main', builder: (context, state) => const MainShell()),
+      // 탭마다 실제 URL을 가진 브랜치로 분리 — 새로고침(브라우저 하드 리로드)해도
+      // 마지막에 보던 탭이 유지되도록 하기 위함(이전엔 탭이 URL에 반영되지 않는
+      // 순수 앱 상태라 새로고침하면 항상 홈 탭으로 돌아갔다).
+      StatefulShellRoute.indexedStack(
+        builder: (context, state, navigationShell) =>
+            MainShell(navigationShell: navigationShell),
+        branches: [
+          StatefulShellBranch(routes: [
+            GoRoute(path: '/main', builder: (context, state) => const HomeScreen()),
+          ]),
+          StatefulShellBranch(routes: [
+            GoRoute(
+                path: '/main/analysis',
+                builder: (context, state) => const AnalysisScreen()),
+          ]),
+          StatefulShellBranch(routes: [
+            GoRoute(
+                path: '/main/mypage',
+                builder: (context, state) => const MyPageScreen()),
+          ]),
+        ],
+      ),
       // 기존 코드 호환: /home 은 메인 셸로 리다이렉트
       GoRoute(path: '/home', redirect: (_, __) => '/main'),
 
@@ -86,6 +112,12 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/report', builder: (context, state) => const ReportScreen()),
       GoRoute(
           path: '/settings', builder: (context, state) => const SettingsScreen()),
+      GoRoute(
+          path: '/achievements',
+          builder: (context, state) => const AchievementScreen()),
+      GoRoute(
+          path: '/profile-edit',
+          builder: (context, state) => const ProfileEditScreen()),
 
       GoRoute(
         path: '/feedback',
