@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>blob 라벨링</title>
+<style>
+  :root { --bg:#f4f5f2; --ink:#1e221c; --muted:#6b7263; --line:#d8dccf;
+          --accent:#237a3c; --panel:#fff; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:"Pretendard","Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+         background:var(--bg); color:var(--ink); }
+  header { position:sticky; top:0; z-index:10; background:var(--panel);
+           border-bottom:1px solid var(--line); padding:8px 12px;
+           display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  button { font:inherit; padding:5px 11px; border:1px solid var(--line);
+           background:#fff; border-radius:6px; cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .sep { width:1px; height:22px; background:var(--line); margin:0 4px; }
+  .status { font-size:13px; color:var(--muted); margin-left:auto;
+            display:flex; gap:14px; align-items:center; }
+  .status b { color:var(--ink); font-variant-numeric:tabular-nums; }
+  #cursyl { display:inline-block; width:16px; height:16px; border-radius:4px;
+            vertical-align:-3px; border:1px solid rgba(0,0,0,.2); }
+  #canvaswrap { overflow:auto; max-height:calc(100vh - 260px); padding:12px;
+                background:#e9ebe4; }
+  svg { display:block; background:#fff; box-shadow:0 1px 4px rgba(0,0,0,.15); }
+  svg text { font:600 11px sans-serif; pointer-events:none; user-select:none; }
+  .piece { cursor:pointer; }
+  .piece.unassigned { fill:transparent; stroke:#b9bfae; stroke-width:1;
+                      stroke-dasharray:3 3; }
+  .piece.sel-blob { stroke:#111; stroke-width:2; stroke-dasharray:none; }
+  .cut { stroke:#d61f1f; stroke-width:2; cursor:pointer; }
+  .hint { font-size:12px; color:var(--muted); padding:2px 12px; }
+  footer { border-top:1px solid var(--line); background:var(--panel); padding:10px 12px;
+           display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  label { font-size:12px; color:var(--muted); display:block; margin-bottom:3px; }
+  input[type=text], textarea { width:100%; font:13px/1.5 ui-monospace,monospace;
+           border:1px solid var(--line); border-radius:6px; padding:6px 8px; }
+  textarea { height:150px; resize:vertical; white-space:pre; }
+  .row { display:flex; gap:8px; align-items:center; }
+  .warn { color:#b8860b; font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <button id="modeGroup" class="on">묶기</button>
+  <button id="modeSplit">분할</button>
+  <div class="sep"></div>
+  <button id="importBtn">기존 groups.json 불러오기</button>
+  <input type="file" id="importFile" accept=".json,application/json" hidden>
+  <div class="sep"></div>
+  <button id="newSyl">새 음절 (Enter)</button>
+  <button id="delSyl">현재 음절 비우기</button>
+  <div class="sep"></div>
+  <button id="clearCuts">선택 blob 절단선 초기화</button>
+  <div class="sep"></div>
+  <button id="zoomOut">−</button>
+  <button id="zoomIn">＋</button>
+  <div class="status">
+    <span>현재 음절 <span id="cursyl"></span> <b id="curidx">0</b></span>
+    <span>확정 음절 <b id="nsyl">0</b></span>
+    <span>미배정 조각 <b id="nunassigned">0</b></span>
+  </div>
+</header>
+<div class="hint" id="hint"></div>
+<div id="canvaswrap"><svg id="svg"></svg></div>
+<footer>
+  <div>
+    <label for="textField">문장(선택, groups.json의 _text로 기록)</label>
+    <input type="text" id="textField" placeholder="예: 안녕하세요. 산학경영팀 …">
+    <div class="row" style="margin-top:8px">
+      <button id="copyBtn">groups.json 복사</button>
+      <button id="dlBtn">다운로드</button>
+      <span class="warn" id="dupWarn"></span>
+    </div>
+    <p class="hint" style="padding-left:0">
+      저장 위치: <code id="savepath"></code><br>
+      이후: <code id="buildcmd"></code>
+    </p>
+  </div>
+  <div>
+    <label for="jsonOut">groups.json (실시간)</label>
+    <textarea id="jsonOut" readonly></textarea>
+  </div>
+</footer>
+
+<script>
+const PAYLOAD = /*__PAYLOAD__*/null;
+const { stem, width, height, image, blobs } = PAYLOAD;
+const blobById = {};
+blobs.forEach(b => blobById[b.id] = b);
+
+// ---- 상태 ----
+let mode = "group";               // "group" | "split"
+let curIdx = 0;                   // 현재 배정 대상 음절 인덱스
+let assign = {};                  // pieceName -> sylIndex
+let splits = {};                  // blobId -> {x:[...], y:[...]}
+let selBlob = null;              // 분할 모드에서 선택된 blobId
+let zoom = Math.min(1.4, Math.max(0.5, 1100 / width));
+let text = "";
+
+// ---- localStorage 복원 ----
+const LS_KEY = "labelgui_" + stem;
+try {
+  const saved = JSON.parse(localStorage.getItem(LS_KEY) || "null");
+  if (saved) { assign = saved.assign||{}; splits = saved.splits||{};
+               curIdx = saved.curIdx||0; text = saved.text||""; }
+} catch (e) {}
+
+function save() {
+  localStorage.setItem(LS_KEY, JSON.stringify({ assign, splits, curIdx, text }));
+}
+
+// ---- 배경 픽셀(잉크 판정) ----
+const off = document.createElement("canvas");
+off.width = width; off.height = height;
+const octx = off.getContext("2d", { willReadFrequently: true });
+let pix = null;
+const bgImg = new Image();
+bgImg.onload = () => {
+  octx.drawImage(bgImg, 0, 0);
+  pix = octx.getImageData(0, 0, width, height).data;
+  render();
+};
+bgImg.src = image;
+
+function hasInk(x0, y0, x1, y1) {
+  if (!pix) return true;
+  x0 = Math.max(0, Math.floor(x0)); y0 = Math.max(0, Math.floor(y0));
+  x1 = Math.min(width, Math.ceil(x1)); y1 = Math.min(height, Math.ceil(y1));
+  for (let y = y0; y < y1; y++) {
+    let base = y * width;
+    for (let x = x0; x < x1; x++) {
+      if (pix[(base + x) * 4] < 128) return true;   // R<128 = 잉크
+    }
+  }
+  return false;
+}
+
+// ---- 조각 계산 (label_helper._split_blob 규칙과 일치) ----
+const pieceCache = {};
+function piecesOf(blob) {
+  if (pieceCache[blob.id]) return pieceCache[blob.id];
+  const sp = splits[blob.id] || { x: [], y: [] };
+  const hasSplit = (sp.x && sp.x.length) || (sp.y && sp.y.length);
+  const xs = [blob.x, ...(sp.x || []).slice().sort((a,b)=>a-b), blob.x + blob.width];
+  const ys = [blob.y, ...(sp.y || []).slice().sort((a,b)=>a-b), blob.y + blob.height];
+  const out = [];
+  let i = 0;
+  for (let yi = 0; yi < ys.length - 1; yi++) {
+    for (let xi = 0; xi < xs.length - 1; xi++) {
+      const cell = { x0: xs[xi], y0: ys[yi], x1: xs[xi+1], y1: ys[yi+1] };
+      const ink = hasInk(cell.x0, cell.y0, cell.x1, cell.y1);
+      // 이름: 분할 없으면 blob.id(정수), 있으면 "<id>"+letter. i는 잉크 없는 칸도 소비.
+      const name = hasSplit ? (blob.id + String.fromCharCode(97 + i)) : String(blob.id);
+      i++;
+      if (ink) out.push({ name, cell, isSplit: hasSplit });
+    }
+  }
+  // 잉크가 하나도 없으면(있을 리 없지만) blob 전체를 한 조각으로
+  if (!out.length) out.push({ name: String(blob.id), cell:
+      { x0: blob.x, y0: blob.y, x1: blob.x+blob.width, y1: blob.y+blob.height }, isSplit:false });
+  pieceCache[blob.id] = out;
+  return out;
+}
+function clearPieceCache(id) { delete pieceCache[id]; }
+function clearAllPieceCache() { for (const k in pieceCache) delete pieceCache[k]; }
+
+// ---- 기존 groups.json 불러오기(재수정용) ----
+function importGroups(obj) {
+  splits = {}; assign = {};
+  const sp = obj.splits || {};
+  for (const id in sp) {
+    const v = sp[id];
+    splits[id] = Array.isArray(v)
+      ? { x: v.slice(), y: [] }
+      : { x: (v.x || []).slice(), y: (v.y || []).slice() };
+  }
+  (obj.syllables || []).forEach((g, si) => g.forEach(n => { assign[String(n)] = si; }));
+  curIdx = (obj.syllables || []).length;
+  text = obj._text || "";
+  document.getElementById("textField").value = text;
+  clearAllPieceCache();
+  render();
+}
+
+// ---- 색 ----
+function sylColor(i) { return `hsl(${(i * 67) % 360} 70% 52%)`; }
+
+// ---- 렌더 ----
+// 현재 splits로부터 유효한 조각 이름 집합에 없는 배정을 정리(분할 추가/취소 시 유령 방지)
+function gcAssign() {
+  const valid = new Set();
+  for (const b of blobs) for (const p of piecesOf(b)) valid.add(p.name);
+  for (const k in assign) if (!valid.has(k)) delete assign[k];
+}
+
+const svg = document.getElementById("svg");
+function render() {
+  gcAssign();
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("width", Math.round(width * zoom));
+  svg.setAttribute("height", Math.round(height * zoom));
+  let s = `<image href="${image}" x="0" y="0" width="${width}" height="${height}"/>`;
+  let nUn = 0;
+  for (const b of blobs) {
+    for (const p of piecesOf(b)) {
+      const w = p.cell.x1 - p.cell.x0, h = p.cell.y1 - p.cell.y0;
+      const si = assign[p.name];
+      let cls = "piece", fill = "transparent", op = 1, extra = "";
+      if (si === undefined) { cls += " unassigned"; nUn++; }
+      else { fill = sylColor(si); op = 0.42; }
+      if (si !== undefined && si === curIdx) extra = ` stroke="#111" stroke-width="2.5"`;
+      if (mode === "split" && selBlob === b.id) cls += " sel-blob";
+      s += `<rect class="${cls}" data-piece="${p.name}" data-blob="${b.id}" `
+         + `x="${p.cell.x0}" y="${p.cell.y0}" width="${w}" height="${h}" `
+         + `fill="${fill}" fill-opacity="${op}" stroke-opacity="0.9"${extra}/>`;
+      // 조각 라벨
+      const lbl = p.isSplit ? p.name : String(b.id);
+      s += `<text x="${p.cell.x0 + 2}" y="${p.cell.y0 + 12}" `
+         + `fill="${si===undefined ? '#888' : '#111'}">${lbl}</text>`;
+    }
+    // 절단선
+    const sp = splits[b.id];
+    if (sp) {
+      for (const cx of (sp.x||[])) s += `<line class="cut" data-blob="${b.id}" data-axis="x" data-v="${cx}" x1="${cx}" y1="${b.y}" x2="${cx}" y2="${b.y+b.height}"/>`;
+      for (const cy of (sp.y||[])) s += `<line class="cut" data-blob="${b.id}" data-axis="y" data-v="${cy}" x1="${b.x}" y1="${cy}" x2="${b.x+b.width}" y2="${cy}"/>`;
+    }
+  }
+  svg.innerHTML = s;
+  document.getElementById("curidx").textContent = curIdx;
+  document.getElementById("cursyl").style.background = sylColor(curIdx);
+  document.getElementById("nsyl").textContent = usedSylCount();
+  document.getElementById("nunassigned").textContent = nUn;
+  updateJSON();
+  save();
+}
+
+function usedSylCount() {
+  const set = new Set(Object.values(assign));
+  return set.size;
+}
+// 아직 아무 조각도 없는 새 음절 인덱스(배정된 최대값 + 1, 비었으면 0)
+function freshIdx() {
+  const v = Object.values(assign);
+  return v.length ? Math.max(...v) + 1 : 0;
+}
+
+// ---- groups.json 생성 ----
+function buildGroups() {
+  const splitsOut = {};
+  for (const id in splits) {
+    const sp = splits[id];
+    const xs = (sp.x||[]).slice().sort((a,b)=>a-b);
+    const ys = (sp.y||[]).slice().sort((a,b)=>a-b);
+    if (!xs.length && !ys.length) continue;
+    splitsOut[id] = ys.length ? { x: xs, y: ys } : xs;
+  }
+  // 음절 인덱스 -> 조각들
+  const bySyl = {};
+  for (const name in assign) {
+    const si = assign[name];
+    (bySyl[si] = bySyl[si] || []).push(name);
+  }
+  const indices = Object.keys(bySyl).map(Number).sort((a,b)=>a-b);
+  const syllables = indices.map(si =>
+    bySyl[si].map(n => /^\d+$/.test(n) ? Number(n) : n));
+  const obj = {};
+  if (text.trim()) obj._text = text.trim();
+  obj.splits = splitsOut;
+  obj.syllables = syllables;
+  return obj;
+}
+function jsonText() {
+  const o = buildGroups();
+  // splits는 한 줄, syllables는 한 줄씩 보기 좋게
+  let s = "{\n";
+  if (o._text) s += ` "_text": ${JSON.stringify(o._text)},\n`;
+  s += ` "splits": ${JSON.stringify(o.splits)},\n`;
+  s += ' "syllables": [\n';
+  s += o.syllables.map(g => "  " + JSON.stringify(g)).join(",\n");
+  s += "\n ]\n}\n";
+  return s;
+}
+function updateJSON() {
+  document.getElementById("jsonOut").value = jsonText();
+  // 중복 배정 검사(한 조각이 두 음절에 — assign 구조상 불가하나 방어)
+  document.getElementById("dupWarn").textContent = "";
+}
+
+// ---- 좌표 변환 ----
+function svgPt(evt) {
+  const pt = svg.createSVGPoint();
+  pt.x = evt.clientX; pt.y = evt.clientY;
+  return pt.matrixTransform(svg.getScreenCTM().inverse());
+}
+
+// ---- 클릭 처리 ----
+svg.addEventListener("click", (evt) => {
+  const t = evt.target;
+  if (mode === "group") {
+    if (t.classList.contains("piece")) {
+      const name = t.getAttribute("data-piece");
+      if (assign[name] === curIdx) delete assign[name];      // 재클릭 → 해제
+      else assign[name] = curIdx;                            // 배정/재배정
+      render();
+    }
+    return;
+  }
+  // 분할 모드
+  if (t.classList.contains("cut")) {                         // 절단선 클릭 → 제거
+    const id = t.getAttribute("data-blob"), axis = t.getAttribute("data-axis");
+    const v = Number(t.getAttribute("data-v"));
+    splits[id][axis] = splits[id][axis].filter(x => x !== v);
+    clearPieceCache(id); render(); return;
+  }
+  const p = svgPt(evt);
+  const blob = blobAt(p.x, p.y);
+  if (!blob) return;
+  if (selBlob !== blob.id) { selBlob = blob.id; render(); return; }  // 먼저 선택
+  // 이미 선택된 blob 위 클릭 → 절단선 추가
+  splits[blob.id] = splits[blob.id] || { x: [], y: [] };
+  if (evt.shiftKey) {
+    const cy = Math.round(p.y);
+    if (cy > blob.y && cy < blob.y + blob.height) splits[blob.id].y.push(cy);
+  } else {
+    const cx = Math.round(p.x);
+    if (cx > blob.x && cx < blob.x + blob.width) splits[blob.id].x.push(cx);
+  }
+  clearPieceCache(blob.id); render();
+});
+
+// 우클릭: 그 조각이 속한 음절을 "현재 음절"로 선택(재수정 시 옮길 목표 지정)
+svg.addEventListener("contextmenu", (evt) => {
+  const t = evt.target;
+  if (t.classList && t.classList.contains("piece")) {
+    evt.preventDefault();
+    const si = assign[t.getAttribute("data-piece")];
+    if (si !== undefined) { curIdx = si; render(); }
+  }
+});
+
+function blobAt(x, y) {
+  // 위에 그려진 것 우선(역순), bbox 포함 검사
+  for (let i = blobs.length - 1; i >= 0; i--) {
+    const b = blobs[i];
+    if (x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height) return b;
+  }
+  return null;
+}
+
+// ---- 버튼/키 ----
+function setMode(m) {
+  mode = m; selBlob = null;
+  document.getElementById("modeGroup").classList.toggle("on", m === "group");
+  document.getElementById("modeSplit").classList.toggle("on", m === "split");
+  document.getElementById("hint").textContent = m === "group"
+    ? "좌클릭=조각을 현재 음절(굵은 테두리)에 넣기/빼기 · 우클릭=그 조각의 음절을 현재 음절로 선택(옮길 때 목표 음절 먼저 우클릭) · Enter=빈 새 음절 · 미배정 조각은 GT 제외(문장부호·장식획)"
+    : "blob을 클릭해 선택 후, 그 위를 클릭하면 세로 절단선(Shift+클릭=가로). 절단선을 클릭하면 제거. 다시 [묶기]로 돌아가 조각을 음절에 배정.";
+  render();
+}
+document.getElementById("modeGroup").onclick = () => setMode("group");
+document.getElementById("modeSplit").onclick = () => setMode("split");
+document.getElementById("newSyl").onclick = () => { curIdx = freshIdx(); render(); };
+document.getElementById("delSyl").onclick = () => {
+  for (const n in assign) if (assign[n] === curIdx) delete assign[n];
+  render();
+};
+document.getElementById("clearCuts").onclick = () => {
+  if (selBlob != null) { delete splits[selBlob]; clearPieceCache(selBlob); render(); }
+};
+document.getElementById("zoomIn").onclick = () => { zoom = Math.min(6, zoom * 1.25); render(); };
+document.getElementById("zoomOut").onclick = () => { zoom = Math.max(0.25, zoom / 1.25); render(); };
+document.getElementById("textField").value = text;
+document.getElementById("textField").oninput = (e) => { text = e.target.value; updateJSON(); save(); };
+document.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+  if (e.key === "Enter") { curIdx = freshIdx(); render(); e.preventDefault(); }
+  else if (e.key === "g") setMode("group");
+  else if (e.key === "s") setMode("split");
+  else if (e.key === "Escape") { selBlob = null; render(); }
+});
+document.getElementById("importBtn").onclick = () => document.getElementById("importFile").click();
+document.getElementById("importFile").onchange = (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = () => { try { importGroups(JSON.parse(r.result)); }
+                     catch (err) { alert("JSON 파싱 실패: " + err.message); } };
+  r.readAsText(f);
+  e.target.value = "";
+};
+document.getElementById("copyBtn").onclick = () => {
+  navigator.clipboard.writeText(jsonText()).then(() => {
+    const btn = document.getElementById("copyBtn");
+    btn.textContent = "복사됨 ✓"; setTimeout(() => btn.textContent = "groups.json 복사", 1200);
+  });
+};
+document.getElementById("dlBtn").onclick = () => {
+  const blob = new Blob([jsonText()], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = stem + "_groups.json"; a.click();
+};
+
+document.getElementById("savepath").textContent = "eval/gt_work/" + stem + "_groups.json";
+document.getElementById("buildcmd").textContent =
+  "python eval/label_helper.py build test_images/" + stem + ".*";
+setMode("group");
+</script>
+</body>
+</html>
