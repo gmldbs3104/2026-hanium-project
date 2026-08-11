@@ -23,26 +23,14 @@ class CanvasApiService {
   /// 획 데이터를 서버로 전송하고 session_id를 받아옴 (아직 점수 계산 전 단계)
   /// (requirement Action ④: POST /api/v1/canvas/analyze, PNG는 전송하지 않음)
   ///
-  /// ⚠️ [targetText] 는 **백엔드가 아직 안 받는 필드**다 (2026-08-11 기준).
-  /// 현재 `/canvas/{id}/analyze-detail`(backend/app/api/v1/routes/handwriting.py)이
-  /// 항상 `get_standard(db, char=None)`으로 호출돼서 표준 획순(expected_sequence)이
-  /// 늘 빈 배열이 되고, 그 결과 실제로 몇 획을 쓰든 "획이 N개 더 많습니다"라는
-  /// 의미 없는 메시지만 나온다 — 이게 "AI 분석 오류"의 원인이었다.
-  ///
-  /// 백엔드가 아래처럼 고쳐지는 걸 전제로 이 값을 미리 보낸다(현재는 백엔드가
-  /// 모르는 필드라 pydantic이 조용히 무시함 — 부작용 없음):
-  ///   1. `schemas/canvas.py`   CanvasAnalyzeRequest 에 `target_text: Optional[str] = None` 추가
-  ///   2. `routes/handwriting.py` analyze_canvas() 가 세션 캐시에
-  ///      `"target_text": payload.target_text` 로 같이 저장
-  ///   3. `routes/handwriting.py` analyze_canvas_detail() 이 char_groups를 순회할 때
-  ///      (char_groups는 필기 순서로 정렬됨) `target_text[idx]`를 그 글자로 보고
-  ///      `get_standard(db, char=target_text[idx] if idx < len(target_text) else None)`
-  ///      호출 — 지금처럼 `char=None` 고정 아님
-  ///   4. `services/canvas_analysis.py` get_standard()는 완성형 음절(11,172자)만
-  ///      DB(StrokeStandard)에 있고 단독 자모(ㄱ/ㅏ 등, '자음 쓰기'/'모음 쓰기' 탭)는
-  ///      없으므로, DB 조회 전에 자모 전용 획순 테이블(초성/중성 stroke 정의 —
-  ///      app/db/seed_stroke_standards.py의 CHOSEONG_STROKES/JUNGSEONG_STROKES와
-  ///      동일 데이터)을 먼저 찾아보는 분기가 필요함
+  /// [targetText]는 백엔드가 받아서 사용한다 (2026-08-11 연결 완료, DATA_FLOW.md §8-A).
+  /// `/canvas/analyze`가 세션 캐시에 `target_text`를 저장해두면,
+  /// `/canvas/{id}/analyze-detail`이 `ai.canvas.canvas_quality_analyzer.analyze_canvas_writing()`을
+  /// 호출할 때 그대로 넘어가 위치+모양 기하 비교(`analyze_stroke_order_by_position`)로
+  /// 순서 오류까지 잡는다. 예전처럼 DB(StrokeStandard, 완성형 음절만 있음)를 거치지
+  /// 않으므로, 자모 단독(ㄱ/ㅏ 등)이 여전히 채점 안 되는 것은 DB 부재가 아니라
+  /// `decompose_syllable()`이 완성형 음절 1글자만 분해할 수 있기 때문 — 이 경우
+  /// 획순 채점만 생략되고(크기/자간은 정상 채점) 서버가 에러를 내지는 않는다.
   ///
   /// 현재 캔버스 연습 화면(canvas_input_screen.dart)은 한 번에 한 글자만 쓰게
   /// 하므로 [targetText]는 보통 길이 1인 문자열(예: "ㄱ", "각")이다.

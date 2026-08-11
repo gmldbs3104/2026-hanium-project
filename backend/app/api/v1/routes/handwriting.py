@@ -16,9 +16,7 @@ from app.core.deps import get_current_user
 from app.models.user import User
 from app.models.correction import CanvasAnalysisResult
 from app.schemas.canvas import CanvasAnalysisResponse, CanvasCharAnalysis
-from app.services.canvas_analysis import (
-    get_standard, analyze_stroke_order, analyze_spacing, analyze_size, calculate_overall_score,
-)
+from app.services.ai_adapters import analyze_canvas_writing
 
 from app.schemas.canvas import CanvasFeedbackResponse, FeedbackItem
 from app.services.feedback_generator import generate_canvas_feedback
@@ -39,6 +37,7 @@ async def analyze_canvas(payload: CanvasAnalyzeRequest):
     await set_session(canvas_session_id, {
         "strokes": [stroke.model_dump() for stroke in payload.strokes],
         "metadata": payload.metadata.model_dump(),
+        "target_text": payload.target_text,
     })
 
     return CanvasAnalyzeResponse(
@@ -65,26 +64,9 @@ async def group_canvas_strokes(canvas_session_id: str):
 
     low_confidence_count = sum(1 for g in char_groups if g["low_confidence"])
 
-    # stroke_grouping.py는 내부적으로 bounding_box를 {x,y,w,h}로 다루지만,
-    # 응답 스키마(및 프론트 BoundingBox 모델)는 {x,y,width,height}를 기대한다.
-    # 캐시에 저장된 char_groups(analyze-detail이 참조)는 원본 그대로 두고,
-    # 응답용으로만 키를 변환한다.
-    response_char_groups = [
-        {
-            **g,
-            "bounding_box": {
-                "x": g["bounding_box"]["x"],
-                "y": g["bounding_box"]["y"],
-                "width": g["bounding_box"]["w"],
-                "height": g["bounding_box"]["h"],
-            },
-        }
-        for g in char_groups
-    ]
-
     return CanvasGroupResponse(
         canvas_session_id=canvas_session_id,
-        char_groups=response_char_groups,
+        char_groups=char_groups,
         low_confidence_count=low_confidence_count,
     )
 
@@ -105,41 +87,25 @@ async def analyze_canvas_detail(
     if char_groups is None:
         raise HTTPException(status_code=400, detail="먼저 /group 엔드포인트를 호출해야 합니다.")
 
+    # DATA_FLOW.md §8-A: 백엔드 자체 구현(표준값 항상 DEFAULT_STANDARD) 대신
+    # ai/canvas/canvas_quality_analyzer.analyze_canvas_writing()을 호출한다.
+    # target_text가 있으면(제시형 연습) 위치+모양 기하 비교로 획순 순서 오류까지 잡는다.
+    target_text = session_data.get("target_text")
+    analysis = analyze_canvas_writing(char_groups, target_text)
+
     results = []
-    prev_box = None
-
-    for group in char_groups:
-        # TODO: 실제로는 인식된 문자(char)가 필요하지만, 지금은 문자 인식 단계가 없어
-        # 표준값을 못 찾고 항상 DEFAULT_STANDARD를 사용하게 됨.
-        standard = await get_standard(db, char=None)
-
-        stroke_order_result = analyze_stroke_order(group, standard)
-        spacing_deviation = analyze_spacing(prev_box, group["bounding_box"], standard["standard_spacing"])
-        size_deviation = analyze_size(group["bounding_box"], standard["standard_height"], standard["standard_width"])
-        overall_score = calculate_overall_score(
-            stroke_order_result["error_count"], spacing_deviation, size_deviation
-        )
-
+    for item in analysis:
         result_row = CanvasAnalysisResult(
             session_id=canvas_session_id,
             user_id=current_user.id,
-            char_id=group["char_id"],
-            stroke_order_result=stroke_order_result,
-            spacing_deviation=spacing_deviation,
-            size_deviation=size_deviation,
-            overall_score=overall_score,
+            char_id=item["char_id"],
+            stroke_order_result=item["stroke_order_result"],
+            spacing_deviation=item["spacing_deviation"],
+            size_deviation=item["size_deviation"],
+            overall_score=item["overall_score"],
         )
         db.add(result_row)
-
-        results.append(CanvasCharAnalysis(
-            char_id=group["char_id"],
-            stroke_order_result=stroke_order_result,
-            spacing_deviation=spacing_deviation,
-            size_deviation=size_deviation,
-            overall_score=overall_score,
-        ))
-
-        prev_box = group["bounding_box"]
+        results.append(CanvasCharAnalysis(**item))
 
     await db.commit()
 

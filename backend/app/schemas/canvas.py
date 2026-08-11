@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Optional
 from datetime import datetime
 
 
@@ -24,6 +24,9 @@ class CanvasMetadata(BaseModel):
 class CanvasAnalyzeRequest(BaseModel):
     strokes: List[Stroke]
     metadata: CanvasMetadata
+    # 이 세션에서 사용자에게 제시한 목표 글자(들). "제시형" 연습 화면에서만 채워지며,
+    # 없으면 획순 채점은 생략되고 크기/자간만 채점된다 (DATA_FLOW.md §4-3, §8-A).
+    target_text: Optional[str] = None
 
 
 class CanvasAnalyzeResponse(BaseModel):
@@ -46,10 +49,14 @@ class CanvasGroupResponse(BaseModel):
 
 class CanvasCharAnalysis(BaseModel):
     char_id: str
-    stroke_order_result: dict
+    # target_text가 없거나 해당 글자 위치를 벗어나면 None (획순 채점 생략)
+    stroke_order_result: Optional[dict] = None
     spacing_deviation: float
     size_deviation: float
+    pressure_profile: dict
+    speed_profile: dict
     overall_score: int
+    correction_flags: List[str]
 
 
 class CanvasAnalysisResponse(BaseModel):

@@ -1,4 +1,4 @@
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 
 def _severity_from_score(score: int) -> str:
@@ -11,7 +11,13 @@ def _severity_from_score(score: int) -> str:
         return "error"
 
 
-def _stroke_order_message(error_count: int) -> str:
+def _stroke_order_message(stroke_order_result: Optional[Dict[str, Any]]) -> str:
+    # target_text가 없었던 세션(제시형이 아님)은 획순 채점 자체가 생략된다.
+    if stroke_order_result is None:
+        return ""
+    if stroke_order_result.get("likely_wrong_character"):
+        return "; ".join(stroke_order_result.get("corrections", [])) or "목표 글자와 많이 달라 보입니다."
+    error_count = stroke_order_result["error_count"]
     if error_count == 0:
         return "획순이 정확합니다."
     return f"획순에 {error_count}개의 오류가 있습니다. 표준 획순을 다시 확인해보세요."
@@ -59,14 +65,14 @@ def generate_canvas_feedback(analysis_results: List[Dict[str, Any]]) -> Dict[str
         severity = _severity_from_score(score)
 
         messages = [
-            _stroke_order_message(result["stroke_order_result"]["error_count"]),
+            _stroke_order_message(result["stroke_order_result"]),
             _spacing_message(result["spacing_deviation"]),
             _size_message(result["size_deviation"]),
         ]
 
         feedback_items.append({
             "target_id": char_id,
-            "feedback_message": " ".join(messages),
+            "feedback_message": " ".join(m for m in messages if m),
             "severity": severity,
         })
 

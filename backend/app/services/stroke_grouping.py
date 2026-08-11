@@ -15,15 +15,15 @@ def _stroke_bounding_box(points: List[Dict]) -> Dict[str, float]:
     ys = [p["y"] for p in points]
     x_min, x_max = min(xs), max(xs)
     y_min, y_max = min(ys), max(ys)
-    return {"x": x_min, "y": y_min, "w": x_max - x_min, "h": y_max - y_min}
+    return {"x": x_min, "y": y_min, "width": x_max - x_min, "height": y_max - y_min}
 
 
 def _merge_bounding_boxes(boxes: List[Dict[str, float]]) -> Dict[str, float]:
     x_min = min(b["x"] for b in boxes)
     y_min = min(b["y"] for b in boxes)
-    x_max = max(b["x"] + b["w"] for b in boxes)
-    y_max = max(b["y"] + b["h"] for b in boxes)
-    return {"x": x_min, "y": y_min, "w": x_max - x_min, "h": y_max - y_min}
+    x_max = max(b["x"] + b["width"] for b in boxes)
+    y_max = max(b["y"] + b["height"] for b in boxes)
+    return {"x": x_min, "y": y_min, "width": x_max - x_min, "height": y_max - y_min}
 
 
 def rule_based_grouping(strokes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

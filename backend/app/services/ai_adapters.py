@@ -15,6 +15,10 @@ AI_MODEL_INTERFACE.md 계약 그대로이며, 내부 구현만 `ai/` 패키지�
                               와 동일한 (binary, width, height) 반환 계약의 드롭인 대체
   - preprocess_image_full   — 품질점수/재촬영 판정(REQ-003I-4) 포함 전체 결과
   - analyze_size_angle      — SFR-005I 크기/기울기/기준선 분석 (AI_MODEL_INTERFACE.md 4절)
+  - analyze_canvas_writing  — SFR-005C 획순/자간/크기 종합 분석 (DATA_FLOW.md §8-A).
+                              lstm_analyze_stroke_order(스텁, 획 개수 비교만)를 쓰지 않고
+                              canvas_quality_analyzer.analyze_stroke_order_by_position()
+                              (위치+모양 기하 비교로 순서 오류까지 감지)을 내부에서 사용한다.
 
 주의 — 전처리 좌표계:
   AI 전처리는 이진화 + 기울기 보정(deskew) + 장축 800~1280px 리사이즈를 수행하므로,
@@ -40,6 +44,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from ai.analysis.handwriting_analyzer import analyze_size_angle  # noqa: E402,F401
+from ai.canvas.canvas_quality_analyzer import analyze_canvas_writing  # noqa: E402,F401
 from ai.canvas.stroke_grouping import lstm_refine_grouping  # noqa: E402,F401
 from ai.canvas.stroke_standards import lstm_analyze_stroke_order  # noqa: E402,F401
 from ai.preprocessing.image_preprocessor import ImagePreprocessor  # noqa: E402
