@@ -1,11 +1,25 @@
 # 프론트엔드 수정 내역 (2026-08-11 세션)
 
-> 이 세션에서 프론트엔드 코드가 바뀐 전체 내역이다. **백엔드는 의도적으로 건드리지
-> 않았다** — 세션 중 "백엔드 코드는 지금 안 바꾼다"는 방침이 정해져서, 원래 백엔드
-> 수정까지 포함했던 캔버스 분석 오류 수정(§5)이 프론트 절반만 남기고 되돌려졌다.
-> 백엔드가 필요한 항목은 전부 [범위 밖](#범위-밖--보류-항목) 절에 정리했다
-> (원래 `mypage_upgrade.md`/`analysis_upgrade.md` 두 파일로 나눠 관리하다가 이 문서로
-> 통합하며 삭제함).
+## 변경된 파일 요약
+
+| 영역 | 신규 파일 | 수정 파일 |
+|---|---|---|
+| 온보딩 | — | `onboarding_screen.dart`, `onboarding_provider.dart`, `main.dart` |
+| 홈 / 하단 탭 | — | `home_screen.dart`, `main_shell.dart`, `app_router.dart`, `dashboard_response.dart` |
+| 마이페이지 | `achievement_screen.dart`, `profile_edit_screen.dart`, `profile_photo_capture_screen.dart`, `profile_override_provider.dart`, `handwriting_env_provider.dart`, `settings_api_service.dart`, `level_title.dart` | `mypage_screen.dart`, `settings_screen.dart` |
+| 분석 화면 | `improvement_rate_format.dart` | `analysis_screen.dart`, `score_trend_chart.dart`, `report_screen.dart`, `dashboard_screen.dart`(미사용, 컴파일 유지용) |
+| 캔버스 · 문장 연습 | — | `canvas_input_screen.dart`, `canvas_api_service.dart`, `sentence_practice_screen.dart` |
+| 피드백 화면 | `canvas_feedback_parser.dart` | `feedback_screen.dart` |
+| 기타 | `app_config.dart`(엔드포인트 상수 추가) | |
+
+파일 경로는 전부 `frontend/lib/features/...` 아래(위 표는 마지막 폴더명만 표기) — 각
+파일에서 정확히 무엇이 바뀌었는지는 아래 절 참고.
+
+> 백엔드는 의도적으로 건드리지 않았다 — 세션 중 "백엔드 코드는 지금 안 바꾼다"는 방침이
+> 정해져서, 원래 백엔드 수정까지 포함했던 캔버스 분석 오류 수정(§5)이 프론트 절반만
+> 남기고 되돌려졌다. 백엔드가 필요한 항목은 전부 [범위 밖](#범위-밖--보류-항목) 절에
+> 정리했다(원래 `mypage_upgrade.md`/`analysis_upgrade.md` 두 파일로 나눠 관리하다가 이
+> 문서로 통합하며 삭제함).
 
 ---
 
