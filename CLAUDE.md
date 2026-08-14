@@ -46,7 +46,7 @@ backend/
     api/v1/routes/       # HTTP handlers: auth.py, handwriting.py, dashboard.py
     services/            # Business logic
       stroke_grouping.py   # Rule-based stroke → character grouping
-      canvas_analysis.py   # Stroke order, spacing, size analysis + scoring
+      ai_adapters.py       # ai/ 패키지로 나가는 유일한 통로 (탐지·캔버스 분석·전처리)
       session_cache.py     # In-memory TTL cache (10 min) for pipeline state
       ocr_service.py       # (placeholder)
       ai_service.py        # (placeholder)
@@ -96,17 +96,34 @@ The `POST /api/v1/auth/login` endpoint creates or updates a user record in Postg
 
 ## Current Implementation Status
 
-The **canvas pipeline** is functional end-to-end with placeholder logic:
-- Stroke grouping uses rule-based only (LSTM second pass is planned but not implemented)
-- Stroke order analysis compares stroke counts only (LSTM model inference is a TODO)
-- Character recognition (identifying *which* Korean character) is not yet implemented; `get_standard()` always returns `DEFAULT_STANDARD`
+> ⚠️ 이 절은 **2026-08-12에 실제 코드로 재검증**했습니다. 이전 판은 2026-04 시점 서술이
+> 그대로 남아 "CRAFT는 TODO", "`get_standard()`는 항상 `DEFAULT_STANDARD`"처럼 **지금은
+> 거짓인 문장**을 담고 있었습니다. 상태를 단정할 때는 근거 커밋을 같이 적어 주세요.
 
-The **image pipeline** (SFR-003I through SFR-005I) is functional end-to-end with placeholder logic:
-- Preprocessing (grayscale → GaussianBlur → Otsu binarization) is fully implemented with OpenCV
-- Character bounding-box detection uses OpenCV contour detection as a placeholder (CRAFT model integration is a TODO)
-- Size uniformity, slant, and line alignment analysis are implemented; slant currently approximates from aspect ratio rather than the CRAFT angle output
+**캔버스 파이프라인** — 2026-08-11 `ab9de5a`로 AI 분석기가 실제 연결됐습니다.
+- `analyze-detail`이 `ai/canvas/canvas_quality_analyzer.analyze_canvas_writing()`을 **직접 호출**합니다.
+  자체 구현이던 `services/canvas_analysis.py`는 **삭제**됐습니다.
+- 획순은 **위치+모양 기하 비교**입니다(획 개수 비교 아님). 목표 글자(`target_text`)를 프론트가
+  보내고 백엔드가 세션에 저장합니다. 표준 획순은 DB가 아니라 **AI의 유니코드 산술**로 만듭니다.
+- 크기·자간 기준을 AI 쪽으로 통일했습니다(중앙값 대비 / 평균 글자폭 40%).
+- 남은 스텁: `lstm_refine_grouping`(그룹핑 정제 — 입력 그대로 반환). 그룹핑은 여전히 규칙 기반입니다.
+- 자모 단독(ㄱ·ㅏ)은 획순 채점 불가 → `stroke_order_result: null`로 크기·자간만 채점됩니다.
 
-The **dashboard** route (`/api/v1/dashboard`) is implemented (SFR-008): period/mode-filtered aggregation over `canvas_analysis_results` / `image_analysis_results`, Redis-cached per `(user_id, period, mode)`. `recommended_exercises` always returns `[]` (practice-sentence DB not built yet).
+**이미지 파이프라인** — CRAFT가 실제로 붙어 있습니다.
+- 전처리는 **측지 재구성 기반**입니다(단순 Otsu 아님). 비침·괘선을 획으로 승격하지 않으며,
+  이미지별로 `geodesic`(비침 제거) / `gentle_stretch`(연한 글씨 보존) 라우팅을 합니다.
+- 문자 영역 탐지는 **CRAFT**(pretrained `craft_mlt_25k.pth`)입니다. 파인튜닝은 미배포입니다.
+- 기울기는 종횡비 근사가 아니라 **AI가 잰 각도**(`mean_angle`)를 그대로 씁니다.
+- AI는 5지표(높이·기울기·자간·행간·기준선)를 채점하고 응답에도 5개가 다 실립니다.
+  ⚠️ 단 **DB에는 3개만 저장**되어 대시보드에는 자간·행간이 안 쌓입니다.
+- ⚠️ **측정 불가 지표가 만점으로 나갑니다** — AI가 skipped일 때 `100.0`으로 폴백하고
+  (`handwriting_analyzer.py:245,247`), 대시보드는 값 없음을 `0`으로 집계합니다. 알려진 최우선 결함.
+
+**대시보드**(`/api/v1/dashboard`, SFR-008) — 기간/모드별 집계 + Redis 캐시. `recommended_exercises`는
+항상 `[]`(연습 예문 DB 미구축). ⚠️ 캔버스 항목 점수를 **저장된 점수가 아니라 편차에서 재계산**하는데,
+그때 쓰는 계수가 AI와 달라 **결과 화면과 분석 화면의 점수가 어긋납니다**.
+
+> 값 흐름 전체 대조와 남은 불일치 목록은 **[DATA_FLOW.md](DATA_FLOW.md)** 가 단일 출처입니다.
 
 ## Branch Strategy
 

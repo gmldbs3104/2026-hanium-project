@@ -134,6 +134,14 @@
    죽던 것 → --aihub 전용 lazy import화 ② GT만 있고 이미지 없는 클론(팀원 환경)에서 죽던 것 → skip+안내.
 3. 파인튜닝 학습 코드 삭제분 커밋 반영 + 홀드아웃 이미지(test8·test_line1) 추적 추가로 원격 GT 정합.
 
+### 2026-08-02 — 백엔드 병합 완료 (원격 `feature/ai-integration` 확인)
+
+백엔드 팀원이 `BACKEND_INTEGRATION.md` 절차대로 병합 완료(`3eefcb3`, ai-setup `af6eba6` 포함). 원격 검증:
+어댑터 = ai-setup 실구현과 동일(§2.1대로 충돌 해결), `ai/` 무손실 반입, 라우트 `image.py`가 표준 흐름
+(`preprocess_image_full→craft_detect_chars→analyze_size_angle`) 사용, 가이드 §7 기대값 재현을 커밋 메시지에
+명시(`812024e`). 오버레이용 `preprocessed_image_base64` 응답 추가(프론트 반영은 백엔드 쪽 후속). 이 클론은
+fetch만 수행 — 작업 브랜치는 `feature/ai-setup` 그대로.
+
 ---
 
 ## 0. 문서 읽는 순서
@@ -148,6 +156,13 @@
    반환 형식은 절대 바꾸면 안 됨** — 내부 구현만 교체 가능.
 5. **`BACKEND_INTEGRATION.md`** — **백엔드 팀원용 통합 가이드**(2026-08-01): 병합·환경 구축·함정·
    자가 검증·팀 결정 목록. 백엔드 통합 작업자는 이 문서부터.
+5-1. **`DATA_FLOW.md`** — **세 파트가 주고받는 값의 개념 대조표**(2026-08-06, 사용자 요청). 변수 이름
+   없이 "무슨 값을 다루고 어디서 사라지는가". **불일치 17건**(이미지 11 = 필수 7·선택 4 / 캔버스 6)과
+   남은 논의 목록 포함. 3파트 회의 자료용.
+   ⚠️ **캔버스 A항**: AI의 캔버스 분석기(`analyze_canvas_writing`·`analyze_stroke_order_by_position`)는
+   3함수 계약 밖이라 **통합본에 연결된 적이 없다**. 통합본 획순은 스텁(개수 비교)이 전부다.
+5-2. **`FINETUNE_RETRY_PLAN.md`** — **CRAFT 파인튜닝 설계 정본**(2026-08-07 재설계, 착수 결정).
+   데이터·구조·10분 관문·학습 강도·Kaggle 절차. ⚠️ `IMPLEMENTATION_PLAN.md` §4.1(07-31 구안)보다 **이쪽이 우선**.
 6. `requirement.md` — 전체 SFR(기능 요구사항) 목록.
 7. `handwriting_evaluation.md` — 이미지 모드 평가 지표 정의. `NORM_STROKE_RESEARCH.md` — 규범
    임계값·획순 정본 문헌 근거.
@@ -197,6 +212,7 @@ ai/
 ├── IMPLEMENTATION_PLAN.md            ← 2026-07-20 설계 결정 + 구현 계획
 ├── AI_MODEL_INTERFACE.md             ← 백엔드 연동 함수 계약 3개 (절대 준수)
 ├── BACKEND_INTEGRATION.md            ← 백엔드 팀원용 통합 가이드 (병합·환경·함정·검증, 2026-08-01)
+├── DATA_FLOW.md                      ← 세 파트가 주고받는 값 개념 대조표 + 불일치 9건 (2026-08-06)
 ├── requirement.md                    ← 전체 SFR 요구사항 원문
 ├── handwriting_evaluation.md         ← 이미지 모드 평가 지표 정의
 ├── NORM_STROKE_RESEARCH.md           ← 규범 임계값·획순 정본 문헌 근거
@@ -380,8 +396,14 @@ SFR-004C(획 그룹핑) → SFR-005C(획순/자간/크기 분석) 흐름입니�
 로 명시돼 있어 나중에 실사용자 데이터로 LSTM을 학습시키면 이 함수 내부를 교체하는 게
 계획), `analyze_stroke_order_by_position`은 **그 전까지 실질적으로 쓸만한 결과를 내기
 위한 별도의, 더 나은 근사치**입니다. `analyze_canvas_writing()`은 후자를 사용합니다.
-새 세션이 "획순 분석이 안 되는데?"라고 헷갈리지 않도록 기록해둡니다 — 실제로는
-`canvas_quality_analyzer.py` 쪽이 진짜 동작하는 구현입니다.
+
+> ⛔ **중대 정정(2026-08-06)** — 위 문단은 **`ai/` 패키지 안에서만 참**입니다.
+> **통합본(backend)은 `analyze_canvas_writing`도 `analyze_stroke_order_by_position`도
+> 부르지 않습니다.** 3함수 계약이 캔버스 쪽은 스텁 2개(`lstm_refine_grouping`·
+> `lstm_analyze_stroke_order`)만 노출하고, 백엔드는 그룹핑·크기·자간·점수를 **자체 구현**했습니다.
+> 즉 **실사용 경로의 획순 판정은 지금도 "획 개수 비교"가 전부**입니다.
+> 이건 백엔드 잘못이 아니라 **계약의 구멍**입니다 — 연결하려면 계약에 함수를 추가해야 합니다.
+> 상세: [DATA_FLOW.md](../DATA_FLOW.md) §8-A.
 
 ### 4.6 캔버스 모드의 한계 (정직하게 기록)
 

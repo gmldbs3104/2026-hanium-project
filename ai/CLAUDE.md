@@ -2,9 +2,23 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 이 저장소(`2026-hanium-project/`)는 한이음 손글씨 교정 플랫폼입니다. 이 폴더는 그중
-> **AI 파트(`ai/`)** 작업 공간(sparse clone, 브랜치 `feature/ai-setup`)입니다. `backend/`·
-> `frontend/`는 형제 디렉토리이며 AI는 이들과 **3개 함수 계약**으로만 연결됩니다(아래 아키텍처).
+> ## 여기가 어디인가 — 통합본(단일 출처)
+>
+> 이 클론(`2026-hanium-integration/`)은 **`ai/`·`backend/`·`frontend/`가 모두 있는 통합본**이고,
+> **배포에 들어가는 AI 코드와 모든 AI 문서의 원본**입니다. AI를 고칠 일이 있으면 여기서 고치세요.
+>
+> **CRAFT 파인튜닝은 여기 없습니다.** 배포는 pretrained 고정이고, 파인튜닝은 성공이 불확실한
+> 실험이라 **별도 클론 `2026-hanium-project`**(브랜치 `feature/craft-finetune`)에서만 돌립니다.
+> 성공하면 **가중치 파일 + `weight_path` 인자**만 여기로 가져옵니다.
+> ⚠️ 단, 학습 코드가 `choose_long_size`·`ImagePreprocessor`를 **배포 코드에서 직접 import** 하므로,
+> 파인튜닝 중 `detection/`·`preprocessing/`의 규칙이 바뀌었다면 **그 변경도 가중치와 함께 와야**
+> 합니다(안 그러면 가중치가 안 맞습니다 — 과거 3회 실패의 핵심 교훈).
+>
+> 세 파트가 주고받는 값과 남은 불일치는 **[../DATA_FLOW.md](../DATA_FLOW.md)** 가 단일 출처입니다
+> (통합본에는 루트에 한 벌만 둡니다 — `ai/DATA_FLOW.md`를 새로 만들지 마세요).
+
+> 이 저장소는 한이음 손글씨 교정 플랫폼입니다. 이 문서는 그중 **AI 파트(`ai/`)** 안내입니다.
+> `backend/`·`frontend/`는 형제 디렉토리이며 AI는 이들과 **3개 함수 계약**으로만 연결됩니다(아래 아키텍처).
 
 ## 먼저 읽을 것 (사전 지식 없는 새 세션)
 
@@ -83,10 +97,18 @@ AI가 이미지를 판독하지 않아 토큰을 거의 안 쓰고 흘림에도 
   오버레이(프론트)는 **전처리 이미지 위에** 그리기로 확정됨 — 원본 사진 위에 그리면 전부
   어긋납니다(통합 첫날 터지는 버그).
 - **획순 함수가 둘 공존**: `lstm_analyze_stroke_order`는 백엔드 계약용 **스텁**(개수 비교)이고,
-  실제로 동작하는 것은 `canvas_quality_analyzer.analyze_stroke_order_by_position`(위치+모양
-  기하 비교)입니다. "획순 분석이 안 된다"고 헷갈리지 마세요.
+  `ai/` 안에서 더 잘 동작하는 것은 `canvas_quality_analyzer.analyze_stroke_order_by_position`
+  (위치+모양 기하 비교)입니다.
+  ✅ **2026-08-11 `ab9de5a`부터 실사용 경로도 후자를 씁니다.** `ai_adapters.py`가
+  `analyze_canvas_writing`을 "추가 제공" 함수로 노출하고 `routes/handwriting.py`가 직접 호출합니다
+  (자체 구현이던 `backend/app/services/canvas_analysis.py`는 삭제). 3함수 계약은 손대지 않았으므로
+  **스텁 2개는 그대로 남아 있습니다** — 스텁을 고친 게 아니라 우회한 것입니다.
+  ⚠️ 이 문단은 두 번 뒤집혔습니다(08-06 "연결 안 됨"으로 정정 → 08-11 다시 연결).
+  **상태를 단정할 때는 근거 커밋·날짜를 함께 적으세요.** 상세: [../DATA_FLOW.md](../DATA_FLOW.md) §8-A.
 - **평가 채점 규칙**: 종합점수는 5개 지표(높이균일·기울기·자간·행간·기준선)의 **교육적 가중
-  평균(3:2:1)**입니다. 명료도(clarity)와 절대 규범(`norm_deviations`)은 **점수 미반영·경고만**.
+  평균(높이·기준선·행간 3 : 기울기·자간 2 = `3:3:3:2:2`)**입니다. 문서 곳곳에 남아 있는 "3:2:1"은
+  **낡은 표기**입니다(1짜리 지표는 없습니다). 명료도(clarity)와 절대 규범(`norm_deviations`)은
+  **점수 미반영·경고만**.
   지표 정의는 `handwriting_evaluation.md`, 규범 임계값 근거는 `NORM_STROKE_RESEARCH.md`.
 
 ## 환경 함정
