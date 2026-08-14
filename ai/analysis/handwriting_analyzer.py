@@ -133,12 +133,15 @@ class CharAnalysis:
 @dataclass
 class SizeAngleResult:
     chars: List[CharAnalysis]
-    size_uniformity_score: float    # 0~100 (지표 1)
+    # ⚠️ 지표 점수는 측정 불가면 None이다(만점 아님). 종전에는 skipped일 때 100.0으로
+    # 폴백해서, 재지도 않은 지표로 "잘하고 있다"는 칭찬이 나가고 대시보드 평균까지
+    # 오염됐다(DATA_FLOW §4-1). 소비자는 None을 "미측정"으로 다루고 집계에서 제외할 것.
+    size_uniformity_score: Optional[float]    # 0~100 (지표 1)
     mean_angle: float               # degrees (이상치 제외 후 평균)
     angle_std: float                # degrees (이상치 제외 후 편차)
-    tilt_consistency_score: float   # 0~100 (지표 2)
+    tilt_consistency_score: Optional[float]   # 0~100 (지표 2) — 행에 3글자 미만이면 None
     overall_tilt: str               # "straight" | "leaning_right" | "leaning_left"
-    line_alignment_score: float     # 0~100 (지표 5 — 회귀선 잔차 기반)
+    line_alignment_score: Optional[float]     # 0~100 (지표 5) — 행별 글자 수 부족이면 None
     total_score: float              # 교육적 가중(3:2:1) 평균, clarity 제외 (skipped 제외)
     total_grade: str                # 종합점수 등급 (우수/보통/불량)
     metrics: Dict = field(default_factory=dict)  # 지표별 {value, grade, score, ...}
@@ -152,10 +155,13 @@ class SizeAngleAnalyzer:
     def analyze(self, chars: List[Dict],
                 binary_image: Optional[np.ndarray] = None) -> SizeAngleResult:
         if not chars:
+            # 글자가 하나도 없으면 아무 지표도 못 잰 것이다 → 전부 None.
+            # (total_score만은 기존 계약이 int라 100.0을 유지한다. 이 경로는 탐지 0개일
+            #  때만 닿으며, 그 경우 프론트가 먼저 재촬영을 안내한다.)
             return SizeAngleResult(
-                chars=[], size_uniformity_score=100.0, mean_angle=0.0,
-                angle_std=0.0, tilt_consistency_score=100.0,
-                overall_tilt="straight", line_alignment_score=100.0,
+                chars=[], size_uniformity_score=None, mean_angle=0.0,
+                angle_std=0.0, tilt_consistency_score=None,
+                overall_tilt="straight", line_alignment_score=None,
                 total_score=100.0, total_grade="우수", metrics={}, issues=[],
                 clarity_warnings=[],
                 norm_deviations={
@@ -240,11 +246,12 @@ class SizeAngleAnalyzer:
 
         return SizeAngleResult(
             chars=char_analyses,
-            size_uniformity_score=metrics["height_uniformity"]["score"],
+            # 측정 불가(skipped)면 None — 만점으로 덮지 않는다(DATA_FLOW §4-1).
+            size_uniformity_score=metrics["height_uniformity"].get("score"),
             mean_angle=tilt["mean"], angle_std=tilt["std"],
-            tilt_consistency_score=tilt["metric"].get("score", 100.0),
+            tilt_consistency_score=tilt["metric"].get("score"),
             overall_tilt=tilt["overall"],
-            line_alignment_score=metrics["baseline_deviation"].get("score", 100.0),
+            line_alignment_score=metrics["baseline_deviation"].get("score"),
             total_score=total, total_grade=_total_grade(total),
             metrics=metrics, issues=issues, clarity_warnings=clarity_warnings,
             norm_deviations=norm_deviations,

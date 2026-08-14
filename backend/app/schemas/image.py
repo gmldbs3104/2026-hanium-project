@@ -47,10 +47,13 @@ class ImageCharAnalysis(BaseModel):
 
 class ImageAnalysisResponse(BaseModel):
     image_session_id: str
-    size_uniformity_score: int
+    # ⚠️ 항목 점수는 측정 불가면 None이다(만점 아님). 예: 한 줄만 썼으면 행간을,
+    # 행에 3글자 미만이면 기울기를 잴 수 없다. 클라이언트는 None을 "미측정"으로
+    # 표시하고 평균·집계에서 제외할 것 (DATA_FLOW §4-1).
+    size_uniformity_score: Optional[int] = None
     avg_slant_angle: float
-    slant_consistency_score: int
-    line_alignment_score: int
+    slant_consistency_score: Optional[int] = None
+    line_alignment_score: Optional[int] = None
     overall_score: int
     char_analyses: List[ImageCharAnalysis]
     s3_image_url: Optional[str] = None

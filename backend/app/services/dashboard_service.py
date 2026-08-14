@@ -153,14 +153,21 @@ async def get_dashboard_data(
         })
 
     # 세션 수준 요약 계산 (image)
+    # ⚠️ 측정 불가 지표는 None으로 저장된다(글자/행 수 부족). 이를 0점으로 세면 "안 잰
+    # 지표 = 최악"이 되어 평균과 취약 항목 순위가 오염된다 → items에서 아예 뺀다.
+    # (종전 `or 0`이 이 버그였다. DATA_FLOW §4-2)
     i_sessions = [
         {
             "overall": row.overall_score or 0,
             "date": row.created_at.date(),
             "items": {
-                "크기 균일성": row.size_uniformity_score or 0,
-                "기울기 일관성": row.slant_consistency_score or 0,
-                "줄 정렬": row.line_alignment_score or 0,
+                name: score
+                for name, score in (
+                    ("크기 균일성", row.size_uniformity_score),
+                    ("기울기 일관성", row.slant_consistency_score),
+                    ("줄 정렬", row.line_alignment_score),
+                )
+                if score is not None
             },
         }
         for row in image_rows

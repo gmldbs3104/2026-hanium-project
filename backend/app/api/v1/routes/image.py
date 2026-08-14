@@ -148,20 +148,28 @@ async def analyze(
     if detected_chars is None:
         raise HTTPException(status_code=400, detail="먼저 /detect 엔드포인트를 호출해야 합니다.")
 
+    # 글자가 하나도 없으면 채점 자체가 성립하지 않는다. 종전에는 그대로 통과시켜
+    # 종합 점수 100점·등급 "우수"가 나갔다 — 빈 종이를 찍어도 "완벽합니다"였다.
+    # 안 잰 것으로 칭찬하지 않는다는 §4-1과 같은 원칙이라 여기서 막는다(DATA_FLOW §4-1).
+    if len(detected_chars) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="사진에서 글자를 찾지 못했습니다. 글씨가 잘 보이게 다시 촬영해 주세요.")
+
     binary_image = np.array(session_data["binary_image"], dtype=np.uint8)
     ana = analyze_size_angle(detected_chars, binary_image)
 
-    # DB의 점수 컬럼은 Integer라 반올림해서 저장 (응답 스키마도 기존 계약 유지를 위해 int)
-    size_uniformity_score = round(ana["size_uniformity_score"])
-    slant_consistency_score = round(ana["tilt_consistency_score"])
-    line_alignment_score = round(ana["line_alignment_score"])
-    overall_score = round(ana["total_score"])
+    # DB의 점수 컬럼은 Integer라 반올림해서 저장. 측정 불가면 None을 그대로 흘린다 —
+    # 만점(예전 동작)도 0점도 아니다. 안 잰 지표로 칭찬하거나 혹평하지 않기 위함(DATA_FLOW §4-1).
+    # 5지표를 모두 metrics에서 같은 방식으로 읽는다 ({"score":...} | {"skipped": 사유}).
+    m = ana["metrics"]
+    size_uniformity_score = _metric_score(m.get("height_uniformity"))
+    slant_consistency_score = _metric_score(m.get("tilt_consistency"))
+    line_alignment_score = _metric_score(m.get("baseline_deviation"))
+    spacing_uniformity_score = _metric_score(m.get("spacing_uniformity"))
+    line_spacing_uniformity_score = _metric_score(m.get("line_spacing_uniformity"))
+    overall_score = round(ana["total_score"])   # 측정된 지표만으로 가중 평균한 값
     avg_slant_angle = ana["mean_angle"]
-
-    # AI는 5지표(높이·기울기·자간·행간·기준선)를 채점하지만 기존 계약엔 3개뿐이었다.
-    # 측정 불가(글자/행 수 부족)면 metrics[...]가 {"skipped": 사유}라 "score" 키가 없다.
-    spacing_uniformity_score = _metric_score(ana["metrics"].get("spacing_uniformity"))
-    line_spacing_uniformity_score = _metric_score(ana["metrics"].get("line_spacing_uniformity"))
 
     char_analyses = [
         ImageCharAnalysis(
@@ -237,44 +245,30 @@ async def feedback(image_session_id: str):
 
     feedback_items = []
 
-    if results["size_uniformity_score"] < 60:
-        feedback_items.append(ImageFeedbackItem(
-            target_id="global",
-            feedback_message="글자 크기가 고르지 않습니다. 일정한 크기로 써보세요.",
-            severity="warning",
-        ))
-    elif results["size_uniformity_score"] >= 85:
-        feedback_items.append(ImageFeedbackItem(
-            target_id="global",
-            feedback_message="글자 크기가 균일합니다!",
-            severity="good",
-        ))
+    def _score_feedback(score: int | None, warn: str, praise: str) -> None:
+        """점수 구간별 문구. 측정 불가(None)면 아무 문구도 만들지 않는다 —
+        안 잰 지표로 지적하거나 칭찬하지 않기 위함(DATA_FLOW §4-1)."""
+        if score is None:
+            return
+        if score < 60:
+            feedback_items.append(ImageFeedbackItem(
+                target_id="global", feedback_message=warn, severity="warning"))
+        elif score >= 85:
+            feedback_items.append(ImageFeedbackItem(
+                target_id="global", feedback_message=praise, severity="good"))
 
-    if results["slant_consistency_score"] < 60:
-        feedback_items.append(ImageFeedbackItem(
-            target_id="global",
-            feedback_message="글자 기울기가 일정하지 않습니다. 일관된 방향으로 써보세요.",
-            severity="warning",
-        ))
-    elif results["slant_consistency_score"] >= 85:
-        feedback_items.append(ImageFeedbackItem(
-            target_id="global",
-            feedback_message="글자 기울기가 일정합니다!",
-            severity="good",
-        ))
-
-    if results["line_alignment_score"] < 60:
-        feedback_items.append(ImageFeedbackItem(
-            target_id="global",
-            feedback_message="글자들이 수평선에 맞지 않습니다. 줄을 맞춰 써보세요.",
-            severity="warning",
-        ))
-    elif results["line_alignment_score"] >= 85:
-        feedback_items.append(ImageFeedbackItem(
-            target_id="global",
-            feedback_message="줄 정렬이 잘 되어 있습니다!",
-            severity="good",
-        ))
+    _score_feedback(
+        results["size_uniformity_score"],
+        "글자 크기가 고르지 않습니다. 일정한 크기로 써보세요.",
+        "글자 크기가 균일합니다!")
+    _score_feedback(
+        results["slant_consistency_score"],
+        "글자 기울기가 일정하지 않습니다. 일관된 방향으로 써보세요.",
+        "글자 기울기가 일정합니다!")
+    _score_feedback(
+        results["line_alignment_score"],
+        "글자들이 수평선에 맞지 않습니다. 줄을 맞춰 써보세요.",
+        "줄 정렬이 잘 되어 있습니다!")
 
     # 명료도 경고 — 점수엔 반영하지 않고 경고 문구로만 안내 (팀 결정, ai/BACKEND_INTEGRATION.md §1.1)
     for warning in results.get("clarity_warnings") or []:
