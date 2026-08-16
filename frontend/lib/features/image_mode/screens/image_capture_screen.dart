@@ -98,6 +98,8 @@ class _ImageCaptureScreenState extends ConsumerState<ImageCaptureScreen> {
           'imageBytes': overlayBytes,
           'imageWidth': result.width,
           'imageHeight': result.height,
+          // 연한 글씨 보존 모드면 비침이 글자로 잡혔을 수 있어 결과 화면에서 안내한다
+          'preservationMode': result.preservationMode,
         });
       }
     } on ApiException catch (e) {

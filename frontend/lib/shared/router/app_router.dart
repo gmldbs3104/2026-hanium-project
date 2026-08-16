@@ -134,6 +134,7 @@ final routerProvider = Provider<GoRouter>((ref) {
             imageBytes: extra['imageBytes'] as List<int>?,
             imageWidth: extra['imageWidth'] as int?,
             imageHeight: extra['imageHeight'] as int?,
+            preservationMode: extra['preservationMode'] as bool?,
             // 연습 화면에서 넘어온 탭/진행률 컨텍스트 (없으면 헤더 생략)
             practiceTabs: (extra['practiceTabs'] as List?)?.cast<String>(),
             practiceTabIndex: extra['practiceTabIndex'] as int?,
