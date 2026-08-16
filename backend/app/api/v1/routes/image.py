@@ -188,6 +188,9 @@ async def analyze(
         avg_slant_angle=avg_slant_angle,
         slant_consistency_score=slant_consistency_score,
         line_alignment_score=line_alignment_score,
+        # 5지표를 다 쌓는다 — 종전엔 3개만 저장돼 대시보드에 자간·행간이 안 올라왔다(§5-8)
+        spacing_uniformity_score=spacing_uniformity_score,
+        line_spacing_uniformity_score=line_spacing_uniformity_score,
         char_level=[c.model_dump() for c in char_analyses],
         overall_score=overall_score,
         s3_image_url=session_data.get("s3_image_url"),  # preprocess에서 업로드된 URL

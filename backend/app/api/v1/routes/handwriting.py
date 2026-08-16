@@ -103,6 +103,10 @@ async def analyze_canvas_detail(
             spacing_deviation=item["spacing_deviation"],
             size_deviation=item["size_deviation"],
             overall_score=item["overall_score"],
+            # 응답에만 실리고 사라지던 값 (§8-B·C). 소급이 안 되므로 화면 노출
+            # 여부와 무관하게 지금부터 쌓는다. 필압은 프론트가 1.0 고정이라 제외.
+            speed_profile=item.get("speed_profile"),
+            correction_flags=item.get("correction_flags"),
         )
         db.add(result_row)
         results.append(CanvasCharAnalysis(**item))

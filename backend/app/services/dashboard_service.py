@@ -168,6 +168,11 @@ async def get_dashboard_data(
                     ("크기 균일성", row.size_uniformity_score),
                     ("기울기 일관성", row.slant_consistency_score),
                     ("줄 정렬", row.line_alignment_score),
+                    # 2026-08-12 추가(§5-8). AI는 원래 5지표를 채점했는데 DB에 3개만
+                    # 쌓여서 자간·행간은 취약 항목 후보로도 오르지 못했다.
+                    # 프론트는 항목 이름을 모른 채 목록을 그리므로 여기만 늘리면 화면에 뜬다.
+                    ("자간 균등성", row.spacing_uniformity_score),
+                    ("행간 균등성", row.line_spacing_uniformity_score),
                 )
                 if score is not None
             },
