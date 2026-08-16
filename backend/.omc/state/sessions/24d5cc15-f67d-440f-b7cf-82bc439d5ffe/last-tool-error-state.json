@@ -1,7 +1,0 @@
-{
-  "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\"command -v newgrp && echo \\\"docker ps --format '{{.Names}}'; echo NEWGRP_OK\\\" | newgrp docker 2>&1 | head -5\",\"description\":\"Try docker access via newgrp stdin\"}",
-  "error": "Exit code 1",
-  "timestamp": "2026-08-03T17:23:42.399Z",
-  "retry_count": 1
-}

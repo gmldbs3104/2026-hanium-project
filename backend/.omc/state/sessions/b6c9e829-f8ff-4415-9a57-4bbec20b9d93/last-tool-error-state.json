@@ -1,7 +1,0 @@
-{
-  "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\"cd backend && timeout 60 ./venv/bin/python -c \\\"\\nimport psycopg2, re\\nfrom app.core.config import settings\\nu = re.sub(r'\\\\+\\\\w+', '', settings.database_url)\\ntry:\\n    psycopg2.connect(u...",
-  "error": "Exit code 1\n/bin/bash: line 1: cd: backend: No such file or directory",
-  "timestamp": "2026-08-16T07:59:52.795Z",
-  "retry_count": 1
-}
