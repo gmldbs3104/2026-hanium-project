@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
 from app.models.correction import CanvasAnalysisResult, ImageAnalysisResult
-from app.core.config import settings
+from app.services.ai_adapters import canvas_item_scores
 
 DASHBOARD_CACHE_TTL = 3600  # SFR-008: 집계 결과 1시간 캐시
 SESSIONS_PER_LEVEL = 5  # 게이미피케이션: 누적 세션 5회당 1레벨
@@ -22,17 +22,19 @@ def _since(period: str) -> Optional[datetime]:
 
 
 def _canvas_item_scores(row: CanvasAnalysisResult) -> dict[str, float]:
-    error_count = (row.stroke_order_result or {}).get("error_count", 0)
-    stroke = max(0.0, 100.0 - error_count * settings.canvas_stroke_order_penalty)
-    spacing = max(0.0, 100.0 - min(
-        abs(row.spacing_deviation or 0.0) * settings.canvas_spacing_penalty_coeff,
-        settings.canvas_spacing_penalty_max,
-    ))
-    size = max(0.0, 100.0 - min(
-        abs(row.size_deviation or 0.0) * settings.canvas_size_penalty_coeff,
-        settings.canvas_size_penalty_max,
-    ))
-    return {"획순": stroke, "자간": spacing, "크기": size}
+    """저장된 편차에서 항목 점수를 만든다 — 계산은 AI 함수 하나에 위임한다.
+
+    종전에는 여기서 백엔드 설정 계수(크기·자간 0.5 / 획순 10)로 다시 계산했는데,
+    AI가 세션 점수를 만들 때 쓰는 계수(0.8 / 0.3 / 15)와 달라서 **같은 글씨인데
+    결과 화면과 분석 화면의 점수가 어긋났다**(DATA_FLOW.md §8-G).
+
+    목표 글자를 몰라 획순을 못 잰 경우 "획순"은 None으로 오며, 호출부가 집계에서
+    제외한다 — 0건 오류로 보고 만점을 주면 안 잰 지표로 칭찬하는 셈이다(§4-1).
+    """
+    scores = canvas_item_scores(
+        row.size_deviation, row.spacing_deviation, row.stroke_order_result
+    )
+    return {name: score for name, score in scores.items() if score is not None}
 
 
 def _improvement_rate(ordered_scores: list[float]) -> float:

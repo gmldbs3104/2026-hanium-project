@@ -19,6 +19,10 @@ AI_MODEL_INTERFACE.md 계약 그대로이며, 내부 구현만 `ai/` 패키지�
                               lstm_analyze_stroke_order(스텁, 획 개수 비교만)를 쓰지 않고
                               canvas_quality_analyzer.analyze_stroke_order_by_position()
                               (위치+모양 기하 비교로 순서 오류까지 감지)을 내부에서 사용한다.
+  - canvas_item_scores      — 캔버스 항목별(획순/자간/크기) 점수. 대시보드 집계가 이걸 쓴다.
+                              채점 기준을 AI가 소유하므로 백엔드에 감점 계수를 따로 두지
+                              않는다 — 종전에 config.py에 다른 계수가 있어 결과 화면과
+                              분석 화면 점수가 어긋났다(DATA_FLOW.md §8-G).
 
 주의 — 전처리 좌표계:
   AI 전처리는 이진화 + 기울기 보정(deskew) + 장축 800~1280px 리사이즈를 수행하므로,
@@ -44,7 +48,10 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from ai.analysis.handwriting_analyzer import analyze_size_angle  # noqa: E402,F401
-from ai.canvas.canvas_quality_analyzer import analyze_canvas_writing  # noqa: E402,F401
+from ai.canvas.canvas_quality_analyzer import (  # noqa: E402,F401
+    analyze_canvas_writing,
+    canvas_item_scores,
+)
 from ai.canvas.stroke_grouping import lstm_refine_grouping  # noqa: E402,F401
 from ai.canvas.stroke_standards import lstm_analyze_stroke_order  # noqa: E402,F401
 from ai.preprocessing.image_preprocessor import ImagePreprocessor  # noqa: E402

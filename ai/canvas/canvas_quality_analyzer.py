@@ -49,6 +49,37 @@ SHAPE_WEIGHT = 1.5
 MATCH_QUALITY_THRESHOLD = 0.6        # 매칭된 획들의 평균 위치+모양 오차 (정규화 좌표 기준)
 COUNT_MISMATCH_RATIO_THRESHOLD = 2.0  # 실제 획수/기대 획수 비율이 이 배수 이상 벗어나면 의심
 
+# ── 항목 점수 감점 계수 ────────────────────────────────────────────────
+# ⚠️ 캔버스 채점 기준은 여기 한 곳에만 둔다. 백엔드 대시보드(dashboard_service)도
+# 아래 canvas_item_scores()를 호출한다 — 복사본이나 별도 설정값을 만들지 말 것.
+# 종전에는 백엔드 config.py에 다른 계수(크기 0.5 / 자간 0.5 / 획순 10)가 따로 있어,
+# 같은 글씨인데 결과 화면과 분석 화면의 점수가 어긋났다(DATA_FLOW.md §8-G).
+SIZE_PENALTY_COEFF, SIZE_PENALTY_MAX = 0.8, 50.0        # 크기 편차(%) 1당 감점 / 상한
+SPACING_PENALTY_COEFF, SPACING_PENALTY_MAX = 0.3, 30.0  # 자간 편차(px) 1당 감점 / 상한
+ORDER_PENALTY_PER_ERROR, ORDER_PENALTY_MAX = 15.0, 40.0  # 획순 오류 1건당 감점 / 상한
+
+
+def canvas_item_scores(size_deviation_pct: Optional[float],
+                       spacing_deviation_px: Optional[float],
+                       stroke_order_result: Optional[Dict]) -> Dict[str, Optional[float]]:
+    """글자 하나의 항목별 점수(0~100). 측정 불가한 항목은 None.
+
+    획순은 목표 글자(target_text)를 알 때만 잴 수 있다. 모르면 None —
+    0건 오류로 보고 만점을 주면 "재지도 않은 지표로 칭찬"이 된다(DATA_FLOW.md §4-1).
+
+    세션 종합 점수(analyze_canvas_writing)와 대시보드 항목 집계가 **같은 기준**을
+    쓰도록 하는 단일 출처다.
+    """
+    size = 100.0 - min(SIZE_PENALTY_MAX,
+                       abs(size_deviation_pct or 0.0) * SIZE_PENALTY_COEFF)
+    spacing = 100.0 - min(SPACING_PENALTY_MAX,
+                          abs(spacing_deviation_px or 0.0) * SPACING_PENALTY_COEFF)
+    order: Optional[float] = None
+    if stroke_order_result:
+        n_err = stroke_order_result.get("error_count", 0)
+        order = 100.0 - min(ORDER_PENALTY_MAX, n_err * ORDER_PENALTY_PER_ERROR)
+    return {"획순": order, "자간": spacing, "크기": size}
+
 
 def _path_descriptor(path: List[Tuple[float, float]]) -> Tuple[float, float, float, float]:
     """path의 (중심x, 중심y, 너비, 높이)."""
@@ -320,11 +351,13 @@ def analyze_canvas_writing(
         # ── 필압/속도 ─────────────────────────────────────────────
         motion_stats = _stroke_speed_stats(group["strokes"])
 
-        # ── 종합 점수 (0~100, 세 항목 감점 방식) ───────────────────────
-        size_penalty    = min(50.0, abs(size_deviation_pct) * 0.8)
-        spacing_penalty = min(30.0, abs(spacing_deviation_px) * 0.3) if i > 0 else 0.0
-        order_penalty   = min(40.0, order_error_count * 15.0) if stroke_order_result else 0.0
-        overall_score = max(0, round(100 - size_penalty - spacing_penalty - order_penalty))
+        # ── 항목 점수 + 종합 점수 (0~100, 세 항목 감점 방식) ────────────
+        # 항목 점수는 canvas_item_scores() 한 곳에서만 만든다 — 대시보드도 같은 함수를
+        # 쓰므로 결과 화면과 분석 화면의 잣대가 갈리지 않는다(DATA_FLOW.md §8-G).
+        item = canvas_item_scores(size_deviation_pct, spacing_deviation_px,
+                                  stroke_order_result)
+        overall_score = max(0, round(
+            100.0 - sum(100.0 - s for s in item.values() if s is not None)))
 
         results.append({
             "char_id": group["char_id"],
