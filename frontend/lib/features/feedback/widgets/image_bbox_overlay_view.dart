@@ -98,9 +98,12 @@ class ImageBBoxOverlayPainter extends CustomPainter {
       // 피드백이 있는 글자만 심각도 색, 나머지는 중립색으로 통일한다.
       // 종전에는 탐지 신뢰도로 "애매한 박스"를 옅은 주황으로 갈랐는데,
       // 그 값이 항상 0.5 상수라 조건에 늘 걸려 **모든 박스가 주황**이었다
-      // (DEVLOG 17막 실측). 게다가 requirement.md SFR-004I는 애매한 탐지를
-      // 색으로 구분하라고 하지 않고 **걸러내라**고 한다 — 색 구분은 요구사항에
-      // 없던 동작이라 제거한다(팀 결정 2026-08-16).
+      // (DEVLOG 17막 실측). 색 구분 자체가 requirement.md에 없던 동작이라
+      // 제거한다(팀 결정 2026-08-16).
+      //
+      // ⚠️ 여기서 "애매한 탐지를 걸러내는 일"을 하려 하지 말 것 — 그건 CRAFT
+      // 디코딩 단계에서 이미 한다(text_threshold 0.7 / low_text 0.4, 평가셋으로
+      // 측정해 정한 값). 응답의 confidence는 게이트가 아니라 보고용 숫자다.
       final color =
           severity != null ? SeverityStyle.color(severity) : _neutralColor;
 

@@ -596,6 +596,13 @@ class CraftDetector:
         long_size: int = 960,
         text_threshold: float = 0.7,
         link_threshold: float = 1.0,
+        # ⚠️ text_threshold·low_text가 **요구사항 SFR-004I ④ "낮은 확신 탐지 필터링"의
+        # 실제 구현체**다. 명세는 이를 단일 임계값 0.5로 적었지만, 실제로는 봉우리
+        # 기준(0.7)과 영역 기준(0.4) 두 단계로 나누는 편이 정확해 평가셋 측정으로
+        # 이 값들을 정했다(F1@0.3=0.891이 이 설정 기준 수치).
+        # → 응답에 실리는 `confidence`로 뒤늦게 0.5 필터를 또 거는 일을 하지 말 것.
+        #   그건 이중 필터링이고 위 수치의 기준선을 무효로 만든다. confidence는
+        #   게이트가 아니라 보고용 값이다(DEVLOG 22막).
         low_text: float = 0.4,
         use_dist_transform: bool = True,
         adaptive_scale: bool = True,

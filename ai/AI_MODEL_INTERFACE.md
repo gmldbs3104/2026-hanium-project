@@ -191,7 +191,7 @@ List[Dict]
 | `bounding_box.height` | `float` | 높이 (px) |
 | `angle` | `float` | 세로획 slant 기울기 (degree, 양수=시계방향=글자 상단이 오른쪽). `angle_reliable=false`면 `0.0` |
 | `angle_reliable` | `bool` | 세로획이 충분히 검출돼 기울기를 신뢰할 수 있는지. ㅇ 위주 글자 등은 `false` — 기울기 평가에서 제외할 것 |
-| `confidence` | `float` | 탐지 신뢰도 `0.0 ~ 1.0` |
+| `confidence` | `float` | 탐지 신뢰도 `0.0 ~ 1.0` — **보고용 값이며 게이트가 아니다.** 낮은 확신 탐지를 거르는 일(SFR-004I ④)은 CRAFT 디코딩의 `text_threshold`(0.7)·`low_text`(0.4)가 이미 한다. 이 값으로 뒤늦게 0.5 필터를 또 걸면 이중 필터링이 되고 F1 기준선이 무효가 된다. ⚠️ 현 배포에서는 라이브러리가 raw score를 안 돌려줘 **항상 0.5 상수**다(DEVLOG 17·22막) — 소비자는 이 값으로 판단하지 말 것 |
 
 **정렬 규칙**: 좌상단 → 우하단 순서 (줄 단위 y, 줄 내 x)
 
