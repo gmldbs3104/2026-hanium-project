@@ -118,7 +118,9 @@ def preprocess_image_full(image_bytes: bytes) -> Dict[str, Any]:
     Returns
     -------
     {
-      "binary_image":    np.ndarray (H, W) uint8,   # 획=255, 배경=0
+      "binary_image":    np.ndarray (H, W) uint8,   # 획=255, 배경=0 — **채점용**
+      "display_image":   np.ndarray (H, W, 3) uint8, # 원본 컬러에 회전·리사이즈만 — **표시용**
+                                                     # 좌표계가 binary_image와 같아 박스를 그대로 얹는다
       "width", "height": int,                        # 전처리 후 크기
       "quality_score":   {"total", "sharpness", "contrast", "bimodality"},
       "retake_required": bool,                       # total < 40
@@ -131,6 +133,7 @@ def preprocess_image_full(image_bytes: bytes) -> Dict[str, Any]:
     h, w = result.binary_image.shape[:2]
     return {
         "binary_image": result.binary_image,
+        "display_image": result.display_image,
         "width": w,
         "height": h,
         "quality_score": result.quality_score,

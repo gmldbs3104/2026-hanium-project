@@ -87,11 +87,16 @@ class _ImageCaptureScreenState extends ConsumerState<ImageCaptureScreen> {
       }
 
       if (mounted) {
-        // 오버레이는 원본 사진이 아니라 백엔드가 보낸 전처리(이진화) 이미지 위에
-        // 그려야 좌표계가 맞는다 (backend/app/schemas/image.py 참고).
-        final overlayBytes = result.preprocessedImageBase64 != null
-            ? base64Decode(result.preprocessedImageBase64!)
-            : bytes;
+        // 오버레이 배경은 촬영 원본이 아니라 **서버가 회전·리사이즈한 이미지**여야
+        // 좌표계가 맞는다(원본 위에 그리면 deskew 각도만큼 밀린다).
+        // 그중 사용자에게는 컬러본(display)을 보여준다 — 이진본은 AI가 본 것이라
+        // 개발 중엔 유용하지만 사용자 눈엔 자기 사진이 자연스럽다(팀 결정 2026-08-16).
+        // 컬러본이 없으면 이진본, 그것도 없으면 원본 순으로 물러난다.
+        final overlayBytes = result.displayImageBase64 != null
+            ? base64Decode(result.displayImageBase64!)
+            : result.preprocessedImageBase64 != null
+                ? base64Decode(result.preprocessedImageBase64!)
+                : bytes;
         context.go('/feedback', extra: {
           'mode': 'image',
           'sessionId': result.imageSessionId,

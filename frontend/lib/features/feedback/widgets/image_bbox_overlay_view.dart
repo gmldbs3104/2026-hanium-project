@@ -95,8 +95,14 @@ class ImageBBoxOverlayPainter extends CustomPainter {
     for (final item in items) {
       final rect = mapper.toDisplayRect(item.boundingBox);
       final severity = item.severity;
+      // 피드백이 있는 글자만 심각도 색, 나머지는 중립색으로 통일한다.
+      // 종전에는 탐지 신뢰도로 "애매한 박스"를 옅은 주황으로 갈랐는데,
+      // 그 값이 항상 0.5 상수라 조건에 늘 걸려 **모든 박스가 주황**이었다
+      // (DEVLOG 17막 실측). 게다가 requirement.md SFR-004I는 애매한 탐지를
+      // 색으로 구분하라고 하지 않고 **걸러내라**고 한다 — 색 구분은 요구사항에
+      // 없던 동작이라 제거한다(팀 결정 2026-08-16).
       final color =
-          severity != null ? SeverityStyle.color(severity) : _neutralColorFor(item.confidence);
+          severity != null ? SeverityStyle.color(severity) : _neutralColor;
 
       final strokePaint = Paint()
         ..color = color
@@ -109,16 +115,6 @@ class ImageBBoxOverlayPainter extends CustomPainter {
         SeverityStyle.paintBadge(canvas, rect.topLeft, severity);
       }
     }
-  }
-
-  /// severity(문자 단위 피드백)가 아직 없을 때의 중립색. confidence가 있으면
-  /// (ai/AI_MODEL_INTERFACE.md 기준 CRAFT가 이미 계산하는 값, 백엔드가 노출하면
-  /// 여기서 바로 반영됨) 저신뢰도 탐지만 옅은 주황으로 구분한다.
-  Color _neutralColorFor(double? confidence) {
-    if (confidence != null && confidence < 0.7) {
-      return const Color(0xFFFF9500);
-    }
-    return _neutralColor;
   }
 
   @override

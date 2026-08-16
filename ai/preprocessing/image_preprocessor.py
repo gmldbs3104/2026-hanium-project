@@ -50,6 +50,12 @@ _K2 = np.ones((2, 2), np.uint8)
 class PreprocessResult:
     """전처리 결과 객체"""
     binary_image: np.ndarray
+    # 사용자에게 보여줄 배경(표시 전용) — 원본 컬러에 **회전·리사이즈만** 적용한 것.
+    # 이진화·측지 재구성은 빼서 "자기가 찍은 사진"으로 보인다.
+    # 좌표계는 binary_image와 정확히 같으므로 탐지 박스를 그대로 얹을 수 있다
+    # (좌표를 바꾸는 단계가 회전·리사이즈뿐이기 때문 — DEVLOG 12막 문답).
+    # ⚠️ 채점은 항상 binary_image로 한다. 이 필드는 화면에만 쓴다.
+    display_image: np.ndarray
     quality_score: dict
     skew_angle: float
     applied_filters: list[str] = field(default_factory=list)
@@ -130,11 +136,15 @@ class ImagePreprocessor:
         binary = (ink >= INK_BINARIZE_THRESH).astype(np.uint8) * 255
 
         # Step 6: Hough deskew (기존 방식 유지)
+        # 표시용 컬러본(display)에 **똑같은 회전·리사이즈**를 적용해 좌표계를 맞춘다.
+        # Step 4~5(그레이·재구성·이진화)는 크기를 안 바꾸므로 여기서부터만 따라가면 된다.
+        display = bgr
         skew_angle = self._detect_skew_angle(binary)
         if abs(skew_angle) < 0.5:
             skew_angle = 0.0
         elif abs(skew_angle) <= MAX_SKEW_ANGLE:
             binary = self._rotate_image(binary, -skew_angle)
+            display = self._rotate_image(display, -skew_angle, for_display=True)
             applied.append(f"deskew({skew_angle:+.1f}deg)")
         # |skew|>45°는 안전상 회전하지 않고 각도만 보고 (기존 동작 유지)
 
@@ -144,9 +154,15 @@ class ImagePreprocessor:
             applied.append(f"resize({binary.shape[1]}x{binary.shape[0]})")
         binary = self._remove_small_blobs(binary)
 
+        # 노이즈 제거는 크기를 안 바꾸므로, display는 최종 binary 크기에만 맞추면 된다.
+        # (회전 후 반올림으로 1px 어긋날 수 있어 명시적으로 맞춘다 — 어긋나면 박스가 밀린다.)
         oh, ow = binary.shape[:2]
+        if display.shape[:2] != (oh, ow):
+            display = cv2.resize(display, (ow, oh), interpolation=cv2.INTER_AREA)
+
         return PreprocessResult(
             binary_image=binary,
+            display_image=display,
             quality_score=quality,
             skew_angle=skew_angle,
             applied_filters=applied,
@@ -275,7 +291,16 @@ class ImagePreprocessor:
             return 0.0
         return float(np.median(angles))
 
-    def _rotate_image(self, image: np.ndarray, angle: float) -> np.ndarray:
+    def _rotate_image(self, image: np.ndarray, angle: float,
+                      for_display: bool = False) -> np.ndarray:
+        """이미지를 angle만큼 회전 (여백 포함해 캔버스를 넓힘).
+
+        for_display=True면 **표시용 컬러본**용 설정을 쓴다:
+          - 보간을 INTER_LINEAR로 (NEAREST는 컬러 사진에서 계단이 보인다)
+          - 여백을 흰색으로 (이진본은 배경이 검정 0이지만, 사진에 검은 삼각형이
+            생기면 사용자 눈에 이상하다)
+        기하(회전 행렬·출력 크기)는 **완전히 동일**하므로 좌표계가 어긋나지 않는다.
+        """
         h, w = image.shape[:2]
         center = (w / 2.0, h / 2.0)
         matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
@@ -285,6 +310,10 @@ class ImagePreprocessor:
         new_h = int(h * cos + w * sin)
         matrix[0, 2] += (new_w / 2.0) - center[0]
         matrix[1, 2] += (new_h / 2.0) - center[1]
+        if for_display:
+            return cv2.warpAffine(image, matrix, (new_w, new_h),
+                                  flags=cv2.INTER_LINEAR,
+                                  borderValue=(255, 255, 255))
         return cv2.warpAffine(image, matrix, (new_w, new_h),
                               flags=cv2.INTER_NEAREST, borderValue=0)
 

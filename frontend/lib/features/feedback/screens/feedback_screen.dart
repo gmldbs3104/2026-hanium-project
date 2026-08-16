@@ -27,6 +27,7 @@ import '../services/session_save_queue.dart';
 import '../widgets/feedback_action_bar.dart';
 import '../widgets/canvas_correction_overlay_view.dart';
 import '../widgets/image_bbox_overlay_view.dart';
+import '../widgets/preservation_notice.dart';
 
 /// 교정 피드백 화면 (SFR-007 + SFR-009 저장 확인)
 ///
@@ -546,48 +547,14 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
     );
   }
 
-  /// 우측 상단: 현재 점수 카드 (목표 대비 진행바 + 추세 배지).
-  /// 연한 글씨 보존 모드로 처리된 사진에만 붙는 안내.
-  ///
-  /// 연필처럼 연하게 쓴 사진은 비침(종이 뒷면 글씨)을 지우면 진짜 획까지 같이
-  /// 지워져서, 서버가 비침을 남기는 쪽을 택한다. 그 결과 비친 자국이 글자로 잡혀
-  /// 네모가 쳐지고 점수에도 섞일 수 있다. 사용자가 이유를 모른 채 "점수가 왜
-  /// 이상하지" 하는 상황을 막으려고 안내만 한다.
-  ///
-  /// ⚠️ 실제로 걸러내지는 않는다 — 비침과 연한 진짜 획은 진하기로 구분이 안 되고
-  /// (`image_preprocessor.py` 실측), 걸러내려면 탐지 확률값이 필요한데 지금
-  /// 파이프라인엔 그 값이 오지 않는다(DEVLOG 17막). 팀 결정: 경고 문구만.
+  /// 보존 모드 사진에만 안내를 끼워 넣는다. 위젯 자체는
+  /// [PreservationNotice] 참고(왜 걸러내지 않고 안내만 하는지 포함).
   List<Widget> _buildPreservationNotice() {
     if (widget.preservationMode != true) return const [];
-    return [
-      const SizedBox(height: 12),
-      Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        decoration: BoxDecoration(
-          color: const Color(0xFFFFF6E5),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: const Color(0xFFF0D9A8)),
-        ),
-        child: const Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(Icons.info_outline, size: 18, color: Color(0xFF9A6B08)),
-            SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                '연하게 쓴 글씨라 흐린 부분까지 살려서 분석했어요. '
-                '종이 뒷면 글씨가 비쳐 보이면 글자로 잘못 잡힐 수 있으니, '
-                '결과가 이상하면 더 진한 펜으로 쓰거나 두꺼운 종이에 써보세요.',
-                style: TextStyle(
-                    fontSize: 12.5, height: 1.5, color: Color(0xFF6B4E08)),
-              ),
-            ),
-          ],
-        ),
-      ),
-    ];
+    return const [SizedBox(height: 12), PreservationNotice()];
   }
 
+  /// 우측 상단: 현재 점수 카드 (목표 대비 진행바 + 추세 배지).
   Widget _buildScoreCard(BuildContext context) {
     final score = _overallScore ?? 0;
     // 목표 점수는 사용자 설정값(설정 화면에서 변경) — 백엔드 응답이 아님.

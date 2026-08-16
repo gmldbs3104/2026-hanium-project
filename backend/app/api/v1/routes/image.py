@@ -47,6 +47,33 @@ def _encode_png_base64(binary_image: np.ndarray) -> str:
     return base64.b64encode(buf.tobytes()).decode("ascii")
 
 
+# 표시용 컬러본은 사진이라 PNG로 담으면 수 MB가 된다(실측: 폰 사진 최대 1.2MB+).
+# 화면에 띄우는 용도이므로 JPEG로 압축하고, 장축을 이 값으로 줄여 보낸다.
+# 종횡비를 유지하면 배율이 상쇄되어 **탐지 박스 좌표는 그대로 맞는다**
+# (프론트가 이미지 크기에 맞춰 비율로 그리기 때문 — DEVLOG 12막 문답).
+_DISPLAY_MAX_SIDE = 1280
+_DISPLAY_JPEG_QUALITY = 82
+
+
+def _encode_display_jpeg_base64(display_image: np.ndarray) -> str:
+    """사용자에게 보여줄 배경(원본 컬러에 회전·리사이즈만 적용된 것)을 JPEG로."""
+    h, w = display_image.shape[:2]
+    long_side = max(h, w)
+    if long_side > _DISPLAY_MAX_SIDE:
+        scale = _DISPLAY_MAX_SIDE / long_side
+        display_image = cv2.resize(
+            display_image,
+            (max(1, round(w * scale)), max(1, round(h * scale))),
+            interpolation=cv2.INTER_AREA,
+        )
+    ok, buf = cv2.imencode(
+        ".jpg", display_image, [int(cv2.IMWRITE_JPEG_QUALITY), _DISPLAY_JPEG_QUALITY]
+    )
+    if not ok:
+        raise RuntimeError("표시용 이미지를 JPEG로 인코딩하지 못했습니다.")
+    return base64.b64encode(buf.tobytes()).decode("ascii")
+
+
 def _metric_score(metric: dict | None) -> int | None:
     """analyze_size_angle()의 metrics[...] 항목에서 점수를 뽑는다.
     측정 불가(글자/행 수 부족)면 {"skipped": 사유}라 "score" 키가 없다."""
@@ -94,6 +121,9 @@ async def preprocess(file: UploadFile = File(...)):
         quality_score=round(pre["quality_score"]["total"]),
         retake_required=pre["retake_required"],
         preprocessed_image_base64=_encode_png_base64(binary_image),
+        # 사용자에게 보여줄 배경 — 이진화 전, 회전·리사이즈만 적용된 원본 컬러.
+        # 프론트는 이쪽을 쓰고, 위 이진본은 개발·디버그용으로 남긴다(팀 결정 2026-08-16).
+        display_image_base64=_encode_display_jpeg_base64(pre["display_image"]),
         preservation_mode="gentle_stretch" in pre["applied_filters"],
     )
 

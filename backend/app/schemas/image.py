@@ -27,7 +27,12 @@ class ImagePreprocessResponse(BaseModel):
     # ⚠️ AI 전처리(deskew+리사이즈) 후 이미지 — width/height 및 이후 detect의
     # bounding_box는 전부 이 이미지 기준 좌표계다. 오버레이는 원본 사진이 아니라
     # 이 이미지 위에 그려야 한다 (ai/BACKEND_INTEGRATION.md §5-2).
-    preprocessed_image_base64: Optional[str] = None  # PNG, base64
+    preprocessed_image_base64: Optional[str] = None  # PNG, base64 — 개발·디버그용
+    # 사용자에게 보여줄 배경(JPEG, base64). 원본 컬러에 **회전·리사이즈만** 적용해
+    # 좌표계는 위 이진본과 동일하다 — 탐지 박스를 그대로 얹을 수 있다.
+    # 이진본은 AI가 실제로 본 것을 보여줘 개발 중 획 끊김·비침을 확인하기 좋지만,
+    # 사용자에게는 자기가 찍은 사진이 자연스럽다(팀 결정 2026-08-16, DATA_FLOW §6.1).
+    display_image_base64: Optional[str] = None
     # True면 연한 글씨 보존 모드(gentle_stretch) — 비침이 획과 함께 남을 수 있다.
     # False면 비침 제거 모드. ai.preprocessing.image_preprocessor의 applied_filters로 판정.
     preservation_mode: Optional[bool] = None
