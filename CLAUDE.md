@@ -96,9 +96,9 @@ The `POST /api/v1/auth/login` endpoint creates or updates a user record in Postg
 
 ## Current Implementation Status
 
-> ⚠️ 이 절은 **2026-08-12에 실제 코드로 재검증**했습니다. 이전 판은 2026-04 시점 서술이
-> 그대로 남아 "CRAFT는 TODO", "`get_standard()`는 항상 `DEFAULT_STANDARD`"처럼 **지금은
-> 거짓인 문장**을 담고 있었습니다. 상태를 단정할 때는 근거 커밋을 같이 적어 주세요.
+> ⚠️ 이 절은 **2026-08-17에 실제 코드로 재검증**했습니다(최초 재검증은 2026-08-12). 이전 판은
+> 2026-04 시점 서술이 그대로 남아 "CRAFT는 TODO", "`get_standard()`는 항상 `DEFAULT_STANDARD`"처럼
+> **지금은 거짓인 문장**을 담고 있었습니다. 상태를 단정할 때는 근거 커밋을 같이 적어 주세요.
 
 **캔버스 파이프라인** — 2026-08-11 `ab9de5a`로 AI 분석기가 실제 연결됐습니다.
 - `analyze-detail`이 `ai/canvas/canvas_quality_analyzer.analyze_canvas_writing()`을 **직접 호출**합니다.
@@ -114,14 +114,21 @@ The `POST /api/v1/auth/login` endpoint creates or updates a user record in Postg
   이미지별로 `geodesic`(비침 제거) / `gentle_stretch`(연한 글씨 보존) 라우팅을 합니다.
 - 문자 영역 탐지는 **CRAFT**(pretrained `craft_mlt_25k.pth`)입니다. 파인튜닝은 미배포입니다.
 - 기울기는 종횡비 근사가 아니라 **AI가 잰 각도**(`mean_angle`)를 그대로 씁니다.
-- AI는 5지표(높이·기울기·자간·행간·기준선)를 채점하고 응답에도 5개가 다 실립니다.
-  ⚠️ 단 **DB에는 3개만 저장**되어 대시보드에는 자간·행간이 안 쌓입니다.
-- ⚠️ **측정 불가 지표가 만점으로 나갑니다** — AI가 skipped일 때 `100.0`으로 폴백하고
-  (`handwriting_analyzer.py:245,247`), 대시보드는 값 없음을 `0`으로 집계합니다. 알려진 최우선 결함.
+- AI는 5지표(높이·기울기·자간·행간·기준선)를 채점하고 응답에도 5개가 다 실립니다. **DB에도 이제
+  5개 전부 저장됩니다**(2026-08-16 `08019d3`, 마이그레이션 `b3f1c27a9d40`로 `spacing_uniformity_score`·
+  `line_spacing_uniformity_score` 컬럼 추가) — 분석 화면 취약 항목에 자간·행간도 나타납니다.
+- **측정 불가 지표는 `None`(미측정)으로 정확히 나갑니다**(2026-08-16 `8a660c4`) — 예전엔 AI가
+  skipped일 때 `100.0`으로 덮어써서 재지도 않은 지표로 만점을 줬는데, 이제 `handwriting_analyzer.py`가
+  `Optional`로 돌리고 백엔드도 `or 0`을 걷어내 집계에서 제외합니다. (탐지 0개면 여전히 `/analyze`가
+  400으로 "사진에서 글자를 찾지 못했습니다"를 준다 — 만점이 아니라.)
 
 **대시보드**(`/api/v1/dashboard`, SFR-008) — 기간/모드별 집계 + Redis 캐시. `recommended_exercises`는
-항상 `[]`(연습 예문 DB 미구축). ⚠️ 캔버스 항목 점수를 **저장된 점수가 아니라 편차에서 재계산**하는데,
-그때 쓰는 계수가 AI와 달라 **결과 화면과 분석 화면의 점수가 어긋납니다**.
+항상 `[]`(연습 예문 DB 미구축). **캔버스 항목 점수는 이제 AI의 `canvas_item_scores()`를 그대로
+씁니다**(2026-08-16 `e874828`, `ai_adapters`를 통해 호출만 함) — 결과 화면·분석 화면의 계수가
+하나로 통일돼 더 이상 어긋나지 않습니다.
+
+> 오늘(2026-08-17) 재검증: AI 유닛테스트 34개 통과, 서버를 띄운 상태에서 캔버스·이미지 파이프라인
+> E2E(로그인→분석→피드백) 둘 다 통과. 상세 근거는 [CHANGES_2026-08-17.md](CHANGES_2026-08-17.md).
 
 > 값 흐름 전체 대조와 남은 불일치 목록은 **[DATA_FLOW.md](DATA_FLOW.md)** 가 단일 출처입니다.
 

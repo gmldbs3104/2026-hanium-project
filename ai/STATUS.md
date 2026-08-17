@@ -166,8 +166,10 @@
     CPU 추론 자체다. (탐지율을 위해 다운스케일을 없앤 판단 자체는 그대로 유효.)
 - **🟡 규범 임계값 임시값** — `TILT_NORM_DEG=7`·`LINE_NORM_MIN_RATIO=1.0`·`WORD_GAP_RATIO=0.55`·가중치·
   백엔드 문구 경계(60/85) 모두 초안. 실데이터로 재튜닝. 근거: [NORM_STROKE_RESEARCH.md](NORM_STROKE_RESEARCH.md) §1·§3.
-  - ⚠️ **문서의 "가중치 3:2:1"은 실제 코드와 다르다(2026-08-06 확인)** — `WEIGHTS`는 높이·기준선·행간 **3**,
-    기울기·자간 **2**로 `3:3:3:2:2`이고 **1짜리는 없다.** 여러 문서에 3:2:1이 남아 있으니 함께 정정할 것.
+  - ✅ **문서의 "가중치 3:2:1" 오기 정정 완료(2026-08-17)** — `WEIGHTS`는 높이·기준선·행간 **3**,
+    기울기·자간 **2**로 `3:3:3:2:2`이고 **1짜리는 없다.** `handwriting_evaluation.md`·`HANDOFF.md`·
+    `IMPLEMENTATION_PLAN.md`·`AI_MODEL_INTERFACE.md`·`BACKEND_INTEGRATION.md`의 "3:2:1" 표기를
+    `3:3:3:2:2`로 정정. (`requirement.md`는 원 요구사항 문서라 손대지 않음.)
 - **✅ 문서 최신화(2026-07-31)** — T4/T5/T7·연한글씨 수정 반영해 STATUS·HANDOFF·requirement·
   handwriting_evaluation·IMPLEMENTATION_PLAN 갱신(획굵기 지표 제거, 1280×960·adaptiveThreshold·좌표계 정정, F1 0.891).
 
