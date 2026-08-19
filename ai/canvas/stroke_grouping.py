@@ -8,7 +8,7 @@ SFR-004C: 획 그룹핑 및 문자 단위 분할
 AI_MODEL_INTERFACE.md 섹션 1(lstm_refine_grouping) 스펙 준수.
 """
 import math
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 # REQ-004C-2: 설정 파일로 조정 가능해야 함 — 일단 모듈 상수로 노출
 DIST_THRESHOLD_PX   = 60.0   # 획 bbox 중심 간 최대 허용 거리
@@ -39,6 +39,7 @@ def group_strokes_by_rules(
     dist_threshold: float = DIST_THRESHOLD_PX,
     time_threshold_ms: float = TIME_THRESHOLD_MS,
     max_strokes_per_group: int = MAX_STROKES_PER_CHAR,
+    expected_count: Optional[int] = None,
 ) -> List[List[Dict]]:
     """
     규칙 기반 1차 그룹핑 (requirement.md Action ②).
@@ -46,11 +47,21 @@ def group_strokes_by_rules(
     입력 시간순으로 훑으면서, 직전 그룹의 마지막 획과 공간적으로 가깝고(bbox 중심 거리)
     시간적으로 이어지면(간격이 짧으면) 같은 그룹에 합친다. 둘 중 하나라도 임계값을
     넘으면 새 문자 그룹 시작.
+
+    expected_count: 목표 텍스트 길이 등으로 몇 글자인지 미리 아는 경우(제시형 연습 —
+    문장 쓰기처럼 여러 글자를 한 화면에 쓰는 상황)에 넘긴다. 있으면 고정 임계값 대신
+    "획 사이 간격이 가장 크게 벌어진 (expected_count-1)곳"을 경계로 삼아 정확히
+    expected_count개 그룹으로 나눈다 — 임계값을 안 넘는 애매한 머뭇거림 때문에 잘못
+    합쳐지는 걸 줄인다. 없으면(기존 자음/모음/받침 화면처럼 한 글자만 쓰는 경우) 지금
+    방식 그대로 동작한다.
     """
     if not strokes:
         return []
 
     ordered = sorted(strokes, key=lambda s: min(p["timestamp"] for p in s["points"]))
+
+    if expected_count and 1 < expected_count <= len(ordered):
+        return _group_by_expected_count(ordered, expected_count, dist_threshold, time_threshold_ms)
 
     groups: List[List[Dict]] = [[ordered[0]]]
 
@@ -76,6 +87,47 @@ def group_strokes_by_rules(
         else:
             groups.append([stroke])
 
+    return groups
+
+
+def _group_by_expected_count(
+    ordered: List[Dict],
+    expected_count: int,
+    dist_threshold: float,
+    time_threshold_ms: float,
+) -> List[List[Dict]]:
+    """
+    시간순 정렬된 획을 정확히 expected_count개 그룹으로 나눈다.
+
+    인접한 두 획 사이의 "벌어진 정도"를 거리·시간 각각 임계값 대비 배수로 정규화한
+    뒤 더 큰 쪽을 그 지점의 점수로 삼고, 점수가 가장 큰 (expected_count-1)곳을 글자
+    경계로 고른다. 고정 임계값을 넘는지 여부(이분법)가 아니라 상대적 순위로 판단하므로,
+    모든 간격이 임계값 밑이어도(예: 짧은 문장을 빠르게 이어 쓴 경우) 그 안에서 상대적으로
+    더 벌어진 곳을 경계로 잡을 수 있다.
+    """
+    gaps = []  # (score, boundary_index) — ordered[i]와 ordered[i+1] 사이 경계
+    for i in range(len(ordered) - 1):
+        prev_bbox = _stroke_bbox(ordered[i])
+        curr_bbox = _stroke_bbox(ordered[i + 1])
+        dist = math.dist(_stroke_center(prev_bbox), _stroke_center(curr_bbox))
+
+        _, prev_end = _stroke_time_range(ordered[i])
+        curr_start, _ = _stroke_time_range(ordered[i + 1])
+        gap = curr_start - prev_end
+
+        dist_ratio = dist / dist_threshold if dist_threshold > 0 else 0.0
+        time_ratio = gap / time_threshold_ms if time_threshold_ms > 0 else 0.0
+        gaps.append((max(dist_ratio, time_ratio), i))
+
+    n_boundaries = expected_count - 1
+    boundary_indices = {i for _, i in sorted(gaps, key=lambda g: -g[0])[:n_boundaries]}
+
+    groups: List[List[Dict]] = [[ordered[0]]]
+    for i, stroke in enumerate(ordered[1:], start=1):
+        if (i - 1) in boundary_indices:
+            groups.append([stroke])
+        else:
+            groups[-1].append(stroke)
     return groups
 
 
@@ -119,15 +171,19 @@ def group_strokes_into_chars(
     strokes: List[Dict],
     dist_threshold: float = DIST_THRESHOLD_PX,
     time_threshold_ms: float = TIME_THRESHOLD_MS,
+    expected_count: Optional[int] = None,
 ) -> List[Dict]:
     """
     SFR-004C 전체 파이프라인: 규칙 기반 그룹핑 → lstm_refine_grouping → 문자 단위 결과.
+
+    expected_count: group_strokes_by_rules 참고 — 목표 텍스트 길이를 알 때(문장 쓰기 등)
+    넘기면 정확히 그 개수로 그룹핑한다.
 
     Returns
     -------
     List[Dict] — [{char_id, strokes, bounding_box, stroke_count, confidence, low_confidence}]
     """
-    groups = group_strokes_by_rules(strokes, dist_threshold, time_threshold_ms)
+    groups = group_strokes_by_rules(strokes, dist_threshold, time_threshold_ms, expected_count=expected_count)
     groups = lstm_refine_grouping(groups)
 
     result: List[Dict] = []

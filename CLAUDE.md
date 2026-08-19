@@ -107,7 +107,14 @@ The `POST /api/v1/auth/login` endpoint creates or updates a user record in Postg
   보내고 백엔드가 세션에 저장합니다. 표준 획순은 DB가 아니라 **AI의 유니코드 산술**로 만듭니다.
 - 크기·자간 기준을 AI 쪽으로 통일했습니다(중앙값 대비 / 평균 글자폭 40%).
 - 남은 스텁: `lstm_refine_grouping`(그룹핑 정제 — 입력 그대로 반환). 그룹핑은 여전히 규칙 기반입니다.
-- 자모 단독(ㄱ·ㅏ)은 획순 채점 불가 → `stroke_order_result: null`로 크기·자간만 채점됩니다.
+- ⚠️ **그룹핑 구현이 두 곳에 따로 있습니다.** `ai/canvas/stroke_grouping.py`(AI 쪽 정본)와
+  `backend/app/services/stroke_grouping.py`(실서비스 `/canvas/{id}/group` 라우트가 실제로
+  쓰는 것)가 별개 코드입니다. **2026-08-19에 AI 쪽에 `expected_count` 옵션을 추가**했습니다
+  (목표 글자 수를 알 때 고정 임계값 대신 "간격이 가장 크게 벌어진 곳" 상대 순위로 정확히 그
+  개수만큼 나눔 — 문장 쓰기 화면의 그룹핑 오류 개선용, `STATUS.md` §2·§5-5). **backend 쪽엔
+  아직 포팅 안 됨** — `ai/`만 고쳐서는 실제 서비스에 반영되지 않습니다.
+- ✅ 자모 단독(ㄱ·ㅏ)도 2026-08-19부터 획순 채점됩니다(전에는 `stroke_order_result: null`로
+  빠졌음) — `stroke_standards.py`·`canvas_quality_analyzer.py`에 낱자 전용 경로 추가.
 
 **이미지 파이프라인** — CRAFT가 실제로 붙어 있습니다.
 - 전처리는 **측지 재구성 기반**입니다(단순 Otsu 아님). 비침·괘선을 획으로 승격하지 않으며,

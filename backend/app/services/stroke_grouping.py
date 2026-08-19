@@ -31,6 +31,19 @@ def rule_based_grouping(strokes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     REQ-004C-1: 규칙 기반 1차 그룹핑
     획 간 공간적 거리(centroid 거리)와 시간 간격이 임계값 이하인 획들을
     동일 문자 후보로 묶는다.
+
+    TODO(문장 쓰기 그룹핑 개선, 2026-08-19): 이 함수는 `ai/canvas/stroke_grouping.py`의
+    `group_strokes_by_rules`와 별개 구현이다(그쪽이 정본, 여기가 실서비스 `/canvas/{id}/group`
+    라우트가 실제로 쓰는 것). AI 쪽에 이미 `expected_count` 옵션이 추가됐다 — 목표 글자 수를
+    알 때(문장 쓰기 화면 등, "제시형" 연습이라 몇 글자인지 이미 앎) 고정 임계값 대신 "획 간격이
+    가장 크게 벌어진 (개수-1)곳" 상대 순위로 정확히 그 개수만큼 나눈다. 문장을 빠르게 이어 써서
+    글자 사이 간격이 절대 임계값 밑으로 떨어져도 상대적으로 큰 간격을 정확히 찾아낸다. 알고리즘·
+    테스트는 `ai/canvas/stroke_grouping.py`(`_group_by_expected_count`)와
+    `ai/tests/test_grouping_expected_count.py` 참고 — 이 파일에도 같은 로직을 포팅하고,
+    `routes/handwriting.py`의 `/group` 라우트가 세션에 저장된 `target_text` 길이(공백 제외)를
+    `expected_count`로 넘기도록 배선해야 실제로 효과가 난다. 프론트도 문장 쓰기 화면
+    (`sentence_practice_screen.dart`)이 `targetText`를 아직 안 보내고 있어 같이 필요.
+    상세: `STATUS.md` §2·§5-5.
     """
     if not strokes:
         return []
