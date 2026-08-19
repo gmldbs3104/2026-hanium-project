@@ -187,6 +187,17 @@ def _syllable_layout(cho: str, jung: str, jong: str) -> List[Tuple[str, List[Pat
     return parts
 
 
+def _single_jamo_layout(jamo: str, is_vowel: bool) -> List[Tuple[str, List[Path]]]:
+    """
+    낱개 자모(ㄱ·ㅏ 등) 하나가 화면 전체를 혼자 쓸 때의 배치.
+    음절 안에서 다른 자모와 자리를 나눠 쓰지 않으므로, _syllable_layout의 개별
+    구획 대신 [0,1]x[0,1] 전체(여백만 남기고)를 그대로 쓴다.
+    """
+    box = (0.08, 0.03, 0.92, 0.97)
+    paths = _vowel_paths(jamo) if is_vowel else _consonant_paths(jamo)
+    return [(jamo, [_transform(p, box) for p in paths])]
+
+
 def _path_to_points(
     path: Path,
     origin: Tuple[float, float],

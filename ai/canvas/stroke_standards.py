@@ -125,16 +125,21 @@ def decompose_syllable(char: str):
 
 def get_expected_sequence(char: str) -> List[str]:
     """
-    SFR-005C 표준 획순 조회 — 완성형 음절 1글자에 대한 획순 라벨 리스트.
-    초성 → 중성 → 종성 순서로 각 자모의 획을 이어붙인다.
+    SFR-005C 표준 획순 조회 — 완성형 음절 또는 낱개 자모 1글자에 대한 획순 라벨 리스트.
+    완성형 음절은 초성 → 중성 → 종성 순서로 각 자모의 획을 이어붙이고, 낱개 자모
+    (ㄱ·ㅏ 등)는 그 자모 하나의 획순을 그대로 반환한다.
 
-    한글이 아니거나 조합형이 아니면 빈 리스트 반환.
+    한글이 아니거나 처리할 수 없으면 빈 리스트 반환.
     """
     decomposed = decompose_syllable(char)
-    if decomposed is None:
-        return []
-    cho, jung, jong = decomposed
-    return _CHOSUNG_SEQ[cho] + _JUNGSUNG_SEQ[jung] + _JONGSUNG_SEQ[jong]
+    if decomposed is not None:
+        cho, jung, jong = decomposed
+        return _CHOSUNG_SEQ[cho] + _JUNGSUNG_SEQ[jung] + _JONGSUNG_SEQ[jong]
+    if char in _CHOSUNG_SEQ:
+        return _CHOSUNG_SEQ[char]
+    if char in _JUNGSUNG_SEQ:
+        return _JUNGSUNG_SEQ[char]
+    return []
 
 
 # ------------------------------------------------------------------

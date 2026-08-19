@@ -2037,6 +2037,7 @@ API 부재(§3)·"미측정" 사유가 응답에 안 실림(§3)·카카오 로�
 `ai/STATUS.md` §0 표에 캔버스 행 1개 추가, §2에 위 내용을 LSTM 항목 바로 뒤에 문단으로
 추가(그룹핑 정제 항목과의 연결 관계를 명시). 기존 어느 문서에도 이 문장 쓰기 화면의
 `targetText` 누락은 기록된 적이 없었다(DATA_FLOW.md·CHANGES_2026-08-17.md엔 이 화면이
+필압 하드코딩 건으로만 언급돼 있었다) — 완전히 새로 찾은 것.
 
 ## 27막. LSTM보다 규칙 기반 그룹핑 개선을 먼저 — 우선순위 재판단 (2026-08-19)
 
@@ -2068,4 +2069,46 @@ API 부재(§3)·"미측정" 사유가 응답에 안 실림(§3)·카카오 로�
 `ai/STATUS.md` §0 표(LSTM·문장쓰기 행 2개 갱신), §2(LSTM 스텁 문단을 "우선순위 낮춤"으로
 재작성, 문장 쓰기 문단에 판단 근거 추가), §5 우선순위 목록(5번에 규칙 개선 신설, 기존 5번
 데이터수집/LSTM은 6번으로 밀려나며 "후순위로 낮춤" 명시, 이하 번호 한 칸씩 밀림).
-필압 하드코딩 건으로만 언급돼 있었다) — 완전히 새로 찾은 것.
+
+## 28막. 자모 단독 획순 채점 구현 (AI 단독, 2026-08-19)
+
+### 문답 — "일단 AI 부분만 수정하면 되는 자모단독 획순 채점 먼저 진행하자"
+
+STATUS.md §5 7번 항목 실제 구현. 막힌 지점은 정확히 세 곳이었고 전부 완성형 음절 분해
+함수(`decompose_syllable`) 하나에 의존하고 있었다:
+1. 표준 획순 시퀀스 조회(`stroke_standards.get_expected_sequence`)
+2. 위치·모양 기하 템플릿 생성(`canvas_quality_analyzer._canonical_stroke_points`)
+3. 복수 정본(대안 획순) 허용 목록 생성(`canvas_quality_analyzer._acceptable_orders`)
+
+### 구현
+
+- `synthetic_stroke_generator.py`에 `_single_jamo_layout(jamo, is_vowel)` 신설 —
+  `_syllable_layout`이 초성/중성/종성에게 나눠주던 작은 구획 대신, 낱자 하나가
+  [0,1]×[0,1] 전체(여백만 남기고)를 혼자 쓰는 배치를 반환.
+- `stroke_standards.get_expected_sequence`에 낱자 분기 추가 — `decompose_syllable`이
+  `None`을 반환하면 `_CHOSUNG_SEQ`/`_JUNGSUNG_SEQ`에서 직접 조회(이미 존재하던 표를
+  그대로 재사용, 새 데이터 없음).
+- `canvas_quality_analyzer.py`에 `_layout_for_char(target_char)` 공용 헬퍼 신설 —
+  완성형 분해 성공 시 `_syllable_layout`, 실패했는데 낱자면 `_single_jamo_layout`,
+  둘 다 아니면 빈 리스트. `_canonical_stroke_points`·`_acceptable_orders` 두 곳 모두
+  각자 중복 구현하던 분해 로직을 이 헬퍼 호출로 통일.
+- `synthetic_stroke_generator.py`(합성 데이터 생성, LSTM 1단계 pretrain용)는 건드리지
+  않음 — 이번 요청은 실시간 채점 경로 한정, 데이터 생성 파이프라인은 별개 사안.
+
+### 검증
+
+새 테스트 파일 `ai/tests/test_solo_jamo_stroke_order.py` 5건(표준 획순 비어있지 않음
+확인 2건, 자음/모음 표준 순서 정답 처리 2건, 순서 오류 탐지 1건, `analyze_canvas_writing`
+전체 경로에서 `stroke_order_result`가 더는 비지 않음을 확인하는 통합 테스트 1건) 추가.
+`ai/venv/bin/python -m pytest ai/tests -q` — **40개 전부 통과**(기존 35개 회귀 없음).
+첫 실행에서 1건 실패했으나 원인은 구현이 아니라 내 테스트의 기대값 오류(`expected_sequence`
+라벨 형식을 착각) — 수정 후 통과.
+
+### 반영
+
+`ai/STATUS.md` §0 표·§2·§5 7번을 전부 ✅ 완료로 갱신.
+
+🐛 **부수 발견**: 26막 끝에 27막을 끼워 넣던 이전 Edit이 26막 마지막 문장을 반토막 내
+파일 끝에 엉뚱하게 붙여놨었다("...CHANGES_2026-08-17.md엔 이 화면이" 뒤가 27막 다음으로
+밀려나 있었음). 발견 즉시 원위치로 복구. 문서 중간에 새 섹션을 끼워 넣는 Edit은 앞뒤
+문장이 이어지는 지점인지 다시 확인할 것.

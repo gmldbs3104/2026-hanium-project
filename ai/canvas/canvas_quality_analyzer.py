@@ -26,9 +26,9 @@ from typing import Dict, List, Optional, Tuple
 from .stroke_grouping import _stroke_bbox
 from .stroke_standards import (
     get_expected_sequence, lstm_analyze_stroke_order, decompose_syllable,
-    ALTERNATIVE_STROKE_ORDERS, standard_order_note,
+    ALTERNATIVE_STROKE_ORDERS, standard_order_note, CHOSUNG, JUNGSUNG,
 )
-from .synthetic_stroke_generator import _syllable_layout
+from .synthetic_stroke_generator import _syllable_layout, _single_jamo_layout
 
 # 크기/간격 판정 임계값 (handwriting_analyzer.py와 동일한 CV 기반 설계)
 SIZE_SCORE_MAX_CV = 0.30
@@ -96,14 +96,28 @@ def _descriptor_distance(a: Tuple[float, float, float, float],
     return pos_dist + SHAPE_WEIGHT * shape_dist
 
 
+def _layout_for_char(target_char: str) -> List[Tuple[str, List[Tuple[float, float]]]]:
+    """목표 글자(완성형 음절 또는 낱개 자모)의 자모별 배치.
+
+    완성형 음절은 _syllable_layout로 초성/중성/종성이 서로 자리를 나눠 쓰지만,
+    낱개 자모(ㄱ·ㅏ 등)는 나눠 쓸 다른 자모가 없으므로 화면 전체를 혼자 쓰는
+    _single_jamo_layout을 쓴다. 둘 다 아니면(한글이 아니거나 조합형이 아니면) 빈 리스트.
+    """
+    decomposed = decompose_syllable(target_char)
+    if decomposed is not None:
+        cho, jung, jong = decomposed
+        return _syllable_layout(cho, jung, jong)
+    if target_char in CHOSUNG:
+        return _single_jamo_layout(target_char, is_vowel=False)
+    if target_char in JUNGSUNG:
+        return _single_jamo_layout(target_char, is_vowel=True)
+    return []
+
+
 def _canonical_stroke_points(target_char: str) -> List[Tuple[str, Tuple[float, float, float, float]]]:
     """목표 글자의 기대 획 순서를 (자모라벨, (cx,cy,w,h)) 리스트로 반환 (정규화 [0,1] 공간).
     synthetic_stroke_generator.py의 기하 템플릿을 그대로 재사용한다."""
-    decomposed = decompose_syllable(target_char)
-    if decomposed is None:
-        return []
-    cho, jung, jong = decomposed
-    layout = _syllable_layout(cho, jung, jong)
+    layout = _layout_for_char(target_char)
     return [(jamo_label, _path_descriptor(path)) for jamo_label, paths in layout for path in paths]
 
 
@@ -126,11 +140,9 @@ def _acceptable_orders(target_char: str) -> List[Tuple[List[int], frozenset]]:
     표준(identity)은 항상 첫 번째로 포함하며, 대안이 있는 자모는 표준+대안 후보를
     갖고 자모 블록별 데카르트 곱으로 전체 순서를 만든다. 대안이 없으면 표준 하나뿐.
     """
-    decomposed = decompose_syllable(target_char)
-    if decomposed is None:
+    layout = _layout_for_char(target_char)
+    if not layout:
         return [([], frozenset())]
-    cho, jung, jong = decomposed
-    layout = _syllable_layout(cho, jung, jong)
 
     # 자모 블록별 canonical 인덱스 범위
     blocks: List[Tuple[str, List[int]]] = []
