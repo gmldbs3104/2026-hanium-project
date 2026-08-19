@@ -409,6 +409,14 @@ SFR-004C(획 그룹핑) → SFR-005C(획순/자간/크기 분석) 흐름입니�
 > 이건 백엔드 잘못이 아니라 **계약의 구멍**입니다 — 연결하려면 계약에 함수를 추가해야 합니다.
 > 상세: [DATA_FLOW.md](../DATA_FLOW.md) §8-A.
 
+> ✅ **재정정(2026-08-11, `ab9de5a`)** — 위 정정도 이제 낡았습니다. `ai_adapters.py`가
+> `analyze_canvas_writing`을 "추가 제공" 함수로 노출하고, `routes/handwriting.py`의
+> `analyze-detail`이 이를 **직접 호출**합니다. 자체 구현이던 `services/canvas_analysis.py`는
+> **삭제**됐습니다. 단, 공식 3함수 계약(`lstm_refine_grouping`·`lstm_analyze_stroke_order`)의
+> 시그니처는 안 바꿨으므로 스텁 2개는 여전히 존재합니다 — **스텁을 고친 게 아니라 계약 밖에서
+> 우회 연결한 것**입니다. 이 문단은 두 번 뒤집혔으니, 상태를 볼 때는 항상 근거 커밋·날짜를
+> 같이 적으세요. 상세: [DATA_FLOW.md](../DATA_FLOW.md) §8-A, [../CLAUDE.md](../CLAUDE.md) 아키텍처 절.
+
 ### 4.6 캔버스 모드의 한계 (정직하게 기록)
 
 - 이 모든 규칙 기반 구현은 "제시형"(목표를 먼저 보여주고 따라 쓰게 하는) UI 패턴을

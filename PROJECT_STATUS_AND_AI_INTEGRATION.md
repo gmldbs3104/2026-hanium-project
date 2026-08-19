@@ -5,6 +5,11 @@
 >
 > **새 컴퓨터에서 처음 세팅하는 경우**: 이 문서 말고 [`SETUP.md`](SETUP.md)와 `scripts/setup.ps1`(Windows) / `scripts/setup.sh`(Mac/Linux)를 먼저 보세요.
 
+> ⚠️ **낡음(2026-08-19 확인)** — 이 문서의 핵심 전제("AI팀 브랜치 `feature/ai-setup`이 아직
+> 안 합쳐짐")는 2026-08-11(`ab9de5a`)에 이미 합쳐지면서 깨졌습니다. AI 파트 현재 상태는
+> [`CLAUDE.md`](CLAUDE.md), [`DATA_FLOW.md`](DATA_FLOW.md), [`CHANGES_2026-08-17.md`](CHANGES_2026-08-17.md),
+> `ai/STATUS.md`, `ai/HANDOFF.md`가 단일 출처입니다. 이 문서는 병합 전 시점 기록으로만 남겨둡니다.
+
 ---
 
 ## 1. 지금까지 연결된 것 (현재 상태)

@@ -5,6 +5,12 @@
 
 > 주의: 저장소 루트에도 `lib/`, `android/`, `ios/` 등 중복된 Flutter 스캐폴딩이 있으나 이는 `frontend/` 밖에서 `flutter create .`가 잘못 실행되어 생긴 것으로, 실제 앱과 무관합니다. 이 문서는 `frontend/`를 기준으로 작성했습니다.
 
+> ⚠️ **낡음(2026-08-19 확인)** — 이 문서는 2026-07-25 시점 스냅샷이며, 아래 "최우선 수정 항목"의
+> 상당수는 이후 이미 해결됐습니다(예: CORS는 `backend/app/main.py`에 이미 설정돼 있고,
+> `useMockApi`도 이미 `false`). 지금 상태는 [`CLAUDE.md`](CLAUDE.md)와
+> [`DATA_FLOW.md`](DATA_FLOW.md), [`CHANGES_2026-08-17.md`](CHANGES_2026-08-17.md)를 참고하세요.
+> 이 문서는 과거 계약 불일치 목록의 기록으로만 남겨둡니다.
+
 ## 0. 현재 상태 요약
 
 - 프론트엔드는 `frontend/lib/core/app_config.dart`의 `useMockApi = true` 스위치로 전체 화면이 목업 데이터로 동작 중이며, 각 기능별 `*_api_service.dart`가 목업/실서버 분기를 이미 갖추고 있음. 연동 자체의 배선은 되어 있으나, **실서버로 전환 시 아래 계약 불일치 때문에 대부분의 흐름이 실패**함.
