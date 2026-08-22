@@ -13,13 +13,16 @@ import '../../../shared/widgets/ui_kit.dart';
 import '../../../shared/models/feedback_item.dart';
 import '../../../shared/models/weak_habit.dart';
 import '../../auth/providers/auth_controller.dart';
+import '../../dashboard/providers/dashboard_refresh_provider.dart';
 import '../utils/canvas_feedback_parser.dart';
 import '../utils/image_download.dart';
 import '../utils/severity_style.dart';
 import '../../canvas_mode/models/stroke.dart';
+import '../../canvas_mode/models/canvas_char_analysis.dart';
 import '../../canvas_mode/services/canvas_api_service.dart';
 import '../../canvas_mode/widgets/stroke_painter.dart';
 import '../../image_mode/services/image_api_service.dart';
+import '../../image_mode/models/image_analysis_response.dart';
 import '../models/canvas_correction_overlay_item.dart';
 import '../models/image_bbox_overlay_item.dart';
 import '../models/pending_session_save.dart';
@@ -123,6 +126,13 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
   // 이미지 모드 오버레이 항목
   List<ImageBBoxOverlayItem> _imageItems = [];
 
+  // /analyze-detail 응답(문자별 필압/속도/교정 플래그/복수 정본 안내) — char_id로 조회.
+  // DATA_FLOW.md §7.3/§8-B·C·D: 예전엔 이 응답 자체를 파싱하지 않아 전부 버려졌다.
+  Map<String, CanvasCharAnalysis> _canvasAnalysisByChar = {};
+
+  // /analyze 응답(자간·행간 균등성 점수 포함) — DATA_FLOW.md §5-8
+  ImageAnalysisResponse? _imageAnalysis;
+
   bool _showOverlay = true;
 
   // ---- SFR-009 저장 확인 관련 상태 ----
@@ -174,9 +184,12 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
   Future<void> _loadCanvasFeedback() async {
     // SFR-004C: 문자 단위 bounding box
     final groupResponse = await CanvasApiService.group(widget.sessionId);
-    // SFR-005C: 획순/자간/크기 분석 (인증 필요) — feedback()이 참조할 서버 캐시를 채운다
+    // SFR-005C: 획순/자간/크기 분석 (인증 필요) — feedback()이 참조할 서버 캐시를 채운다.
+    // 종합 점수는 여전히 feedback()에서만 받지만, 이 응답에만 실리는 문자별
+    // 필압/속도/교정 플래그/복수 정본 안내는 여기서 받아 상세 바텀시트에 쓴다.
     final idToken = await ref.read(authControllerProvider.notifier).getCurrentIdToken();
-    await CanvasApiService.analyzeDetail(widget.sessionId, idToken: idToken);
+    final analysisResponse =
+        await CanvasApiService.analyzeDetail(widget.sessionId, idToken: idToken);
     // SFR-007: 문자별 severity + 메시지 + 최종 종합 점수 (진짜 점수는 여기서만 나옴)
     final feedbackResponse = await CanvasApiService.feedback(widget.sessionId);
 
@@ -190,15 +203,19 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
       _weakHabits = feedbackResponse.weakHabits;
       _scoreTrend = feedbackResponse.scoreTrend;
       _lowConfidenceCount = groupResponse.lowConfidenceCount;
+      _canvasAnalysisByChar = analysisResponse.byCharId();
     });
   }
 
   Future<void> _loadImageFeedback() async {
     // SFR-004I: 문자 검출 bounding box
     final detectResponse = await ImageApiService.detect(widget.sessionId);
-    // SFR-005I: 크기 균일성/기울기/줄 정렬 분석 (인증 필요) — feedback()이 참조할 서버 캐시를 채운다
+    // SFR-005I: 크기 균일성/기울기/줄 정렬 분석 (인증 필요) — feedback()이 참조할 서버 캐시를 채운다.
+    // 종합 점수는 여전히 feedback()에서만 받지만, 이 응답에만 실리는 자간·행간
+    // 균등성 점수는 여기서 받아 점수 카드에 함께 보여준다.
     final idToken = await ref.read(authControllerProvider.notifier).getCurrentIdToken();
-    await ImageApiService.analyze(widget.sessionId, idToken: idToken);
+    final analysisResponse =
+        await ImageApiService.analyze(widget.sessionId, idToken: idToken);
     // SFR-007: 피드백 (현재는 target_id="global"만 옴 — 문서 참고) + 최종 종합 점수
     final feedbackResponse = await ImageApiService.feedback(widget.sessionId);
 
@@ -212,6 +229,7 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
       _weakHabits = feedbackResponse.weakHabits;
       _scoreTrend = feedbackResponse.scoreTrend;
       _detectedCount = detectResponse.totalDetected;
+      _imageAnalysis = analysisResponse;
     });
   }
 
@@ -302,6 +320,19 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
       backgroundColor: Colors.white,
       appBar: AppBar(
         title: const Text('분석 결과'),
+        // 캔버스/문장 연습 화면에서 context.go()로 넘어온 화면이라 시스템 back으로
+        // 되돌아갈 곳이 없을 수 있다 — "학습 기록 저장"을 누르기 전에도 홈으로
+        // 돌아갈 수 있어야 하므로 항상 홈 이동 버튼을 둔다.
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          tooltip: '홈으로',
+          onPressed: () {
+            if (_confirmed) {
+              ref.read(dashboardRefreshProvider.notifier).state++;
+            }
+            context.go('/home');
+          },
+        ),
         // 다운로드는 하단 FeedbackActionBar로 옮겼다 — 서버 저장과 나란히 놓아
         // "기기로 받기"와 "서버에 저장"이 구분되게 하기 위함.
         actions: [
@@ -342,7 +373,12 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
           onConsentChanged: (v) => setState(() => _saveImageConsent = v),
           onConfirm: _onConfirm,
           onDownload: _downloadFeedbackImage,
-          onGoHome: () => context.go('/home'),
+          onGoHome: () {
+            // 방금 세션 완료로 연속 출석일이 바뀌었을 수 있으니 홈 화면이 대시보드
+            // 요약을 다시 불러오도록 신호를 보낸다 (dashboard_refresh_provider.dart).
+            ref.read(dashboardRefreshProvider.notifier).state++;
+            context.go('/home');
+          },
         ),
       ],
     );
@@ -613,8 +649,41 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
                 style: const TextStyle(
                     fontSize: 12.5, height: 1.35, color: AppTheme.inkMuted)),
           ],
+          if (!_isCanvas) ..._buildImageSubScores(),
         ],
       ),
+    );
+  }
+
+  /// 이미지 모드 자간·행간 균등성 점수 (DATA_FLOW.md §5-8) — AI는 5지표로
+  /// 채점하지만 기존엔 크기/기울기/줄정렬 3개만 프론트에 닿았다. 측정 불가
+  /// (글자/행 수 부족)면 null이라 해당 줄은 생략한다.
+  List<Widget> _buildImageSubScores() {
+    final spacing = _imageAnalysis?.spacingUniformityScore;
+    final lineSpacing = _imageAnalysis?.lineSpacingUniformityScore;
+    if (spacing == null && lineSpacing == null) return const [];
+
+    return [
+      const SizedBox(height: 12),
+      const Divider(height: 1, color: AppTheme.line),
+      const SizedBox(height: 10),
+      if (spacing != null) _buildSubScoreRow('자간 균등성', spacing),
+      if (lineSpacing != null) ...[
+        const SizedBox(height: 6),
+        _buildSubScoreRow('행간 균등성', lineSpacing),
+      ],
+    ];
+  }
+
+  Widget _buildSubScoreRow(String label, int score) {
+    return Row(
+      children: [
+        Text(label, style: const TextStyle(fontSize: 12, color: AppTheme.inkMuted)),
+        const Spacer(),
+        Text('$score점',
+            style: const TextStyle(
+                fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.ink)),
+      ],
     );
   }
 
@@ -865,6 +934,7 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
       onItemTap: (item) => _showFeedbackSheet(
         charId: item.charId,
         message: item.feedback?.feedbackMessage ?? '이 글자는 특별한 교정사항이 없습니다.',
+        canvasAnalysis: _canvasAnalysisByChar[item.charId],
       ),
     );
   }
@@ -932,7 +1002,11 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
     );
   }
 
-  void _showFeedbackSheet({required String charId, required String message}) {
+  void _showFeedbackSheet({
+    required String charId,
+    required String message,
+    CanvasCharAnalysis? canvasAnalysis,
+  }) {
     showModalBottomSheet(
       context: context,
       builder: (context) => Padding(
@@ -945,10 +1019,81 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
             const SizedBox(height: 8),
             Text(message, style: const TextStyle(fontSize: 15)),
             const SizedBox(height: 16),
+            if (canvasAnalysis != null) ..._buildCanvasCharDetail(canvasAnalysis),
           ],
         ),
       ),
     );
+  }
+
+  /// 문자 상세 바텀시트 하단부: 교정 플래그 · 복수 정본 안내 · 필압/속도.
+  /// DATA_FLOW.md §7.3/§8-B·C·D — 이전에는 파싱조차 안 됐던 값들.
+  List<Widget> _buildCanvasCharDetail(CanvasCharAnalysis analysis) {
+    final widgets = <Widget>[];
+
+    if (analysis.correctionFlags.isNotEmpty) {
+      widgets.add(Wrap(
+        spacing: 6,
+        runSpacing: 6,
+        children: analysis.correctionFlags
+            .map((f) => Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: AppTheme.amberBg,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    CanvasCharAnalysis.flagLabel(f),
+                    style: const TextStyle(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.amberText),
+                  ),
+                ))
+            .toList(),
+      ));
+      widgets.add(const SizedBox(height: 12));
+    }
+
+    final notes = analysis.strokeOrderResult?.notes ?? const [];
+    if (notes.isNotEmpty) {
+      widgets.add(Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: AppTheme.mintSurface,
+          borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: notes
+              .map((n) => Text(n,
+                  style: const TextStyle(
+                      fontSize: 12, height: 1.4, color: AppTheme.primaryDark)))
+              .toList(),
+        ),
+      ));
+      widgets.add(const SizedBox(height: 12));
+    }
+
+    widgets.add(Row(
+      children: [
+        Icon(Icons.speed_rounded, size: 15, color: AppTheme.inkFaint),
+        const SizedBox(width: 4),
+        Text(
+          '평균 속도 ${analysis.motion.meanSpeedPxPerMs.toStringAsFixed(2)}px/ms',
+          style: const TextStyle(fontSize: 11.5, color: AppTheme.inkMuted),
+        ),
+        const SizedBox(width: 14),
+        Icon(Icons.touch_app_rounded, size: 15, color: AppTheme.inkFaint),
+        const SizedBox(width: 4),
+        Text(
+          '평균 필압 ${analysis.motion.meanPressure.toStringAsFixed(2)}',
+          style: const TextStyle(fontSize: 11.5, color: AppTheme.inkMuted),
+        ),
+      ],
+    ));
+
+    return widgets;
   }
 }
 

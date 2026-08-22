@@ -3,25 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/app_theme.dart';
 import '../../../core/target_score_provider.dart';
-import '../../../shared/services/api_client.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../../auth/providers/auth_state.dart';
 import '../providers/handwriting_env_provider.dart';
-import '../services/settings_api_service.dart';
-
-/// AuthProviderType → 화면에 보여줄 한글 이름 (auth_state.dart의 provider 문자열 기준).
-String _providerLabel(String provider) {
-  switch (provider) {
-    case 'google':
-      return '구글';
-    case 'kakao':
-      return '카카오';
-    case 'apple':
-      return '애플';
-    default:
-      return provider;
-  }
-}
 
 /// 상세환경설정 — 계정/필기 환경/사운드 설정 (필기·사운드는 로컬 UI 상태).
 /// 회원탈퇴는 기존 AuthController.deleteAccount()를 그대로 호출한다(백엔드 연동 유지).
@@ -39,7 +23,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   bool _vibration = true;
   bool _buttonSound = true;
   bool _ambientSound = false;
-  bool _isResettingData = false;
 
   static const _boardThemes = ['무지', '격자', '줄글', '원고지'];
 
@@ -60,46 +43,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('필기 환경 설정이 저장되었습니다. (연습 화면 적용은 준비 중이에요)')),
     );
-  }
-
-  /// mypage_upgrade.md 3.4-1: 서버에 쌓인 세션·점수 이력 전체 삭제(계정은 유지).
-  /// ⚠️ SettingsApiService.resetHistory()가 부르는 백엔드 엔드포인트는 아직 없다 —
-  /// 지금은 호출하면 실패(연결 오류/404)로 안내된다. 백엔드에 엔드포인트가 생기면
-  /// 바로 동작한다.
-  Future<void> _confirmResetData() async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (c) => AlertDialog(
-        title: const Text('데이터 초기화'),
-        content: const Text('모든 학습 기록이 사라집니다. 정말로 초기화하시겠습니까?'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(c, false), child: const Text('취소')),
-          TextButton(
-            onPressed: () => Navigator.pop(c, true),
-            style: TextButton.styleFrom(foregroundColor: AppTheme.errorColor),
-            child: const Text('초기화'),
-          ),
-        ],
-      ),
-    );
-    if (ok != true || !mounted) return;
-
-    setState(() => _isResettingData = true);
-    final messenger = ScaffoldMessenger.of(context);
-    try {
-      final idToken =
-          await ref.read(authControllerProvider.notifier).getCurrentIdToken();
-      await SettingsApiService.resetHistory(idToken: idToken);
-      messenger.showSnackBar(const SnackBar(content: Text('모든 학습 기록이 초기화되었습니다.')));
-    } on ApiException catch (e) {
-      messenger.showSnackBar(SnackBar(
-          content: Text(e.serverMessage ?? '초기화에 실패했습니다. 잠시 후 다시 시도해주세요.')));
-    } catch (e) {
-      messenger.showSnackBar(const SnackBar(content: Text('초기화에 실패했습니다. 잠시 후 다시 시도해주세요.')));
-    } finally {
-      if (mounted) setState(() => _isResettingData = false);
-    }
   }
 
   Future<void> _confirmDeleteAccount() async {
@@ -142,7 +85,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final targetScore = ref.watch(targetScoreProvider);
     final authState = ref.watch(authControllerProvider);
     final providerLabel =
-        authState is AuthAuthenticated ? _providerLabel(authState.user.provider) : null;
+        authState is AuthAuthenticated ? authState.user.provider : null;
     return Scaffold(
       backgroundColor: AppTheme.scaffold,
       appBar: AppBar(
@@ -181,14 +124,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     title: '소셜 계정 연동',
                     subtitle: providerLabel ?? '알 수 없음',
                     showChevron: false),
-                const Divider(height: 1, color: AppTheme.line),
-                _RowItem(
-                    icon: Icons.delete_outline_rounded,
-                    iconBg: const Color(0xFFFDECD8),
-                    iconColor: AppTheme.amberText,
-                    title: '데이터 초기화',
-                    subtitle: _isResettingData ? '초기화하는 중...' : '모든 학습 기록 삭제',
-                    onTap: _isResettingData ? null : _confirmResetData),
                 const Divider(height: 1, color: AppTheme.line),
                 _RowItem(
                     icon: Icons.person_off_rounded,

@@ -57,6 +57,40 @@ class _SentencePracticeScreenState extends State<SentencePracticeScreen> {
 
   static const _uuid = Uuid();
 
+  // 배경 첫 줄(진한 안내 문구)과 반드시 같은 값이어야 좌표가 실제 렌더링 위치와 일치한다.
+  static const _guidePadding = EdgeInsets.symmetric(horizontal: 16, vertical: 18);
+  static const _guideStyle =
+      TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: AppTheme.ink);
+
+  /// 배경 안내 문구(첫 줄)에서 글자별 렌더링 위치를 계산한다.
+  /// TextPainter로 문장 전체를 한 번 레이아웃한 뒤, 글자 하나씩 선택 영역의
+  /// 박스를 물어봐서 커닝을 반영한 실제 위치를 얻는다(문자 너비 합산 방식보다 정확).
+  List<Map<String, dynamic>> _computeCharPositions() {
+    final painter = TextPainter(
+      text: TextSpan(text: _sentence, style: _guideStyle),
+      textDirection: TextDirection.ltr,
+    )..layout();
+
+    final positions = <Map<String, dynamic>>[];
+    for (var i = 0; i < _sentence.length; i++) {
+      if (_sentence[i] == ' ') continue;
+      final boxes = painter.getBoxesForSelection(
+        TextSelection(baseOffset: i, extentOffset: i + 1),
+      );
+      if (boxes.isEmpty) continue;
+      final box = boxes.first;
+      positions.add({
+        'char': _sentence[i],
+        'index': i,
+        'x': _guidePadding.left + box.left,
+        'y': _guidePadding.top + box.top,
+        'width': box.right - box.left,
+        'height': box.bottom - box.top,
+      });
+    }
+    return positions;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -119,8 +153,12 @@ class _SentencePracticeScreenState extends State<SentencePracticeScreen> {
         height: _canvasSize.height.round(),
         strokeCount: _strokes.length,
       );
-      final result =
-          await CanvasApiService.analyze(strokes: _strokes, metadata: metadata);
+      final result = await CanvasApiService.analyze(
+        strokes: _strokes,
+        metadata: metadata,
+        targetText: _sentence.replaceAll(' ', ''),
+        charPositions: _computeCharPositions(),
+      );
       if (mounted) {
         context.go('/feedback', extra: {
           'mode': 'canvas',
@@ -212,17 +250,12 @@ class _SentencePracticeScreenState extends State<SentencePracticeScreen> {
                           Positioned.fill(
                             child: IgnorePointer(
                               child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 16, vertical: 18),
+                                padding: _guidePadding,
                                 child: Column(
                                   crossAxisAlignment:
                                       CrossAxisAlignment.start,
                                   children: [
-                                    Text(_sentence,
-                                        style: const TextStyle(
-                                            fontSize: 20,
-                                            fontWeight: FontWeight.w600,
-                                            color: AppTheme.ink)),
+                                    Text(_sentence, style: _guideStyle),
                                     const SizedBox(height: 20),
                                     for (var i = 0; i < 4; i++) ...[
                                       Text(_sentence,

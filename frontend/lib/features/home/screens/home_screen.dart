@@ -7,7 +7,9 @@ import '../../../core/app_theme.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../../auth/providers/auth_state.dart';
 import '../../dashboard/models/dashboard_response.dart';
+import '../../dashboard/providers/dashboard_refresh_provider.dart';
 import '../../dashboard/services/dashboard_api_service.dart';
+import '../../mypage/providers/profile_override_provider.dart';
 import '../../mypage/utils/level_title.dart';
 import '../providers/mode_provider.dart';
 
@@ -71,10 +73,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // 연습을 마치고 피드백 화면에서 홈으로 돌아올 때(dashboardRefreshProvider bump)
+    // 대시보드 요약을 다시 불러온다 — 탭 전환만으로는 initState가 재실행되지 않는다.
+    ref.listen<int>(dashboardRefreshProvider, (previous, next) {
+      if (previous != next) _loadDashboardSummary();
+    });
     final authState = ref.watch(authControllerProvider);
-    final name = authState is AuthAuthenticated
+    final fallbackName = authState is AuthAuthenticated
         ? (authState.user.name ?? authState.user.email)
         : '사용자';
+    // 로컬 프로필 수정값(닉네임)이 있으면 우선 사용 — profile_override_provider.dart 참고.
+    final override = ref.watch(profileOverrideProvider);
+    final name = override.nickname ?? fallbackName;
     final initial = name.isNotEmpty ? name.substring(0, 1) : '유';
 
     return Container(

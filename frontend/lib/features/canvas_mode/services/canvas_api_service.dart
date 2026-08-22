@@ -10,6 +10,7 @@ import '../models/stroke.dart';
 import '../models/char_group.dart';
 import '../models/canvas_group_response.dart';
 import '../models/canvas_feedback_response.dart';
+import '../models/canvas_char_analysis.dart';
 
 /// 캔버스 모드 전용 API 서비스 (SFR-003C ~ SFR-007 대응)
 ///
@@ -34,10 +35,16 @@ class CanvasApiService {
   ///
   /// 현재 캔버스 연습 화면(canvas_input_screen.dart)은 한 번에 한 글자만 쓰게
   /// 하므로 [targetText]는 보통 길이 1인 문자열(예: "ㄱ", "각")이다.
+  ///
+  /// [charPositions]는 안내 문구(배경에 그려진 따라쓰기 가이드)에서 글자별로 계산한
+  /// 렌더링 좌표({char, index, x, y, width, height})다. 백엔드 스키마
+  /// (CanvasAnalyzeRequest)가 아직 이 필드를 정의하지 않아 현재는 그대로 무시되지만,
+  /// pydantic 기본 동작상 알 수 없는 필드가 있어도 요청은 정상 처리된다.
   static Future<CanvasAnalyzeResult> analyze({
     required List<Stroke> strokes,
     required CanvasMetadata metadata,
     String? targetText,
+    List<Map<String, dynamic>>? charPositions,
   }) async {
     if (AppConfig.useMockApi) {
       return _mockAnalyze(strokes, metadata);
@@ -49,6 +56,7 @@ class CanvasApiService {
         'strokes': strokes.map((s) => s.toJson()).toList(),
         'metadata': metadata.toJson(),
         if (targetText != null) 'target_text': targetText,
+        if (charPositions != null) 'char_positions': charPositions,
       },
     );
     return CanvasAnalyzeResult.fromJson(response);
@@ -70,16 +78,23 @@ class CanvasApiService {
 
   /// SFR-005C: 획순/자간/크기 분석 트리거 (인증 필요)
   /// 이 호출이 서버 캐시에 분석 결과를 채워야 feedback()이 동작한다.
-  /// 응답 자체는 화면에서 쓰지 않으므로(진짜 점수는 feedback()에서만 받음) 반환하지 않는다.
+  /// 종합 점수/성취 메시지는 여전히 feedback()에서만 받지만(백엔드 스키마 참고),
+  /// 이 응답에만 실리는 문자별 필압/속도 프로필·교정 플래그·복수 정본 안내
+  /// (DATA_FLOW.md §7.3/§8-B·C·D)는 여기서 파싱해 반환한다 — 화면(피드백 화면의
+  /// 문자별 상세 바텀시트)에서 char_id로 조회해서 쓴다.
   /// (requirement: POST /api/v1/canvas/{canvas_session_id}/analyze-detail)
-  static Future<void> analyzeDetail(String canvasSessionId, {String? idToken}) async {
-    if (AppConfig.useMockApi) return;
+  static Future<CanvasAnalysisResponse> analyzeDetail(
+    String canvasSessionId, {
+    String? idToken,
+  }) async {
+    if (AppConfig.useMockApi) return _mockAnalyzeDetail(canvasSessionId);
 
-    await ApiClient.post(
+    final response = await ApiClient.post(
       AppConfig.canvasAnalyzeDetailEndpoint(canvasSessionId),
       {},
       authToken: idToken,
     );
+    return CanvasAnalysisResponse.fromJson(response);
   }
 
   /// SFR-007: 교정 피드백 조회 (문자별 severity + 메시지 + 최종 종합 점수)
@@ -145,6 +160,47 @@ class CanvasApiService {
       canvasSessionId: canvasSessionId,
       charGroups: charGroups,
       lowConfidenceCount: charGroups.where((g) => g.lowConfidence).length,
+    );
+  }
+
+  /// _mockGroup()의 char_id와 매칭되는 mock 상세 분석 (필압/속도/교정 플래그/획순 노트)
+  static Future<CanvasAnalysisResponse> _mockAnalyzeDetail(
+    String canvasSessionId,
+  ) async {
+    await Future.delayed(AppConfig.mockDelay);
+
+    final charIds = ['char_001', 'char_002', 'char_003', 'char_004'];
+    final flags = [
+      <String>[],
+      ['spacing_too_wide'],
+      ['stroke_order_error'],
+      ['size_small'],
+    ];
+    final results = List.generate(charIds.length, (i) {
+      return CanvasCharAnalysis(
+        charId: charIds[i],
+        strokeOrderResult: i == 2
+            ? const StrokeOrderResult(
+                errorCount: 2,
+                likelyWrongCharacter: false,
+                corrections: ['1번째로 그린 획은 표준 순서상 2번째 위치에 그려야 합니다.'],
+                notes: [],
+              )
+            : null,
+        spacingDeviation: i == 1 ? 8.0 : 0.0,
+        sizeDeviation: i == 3 ? -15.0 : 0.0,
+        motion: WritingMotionProfile(
+          meanPressure: 0.6 + i * 0.05,
+          meanSpeedPxPerMs: 0.3 + i * 0.02,
+        ),
+        overallScore: 90 - i * 8,
+        correctionFlags: flags[i],
+      );
+    });
+
+    return CanvasAnalysisResponse(
+      canvasSessionId: canvasSessionId,
+      results: results,
     );
   }
 

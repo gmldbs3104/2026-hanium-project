@@ -10,6 +10,7 @@ import '../models/image_result.dart';
 import '../models/detected_char.dart';
 import '../models/image_detect_response.dart';
 import '../models/image_feedback_response.dart';
+import '../models/image_analysis_response.dart';
 
 /// 이미지 모드 전용 API 서비스 (SFR-003I ~ SFR-007 대응)
 ///
@@ -59,16 +60,22 @@ class ImageApiService {
 
   /// SFR-005I: 크기 균일성/기울기/줄 정렬 분석 트리거 (인증 필요)
   /// 이 호출이 서버 캐시에 분석 결과를 채워야 feedback()이 동작한다.
-  /// 응답 자체는 화면에서 쓰지 않으므로(진짜 점수는 feedback()에서만 받음) 반환하지 않는다.
+  /// 종합 점수/성취 메시지는 여전히 feedback()에서만 받지만(백엔드 스키마 참고),
+  /// 이 응답에만 실리는 자간·행간 균등성 점수(DATA_FLOW.md §5-8, AI는 5지표를
+  /// 채점하지만 기존 계약엔 3개뿐이었다)는 여기서 파싱해 반환한다.
   /// (requirement: POST /api/v1/image/{image_session_id}/analyze)
-  static Future<void> analyze(String imageSessionId, {String? idToken}) async {
-    if (AppConfig.useMockApi) return;
+  static Future<ImageAnalysisResponse> analyze(
+    String imageSessionId, {
+    String? idToken,
+  }) async {
+    if (AppConfig.useMockApi) return _mockAnalyze(imageSessionId);
 
-    await ApiClient.post(
+    final response = await ApiClient.post(
       AppConfig.imageAnalyzeEndpoint(imageSessionId),
       {},
       authToken: idToken,
     );
+    return ImageAnalysisResponse.fromJson(response);
   }
 
   /// SFR-007: 교정 피드백 조회
@@ -134,6 +141,25 @@ class ImageApiService {
       imageSessionId: imageSessionId,
       detectedChars: detectedChars,
       totalDetected: detectedChars.length,
+    );
+  }
+
+  /// _mockDetect()의 4자에 맞춘 mock 상세 분석 (자간·행간 균등성 점수 포함)
+  static Future<ImageAnalysisResponse> _mockAnalyze(String imageSessionId) async {
+    await Future.delayed(AppConfig.mockDelay);
+
+    return ImageAnalysisResponse(
+      imageSessionId: imageSessionId,
+      sizeUniformityScore: 88,
+      avgSlantAngle: 2.5,
+      slantConsistencyScore: 74,
+      lineAlignmentScore: 91,
+      overallScore: 82,
+      overallTilt: 'straight',
+      totalGrade: '우수',
+      clarityWarnings: const [],
+      spacingUniformityScore: 79,
+      lineSpacingUniformityScore: 85,
     );
   }
 

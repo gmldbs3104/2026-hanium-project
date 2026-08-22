@@ -46,7 +46,7 @@ class BasicsScreen extends StatelessWidget {
           children: [
             Expanded(
               child: SingleChildScrollView(
-                padding: const EdgeInsets.all(20),
+                padding: const EdgeInsets.all(16),
                 child: LayoutBuilder(
                   builder: (context, constraints) {
                     final wide = constraints.maxWidth >= 640;
@@ -78,9 +78,9 @@ class BasicsScreen extends StatelessWidget {
                           const SizedBox(height: 16),
                           cards[1],
                         ],
-                        const SizedBox(height: 20),
+                        const SizedBox(height: 14),
                         Container(
-                          padding: const EdgeInsets.all(14),
+                          padding: const EdgeInsets.all(10),
                           decoration: BoxDecoration(
                             color: AppTheme.mintSurface,
                             borderRadius:
@@ -139,21 +139,20 @@ class _GuideCard extends StatelessWidget {
                       color: AppTheme.ink)),
             ],
           ),
-          const SizedBox(height: 12),
-          AspectRatio(
-            aspectRatio: 16 / 10,
-            child: Container(
-              decoration: BoxDecoration(
-                color: const Color(0xFFF0F2F5),
-                borderRadius: BorderRadius.circular(AppTheme.radiusSm),
-              ),
-              child: const Center(
-                child: Icon(Icons.image_rounded,
-                    size: 36, color: AppTheme.inkFaint),
-              ),
+          const SizedBox(height: 10),
+          Container(
+            height: 56,
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: const Color(0xFFF0F2F5),
+              borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+            ),
+            child: const Center(
+              child: Icon(Icons.image_rounded,
+                  size: 22, color: AppTheme.inkFaint),
             ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           ...bullets.map(
             (b) => Padding(
               padding: const EdgeInsets.only(bottom: 8),
