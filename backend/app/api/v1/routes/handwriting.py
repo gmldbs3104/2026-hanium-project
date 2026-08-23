@@ -55,7 +55,14 @@ async def group_canvas_strokes(canvas_session_id: str):
         raise HTTPException(status_code=404, detail="유효하지 않거나 만료된 session_id 입니다.")
 
     strokes = session_data["strokes"]
-    stroke_groups = rule_based_grouping(strokes)
+
+    # 목표 텍스트(제시형 연습 — 문장 쓰기 등)를 알면 글자 수를 그룹핑에 넘긴다.
+    # 공백은 쓰지 않으므로 제외하고 실제 음절 수만 센다. 없으면(자모 단독 등) None →
+    # 기존 임계값 방식으로 동작한다.
+    target_text = session_data.get("target_text")
+    expected_count = len("".join(target_text.split())) if target_text else None
+
+    stroke_groups = rule_based_grouping(strokes, expected_count=expected_count)
     char_groups = build_char_groups(stroke_groups)
 
     # SFR-005C에서 사용할 수 있도록 같은 세션에 결과 갱신 저장

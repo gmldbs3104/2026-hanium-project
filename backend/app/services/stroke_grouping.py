@@ -1,4 +1,4 @@
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import math
 from app.core.config import settings
 from app.services.ai_adapters import lstm_refine_grouping
@@ -26,27 +26,33 @@ def _merge_bounding_boxes(boxes: List[Dict[str, float]]) -> Dict[str, float]:
     return {"x": x_min, "y": y_min, "width": x_max - x_min, "height": y_max - y_min}
 
 
-def rule_based_grouping(strokes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def rule_based_grouping(
+    strokes: List[Dict[str, Any]],
+    expected_count: Optional[int] = None,
+) -> List[Dict[str, Any]]:
     """
     REQ-004C-1: 규칙 기반 1차 그룹핑
     획 간 공간적 거리(centroid 거리)와 시간 간격이 임계값 이하인 획들을
     동일 문자 후보로 묶는다.
 
-    TODO(문장 쓰기 그룹핑 개선, 2026-08-19): 이 함수는 `ai/canvas/stroke_grouping.py`의
-    `group_strokes_by_rules`와 별개 구현이다(그쪽이 정본, 여기가 실서비스 `/canvas/{id}/group`
-    라우트가 실제로 쓰는 것). AI 쪽에 이미 `expected_count` 옵션이 추가됐다 — 목표 글자 수를
-    알 때(문장 쓰기 화면 등, "제시형" 연습이라 몇 글자인지 이미 앎) 고정 임계값 대신 "획 간격이
-    가장 크게 벌어진 (개수-1)곳" 상대 순위로 정확히 그 개수만큼 나눈다. 문장을 빠르게 이어 써서
-    글자 사이 간격이 절대 임계값 밑으로 떨어져도 상대적으로 큰 간격을 정확히 찾아낸다. 알고리즘·
-    테스트는 `ai/canvas/stroke_grouping.py`(`_group_by_expected_count`)와
-    `ai/tests/test_grouping_expected_count.py` 참고 — 이 파일에도 같은 로직을 포팅하고,
-    `routes/handwriting.py`의 `/group` 라우트가 세션에 저장된 `target_text` 길이(공백 제외)를
-    `expected_count`로 넘기도록 배선해야 실제로 효과가 난다. 프론트도 문장 쓰기 화면
-    (`sentence_practice_screen.dart`)이 `targetText`를 아직 안 보내고 있어 같이 필요.
-    상세: `STATUS.md` §2·§5-5.
+    expected_count: 목표 텍스트 길이 등으로 몇 글자인지 미리 아는 경우(제시형 연습 —
+    문장 쓰기처럼 여러 글자를 한 화면에 쓰는 상황)에 넘긴다. 있으면 고정 임계값 대신
+    "획 사이 간격이 가장 크게 벌어진 (expected_count-1)곳"을 경계로 삼아 정확히
+    expected_count개 그룹으로 나눈다 — 문장을 빠르게 이어 써서 글자 사이 간격이 절대
+    임계값 밑으로 떨어져도 상대적으로 더 벌어진 곳을 경계로 찾아낸다. 없으면(자음/모음/
+    받침 화면처럼 한 글자만 쓰는 경우) 기존 임계값 방식 그대로 동작한다.
+
+    ⚠️ 이 함수는 `ai/canvas/stroke_grouping.py`의 `group_strokes_by_rules`와 별개
+    구현이다(그쪽이 정본, 여기가 실서비스 `/canvas/{id}/group` 라우트가 실제로 쓰는 것).
+    알고리즘·테스트 근거는 `ai/canvas/stroke_grouping.py`(`_group_by_expected_count`)와
+    `ai/tests/test_grouping_expected_count.py`. 상세: `STATUS.md` §2·§5-5.
     """
     if not strokes:
         return []
+
+    if expected_count and 1 < expected_count <= len(strokes):
+        groups = _group_by_expected_count(strokes, expected_count)
+        return lstm_refine_grouping(groups)
 
     groups: List[List[Dict[str, Any]]] = [[strokes[0]]]
 
@@ -67,6 +73,50 @@ def rule_based_grouping(strokes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             groups.append([stroke])
 
     return lstm_refine_grouping(groups)
+
+
+def _group_by_expected_count(
+    strokes: List[Dict[str, Any]],
+    expected_count: int,
+) -> List[List[Dict[str, Any]]]:
+    """
+    획을 정확히 expected_count개 그룹으로 나눈다(목표 글자 수를 아는 제시형 연습용).
+
+    인접한 두 획 사이의 거리·시간 간격을 각각 임계값 대비 배수로 정규화한 뒤 더 큰 쪽을
+    그 경계의 점수로 삼고, 점수가 가장 큰 (expected_count-1)곳을 글자 경계로 고른다.
+    고정 임계값을 넘는지(이분법)가 아니라 상대적 순위로 판단하므로, 모든 간격이 임계값
+    밑이어도 그 안에서 상대적으로 더 벌어진 곳을 경계로 잡는다.
+
+    입력 순서를 시간순으로 가정한다(프론트가 획을 그린 순서대로 보냄 — 기존
+    rule_based_grouping의 기본 경로와 동일한 전제).
+    """
+    dist_threshold = settings.stroke_distance_threshold
+    time_threshold = settings.stroke_time_threshold_ms
+
+    gaps: List[tuple[float, int]] = []  # (score, boundary_index): strokes[i]와 strokes[i+1] 사이
+    for i in range(len(strokes) - 1):
+        curr_centroid = _stroke_centroid(strokes[i]["points"])
+        next_centroid = _stroke_centroid(strokes[i + 1]["points"])
+        distance = math.dist(curr_centroid, next_centroid)
+
+        prev_end_time = strokes[i]["points"][-1]["timestamp"]
+        next_start_time = strokes[i + 1]["points"][0]["timestamp"]
+        time_gap = next_start_time - prev_end_time
+
+        dist_ratio = distance / dist_threshold if dist_threshold > 0 else 0.0
+        time_ratio = time_gap / time_threshold if time_threshold > 0 else 0.0
+        gaps.append((max(dist_ratio, time_ratio), i))
+
+    n_boundaries = expected_count - 1
+    boundary_indices = {i for _, i in sorted(gaps, key=lambda g: -g[0])[:n_boundaries]}
+
+    groups: List[List[Dict[str, Any]]] = [[strokes[0]]]
+    for i, stroke in enumerate(strokes[1:], start=1):
+        if (i - 1) in boundary_indices:
+            groups.append([stroke])
+        else:
+            groups[-1].append(stroke)
+    return groups
 
 
 def build_char_groups(stroke_groups: List[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
