@@ -16,3 +16,11 @@ class UserOut(BaseModel):
 class LoginRequest(BaseModel):
     provider: str   # "google" | "kakao"
     id_token: str   # Firebase에서 발급받은 ID Token
+
+
+class KakaoLoginRequest(BaseModel):
+    access_token: str   # 카카오 SDK 로그인으로 받은 access token
+
+
+class CustomTokenOut(BaseModel):
+    custom_token: str   # 앱이 signInWithCustomToken()에 넘길 Firebase 커스텀 토큰

@@ -9,6 +9,9 @@ class Settings(BaseSettings):
 
     firebase_credentials_path: str
 
+    # 카카오 로그인 — 설정 시 access_token이 우리 앱에서 발급된 것인지 검증(선택).
+    kakao_app_id: Optional[int] = None
+
     secret_key: str
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
