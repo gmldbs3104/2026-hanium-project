@@ -121,6 +121,11 @@ final routerProvider = Provider<GoRouter>((ref) {
 
       GoRoute(
         path: '/feedback',
+        // 브라우저 새로고침/뒤로가기 등 in-memory extra 없이 URL만으로 이 라우트에
+        // 도달하면(특히 Flutter web) state.extra가 null이라 builder의 캐스팅이 그대로
+        // 터진다 — 필기/이미지 데이터를 URL만으로 복원할 방법이 없으니 홈으로 보낸다.
+        redirect: (context, state) =>
+            state.extra is Map<String, dynamic> ? null : '/main',
         builder: (context, state) {
           final extra = state.extra as Map<String, dynamic>;
           final mode = extra['mode'] as String;

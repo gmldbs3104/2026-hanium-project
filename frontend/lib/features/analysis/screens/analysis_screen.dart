@@ -53,7 +53,8 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
         idToken: idToken,
       );
       if (mounted) setState(() => _data = data);
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('[Analysis] dashboard load failed: $e\n$st');
       if (mounted) setState(() => _error = '분석 데이터를 불러오지 못했습니다.');
     } finally {
       if (mounted) setState(() => _isLoading = false);

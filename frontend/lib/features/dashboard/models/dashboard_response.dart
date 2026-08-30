@@ -31,16 +31,21 @@ class DashboardResponse {
   /// REQ-008-5: 교정 세션 이력이 하나도 없는 신규 사용자
   bool get isEmpty => periodSummary.totalSessions == 0;
 
+  /// ⚠️ 각 필드를 널/누락에 방어적으로 파싱한다 — 예전엔 비필수 필드 하나만
+  /// 없어도(예: Redis에 남아있던 이전 스키마 캐시, recommended_exercises 등) 화면
+  /// 전체가 "분석 데이터를 불러오지 못했습니다"로 죽었다(분석 탭 catch(_)가 원인
+  /// 예외를 삼켜버려 원인 파악도 안 됐다).
   factory DashboardResponse.fromJson(Map<String, dynamic> json) {
     return DashboardResponse(
-      periodSummary: PeriodSummary.fromJson(json['period_summary'] as Map<String, dynamic>),
-      weakItems: (json['weak_items'] as List)
+      periodSummary: PeriodSummary.fromJson(
+          (json['period_summary'] as Map<String, dynamic>?) ?? const {}),
+      weakItems: ((json['weak_items'] as List?) ?? const [])
           .map((e) => WeakItem.fromJson(e as Map<String, dynamic>))
           .toList(),
-      scoreTrend: (json['score_trend'] as List)
+      scoreTrend: ((json['score_trend'] as List?) ?? const [])
           .map((e) => ScoreTrendPoint.fromJson(e as Map<String, dynamic>))
           .toList(),
-      recommendedExercises: (json['recommended_exercises'] as List)
+      recommendedExercises: ((json['recommended_exercises'] as List?) ?? const [])
           .map((e) => RecommendedExercise.fromJson(e as Map<String, dynamic>))
           .toList(),
       level: (json['level'] as num?)?.toInt() ?? 1,
@@ -67,11 +72,11 @@ class PeriodSummary {
 
   factory PeriodSummary.fromJson(Map<String, dynamic> json) {
     return PeriodSummary(
-      totalSessions: json['total_sessions'] as int,
-      avgScore: (json['avg_score'] as num).toDouble(),
-      improvementRate: (json['improvement_rate'] as num).toDouble(),
-      canvasSessions: json['canvas_sessions'] as int,
-      imageSessions: json['image_sessions'] as int,
+      totalSessions: (json['total_sessions'] as num?)?.toInt() ?? 0,
+      avgScore: (json['avg_score'] as num?)?.toDouble() ?? 0.0,
+      improvementRate: (json['improvement_rate'] as num?)?.toDouble() ?? 0.0,
+      canvasSessions: (json['canvas_sessions'] as num?)?.toInt() ?? 0,
+      imageSessions: (json['image_sessions'] as num?)?.toInt() ?? 0,
     );
   }
 }

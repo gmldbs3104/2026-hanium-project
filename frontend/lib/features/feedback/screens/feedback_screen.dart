@@ -1031,6 +1031,22 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
   List<Widget> _buildCanvasCharDetail(CanvasCharAnalysis analysis) {
     final widgets = <Widget>[];
 
+    // analyze-detail이 문자별로 내려주는 점수 — 파싱은 되고 있었지만 화면에는
+    // 한 번도 그려지지 않았다(전체 점수는 /feedback에서만 표시됨).
+    widgets.add(Row(
+      children: [
+        const Text('이 글자 점수',
+            style: TextStyle(fontSize: 12, color: AppTheme.inkMuted)),
+        const SizedBox(width: 6),
+        Text('${analysis.overallScore}점',
+            style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: AppTheme.primaryDark)),
+      ],
+    ));
+    widgets.add(const SizedBox(height: 10));
+
     if (analysis.correctionFlags.isNotEmpty) {
       widgets.add(Wrap(
         spacing: 6,
