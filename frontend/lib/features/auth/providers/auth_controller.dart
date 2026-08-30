@@ -29,7 +29,59 @@ class AuthController extends Notifier<AuthState> {
   late final GoogleSignIn _googleSignIn = GoogleSignIn(scopes: ['email', 'profile']);
 
   @override
-  AuthState build() => const AuthInitial();
+  AuthState build() {
+    // Firebase Auth는 웹(IndexedDB)/모바일(디스크)에 세션을 그대로 유지하는데, 이
+    // Notifier는 항상 AuthInitial로 시작해서 새로고침/앱 재시작마다 실제로는 로그인돼
+    // 있어도 라우터가 "로그인 안 됨"으로 보고 로그인 화면으로 튕겨보냈다. 시작하자마자
+    // Firebase에 실제 세션이 있는지 확인해서 있으면 복원한다.
+    //
+    // 복원되는 동안(AuthLoading)에는 app_router.dart가 /login으로 리다이렉트하지
+    // 않고 원래 있던 화면(예: 새로고침 전 /main)에 그대로 머무른다 — 그래서 로그인
+    // 기록이 있는 사용자는 로그인 화면을 스쳐 지나가지 않고 곧바로 홈에 남는다.
+    if (!AppConfig.useMockApi) {
+      _restoreSession();
+      return const AuthLoading();
+    }
+    return const AuthInitial();
+  }
+
+  /// 앱 시작 시 Firebase에 이미 로그인된 사용자가 있으면 백엔드 프로필을 다시 받아와
+  /// [AuthAuthenticated]로 복원한다. 없으면(진짜 로그아웃 상태) [AuthInitial]로 전환한다.
+  ///
+  /// [FirebaseAuth.instance.currentUser]를 초기화 직후 바로 읽으면 웹에서는 아직
+  /// 복원 전이라 null일 수 있어, `authStateChanges()`의 첫 값을 기다린다.
+  Future<void> _restoreSession() async {
+    try {
+      final firebaseUser = await FirebaseAuth.instance.authStateChanges().first;
+      if (firebaseUser == null) {
+        state = const AuthInitial(); // 정말 로그인 안 된 상태
+        return;
+      }
+
+      final idToken = await firebaseUser.getIdToken();
+      if (idToken == null) {
+        state = const AuthInitial();
+        return;
+      }
+
+      // provider 값은 신규 유저를 새로 만들 때만 쓰이고(auth.py: 기존 유저는
+      // 저장된 provider를 그대로 반환), 세션 복원은 이미 가입된 유저에서만
+      // 일어나므로 정확한 provider를 몰라도 안전하다.
+      final user = await AuthApiService.login(
+        provider: AuthProviderType.google,
+        idToken: idToken,
+      );
+      // 복원이 끝나기 전에 사용자가 signOut 등으로 상태를 이미 바꿨다면 덮어쓰지 않는다.
+      if (state is AuthLoading) {
+        state = AuthAuthenticated(user);
+      }
+    } catch (e, st) {
+      debugPrint('[Auth] session restore failed: $e\n$st');
+      if (state is AuthLoading) {
+        state = const AuthInitial(); // 실패해도 로딩에 멈춰있지 않고 로그인 화면으로
+      }
+    }
+  }
 
   Future<void> signInWithGoogle() async {
     state = const AuthLoading();

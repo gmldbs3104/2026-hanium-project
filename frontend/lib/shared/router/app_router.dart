@@ -46,6 +46,14 @@ final routerProvider = Provider<GoRouter>((ref) {
       final isLoginRoute = loc == '/login';
       final isOnboardingRoute = loc == '/onboarding';
 
+      // 새로고침 직후 Firebase 세션 복원 중(auth_controller.dart의 _restoreSession)이면
+      // 아직 로그인 여부를 모른다 — 로그인 화면으로 리다이렉트하지 않고 지금 화면(예:
+      // 새로고침 전 /main)에 그대로 머무른다. 로그인 화면 자체는 원래 AuthLoading일 때
+      // 로딩 스피너를 보여주므로 그대로 둔다.
+      if (authState is AuthLoading && !isLoginRoute) {
+        return null;
+      }
+
       if (!isLoggedIn) {
         return isLoginRoute ? null : '/login';
       }

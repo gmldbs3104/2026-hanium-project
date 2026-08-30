@@ -229,6 +229,7 @@ class _StreakBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isZero = days == 0;
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -246,14 +247,16 @@ class _StreakBanner extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('놀라워요!',
-                    style: TextStyle(
+                Text(isZero ? '연습해요!' : '놀라워요!',
+                    style: const TextStyle(
                         fontSize: 24,
                         fontWeight: FontWeight.w800,
                         color: Color(0xFF14503F))),
                 const SizedBox(height: 8),
                 Text(
-                  '$days일동안 연속으로 출석하셨어요.\n의지가 대단하시네요! 곧 글쓰기 마스터!\n오늘의 글쓰기를 시작하러 가볼까요?',
+                  isZero
+                      ? '아직 오늘 출석 기록이 없어요.\n짧게라도 오늘 한 번 써볼까요? 할 수 있어요!\n오늘의 글쓰기를 시작하러 가볼까요?'
+                      : '$days일동안 연속으로 출석하셨어요.\n의지가 대단하시네요! 곧 글쓰기 마스터!\n오늘의 글쓰기를 시작하러 가볼까요?',
                   style: const TextStyle(
                       fontSize: 12.5, height: 1.5, color: Color(0xFF2C6B57)),
                 ),
@@ -286,9 +289,9 @@ class _StreakBanner extends StatelessWidget {
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(20),
                 ),
-                child: Text('D-$days',
-                    style: const TextStyle(
-                        fontSize: 22,
+                child: Text(isZero ? '시작 전' : 'D-$days',
+                    style: TextStyle(
+                        fontSize: isZero ? 14 : 22,
                         fontWeight: FontWeight.w800,
                         color: AppTheme.primaryDark)),
               ),

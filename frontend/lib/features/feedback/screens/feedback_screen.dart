@@ -610,6 +610,10 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
                       fontWeight: FontWeight.w600,
                       color: AppTheme.inkMuted)),
               const Spacer(),
+              if (!_isCanvas && _imageAnalysis?.totalGrade != null) ...[
+                _buildGradeBadge(_imageAnalysis!.totalGrade!),
+                const SizedBox(width: 6),
+              ],
               if (_scoreTrend != null) _buildTrendBadge(_scoreTrend!),
             ],
           ),
@@ -655,13 +659,20 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
     );
   }
 
-  /// 이미지 모드 자간·행간 균등성 점수 (DATA_FLOW.md §5-8) — AI는 5지표로
-  /// 채점하지만 기존엔 크기/기울기/줄정렬 3개만 프론트에 닿았다. 측정 불가
-  /// (글자/행 수 부족)면 null이라 해당 줄은 생략한다.
+  /// 이미지 모드 자간·행간 균등성 점수 + 기울기 방향 + 명료도 경고 (DATA_FLOW.md §5-8).
+  /// AI가 다 채점해서 응답에 실어 보내지만 화면엔 한 번도 그려지지 않던 값들이다.
+  /// 측정 불가(글자/행 수 부족)면 null이라 해당 줄은 생략한다.
   List<Widget> _buildImageSubScores() {
     final spacing = _imageAnalysis?.spacingUniformityScore;
     final lineSpacing = _imageAnalysis?.lineSpacingUniformityScore;
-    if (spacing == null && lineSpacing == null) return const [];
+    final tilt = _imageAnalysis?.overallTilt;
+    final warnings = _imageAnalysis?.clarityWarnings ?? const [];
+    if (spacing == null &&
+        lineSpacing == null &&
+        tilt == null &&
+        warnings.isEmpty) {
+      return const [];
+    }
 
     return [
       const SizedBox(height: 12),
@@ -671,6 +682,14 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
       if (lineSpacing != null) ...[
         const SizedBox(height: 6),
         _buildSubScoreRow('행간 균등성', lineSpacing),
+      ],
+      if (tilt != null) ...[
+        const SizedBox(height: 6),
+        _buildTiltRow(tilt),
+      ],
+      if (warnings.isNotEmpty) ...[
+        const SizedBox(height: 10),
+        _buildClarityWarnings(warnings),
       ],
     ];
   }
@@ -684,6 +703,85 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
             style: const TextStyle(
                 fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.ink)),
       ],
+    );
+  }
+
+  /// "우수"/"보통"/"불량" 종합 등급 배지 — 색은 좋음=민트, 보통=주황, 나쁨=빨강.
+  Widget _buildGradeBadge(String grade) {
+    final Color bg;
+    final Color fg;
+    switch (grade) {
+      case '우수':
+        bg = AppTheme.mintSurface;
+        fg = AppTheme.primaryDark;
+        break;
+      case '불량':
+        bg = const Color(0xFFFDECEC);
+        fg = AppTheme.errorColor;
+        break;
+      default: // "보통" 등 그 외
+        bg = AppTheme.amberBg;
+        fg = AppTheme.amberText;
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
+      child: Text(grade,
+          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: fg)),
+    );
+  }
+
+  /// 전체 기울기 방향 ("straight" | "leaning_right" | "leaning_left").
+  Widget _buildTiltRow(String tilt) {
+    final (icon, label) = switch (tilt) {
+      'leaning_right' => (Icons.rotate_right_rounded, '오른쪽으로 기울었어요'),
+      'leaning_left' => (Icons.rotate_left_rounded, '왼쪽으로 기울었어요'),
+      _ => (Icons.straighten_rounded, '반듯하게 썼어요'),
+    };
+    return Row(
+      children: [
+        const Text('전체 기울기',
+            style: TextStyle(fontSize: 12, color: AppTheme.inkMuted)),
+        const Spacer(),
+        Icon(icon, size: 14, color: AppTheme.inkMuted),
+        const SizedBox(width: 4),
+        Text(label,
+            style: const TextStyle(
+                fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.ink)),
+      ],
+    );
+  }
+
+  /// 명료도 경고 목록(점수엔 반영 안 됨 — 촬영 품질 관련 안내만).
+  Widget _buildClarityWarnings(List<String> warnings) {
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: AppTheme.amberBg,
+        borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final w in warnings)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 2),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(Icons.info_outline_rounded,
+                      size: 14, color: AppTheme.amberText),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(w,
+                        style: const TextStyle(
+                            fontSize: 11.5, color: AppTheme.amberText)),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
     );
   }
 
