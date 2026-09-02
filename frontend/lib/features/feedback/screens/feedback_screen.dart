@@ -24,11 +24,13 @@ import '../../canvas_mode/widgets/stroke_painter.dart';
 import '../../image_mode/services/image_api_service.dart';
 import '../../image_mode/models/image_analysis_response.dart';
 import '../models/canvas_correction_overlay_item.dart';
+import '../models/component_overlay_item.dart';
 import '../models/image_bbox_overlay_item.dart';
 import '../models/pending_session_save.dart';
 import '../services/session_save_queue.dart';
 import '../widgets/feedback_action_bar.dart';
 import '../widgets/canvas_correction_overlay_view.dart';
+import '../widgets/component_overlay_view.dart';
 import '../widgets/image_bbox_overlay_view.dart';
 import '../widgets/preservation_notice.dart';
 
@@ -115,6 +117,13 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
   int? _overallScore;
   String? _achievementMessage;
 
+  /// /feedback의 **항목별 문구**(종합 1문장을 뺀 나머지 — 크기·기울기·줄 정렬·자간·행간).
+  ///
+  /// ⚠️ 이미지 모드는 이 값을 통째로 버리고 있었다(2026-09-02 발견). 그래서
+  /// **6문장 중 종합 1문장만 화면에 나왔고**, 자간·행간처럼 박스를 안 치는 항목이
+  /// 미흡해도 취약 습관 카드는 "훌륭해요"만 보여줬다(사용자 지적).
+  List<FeedbackItem> _itemMessages = [];
+
   // AI 분석 "취약한 습관" + 점수 추세 (백엔드 신규 필드, 없으면 기본값)
   // ⚠️ 목표 점수는 응답이 아니라 사용자 설정(targetScoreProvider)을 사용한다.
   List<WeakHabit> _weakHabits = [];
@@ -200,6 +209,7 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
       );
       _overallScore = feedbackResponse.overallScore;
       _achievementMessage = feedbackResponse.achievementMessage;
+      _itemMessages = feedbackResponse.feedbackItems;
       _weakHabits = feedbackResponse.weakHabits;
       _scoreTrend = feedbackResponse.scoreTrend;
       _lowConfidenceCount = groupResponse.lowConfidenceCount;
@@ -222,10 +232,13 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
     setState(() {
       _imageItems = ImageBBoxOverlayItem.merge(
         detectedChars: detectResponse.detectedChars,
-        feedbackItems: feedbackResponse.feedbackItems,
+        // 색 판정은 /analyze가 글자마다 내려준다. /feedback의 항목별 문구는
+        // 문서 전체(target_id="global")에 대한 것이라 박스와 짝짓지 않는다.
+        charBoxes: analysisResponse.charBoxes,
       );
       _overallScore = feedbackResponse.overallScore;
       _achievementMessage = feedbackResponse.achievementMessage;
+      _itemMessages = feedbackResponse.feedbackItems;
       _weakHabits = feedbackResponse.weakHabits;
       _scoreTrend = feedbackResponse.scoreTrend;
       _detectedCount = detectResponse.totalDetected;
@@ -659,33 +672,42 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
     );
   }
 
-  /// 이미지 모드 자간·행간 균등성 점수 + 기울기 방향 + 명료도 경고 (DATA_FLOW.md §5-8).
-  /// AI가 다 채점해서 응답에 실어 보내지만 화면엔 한 번도 그려지지 않던 값들이다.
-  /// 측정 불가(글자/행 수 부족)면 null이라 해당 줄은 생략한다.
+  /// 이미지 모드 **세부 점수 5항목** + 기울기 방향 + 명료도 경고.
+  ///
+  /// 2026-09-02 — 종전에는 자간·행간 둘만 그려서, 화면에 실제로는 **2줄만** 떴다
+  /// (행간은 3행 미만이면 미측정이라 자주 빠져 자간 하나만 남기도 했다). 정작
+  /// 종합 점수를 좌우하는 크기·기울기·줄 정렬은 응답에 실려 오는데도 한 번도
+  /// 안 보여줬다 — 점수가 왜 그렇게 나왔는지 화면에서 알 수 없었다.
+  /// 이제 채점 항목 5개를 그대로 다 그린다(문구 6문장과 같은 항목·같은 순서).
+  ///
+  /// 측정 불가(글자/행 수 부족)면 null이라 그 줄은 '미측정'으로 표시한다 —
+  /// 0점으로 그리면 재지도 않은 지표로 감점된 것처럼 읽힌다(DATA_FLOW §4-1).
   List<Widget> _buildImageSubScores() {
-    final spacing = _imageAnalysis?.spacingUniformityScore;
-    final lineSpacing = _imageAnalysis?.lineSpacingUniformityScore;
-    final tilt = _imageAnalysis?.overallTilt;
-    final warnings = _imageAnalysis?.clarityWarnings ?? const [];
-    if (spacing == null &&
-        lineSpacing == null &&
-        tilt == null &&
-        warnings.isEmpty) {
-      return const [];
-    }
+    final a = _imageAnalysis;
+    if (a == null) return const [];
+    final warnings = a.clarityWarnings;
+
+    final rows = <(String, int?)>[
+      ('크기 균일성', a.sizeUniformityScore),
+      ('기울기 균일성', a.slantConsistencyScore),
+      ('줄 정렬', a.lineAlignmentScore),
+      ('자간 균등성', a.spacingUniformityScore),
+      ('행간 균등성', a.lineSpacingUniformityScore),
+    ];
+    // 하나도 못 잰 사진이면(글자 수 부족 등) 구분선만 덩그러니 남기지 않는다.
+    if (rows.every((r) => r.$2 == null) && warnings.isEmpty) return const [];
 
     return [
       const SizedBox(height: 12),
       const Divider(height: 1, color: AppTheme.line),
       const SizedBox(height: 10),
-      if (spacing != null) _buildSubScoreRow('자간 균등성', spacing),
-      if (lineSpacing != null) ...[
-        const SizedBox(height: 6),
-        _buildSubScoreRow('행간 균등성', lineSpacing),
+      for (final (i, r) in rows.indexed) ...[
+        if (i > 0) const SizedBox(height: 6),
+        _buildSubScoreRow(r.$1, r.$2),
       ],
-      if (tilt != null) ...[
+      if (a.overallTilt != null) ...[
         const SizedBox(height: 6),
-        _buildTiltRow(tilt),
+        _buildTiltRow(a.overallTilt!),
       ],
       if (warnings.isNotEmpty) ...[
         const SizedBox(height: 10),
@@ -694,14 +716,18 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
     ];
   }
 
-  Widget _buildSubScoreRow(String label, int score) {
+  /// 항목 한 줄. [score]가 null이면 **'미측정'** — 0점이 아니다.
+  Widget _buildSubScoreRow(String label, int? score) {
+    final measured = score != null;
     return Row(
       children: [
         Text(label, style: const TextStyle(fontSize: 12, color: AppTheme.inkMuted)),
         const Spacer(),
-        Text('$score점',
-            style: const TextStyle(
-                fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.ink)),
+        Text(measured ? '$score점' : '미측정',
+            style: TextStyle(
+                fontSize: 12,
+                fontWeight: measured ? FontWeight.w700 : FontWeight.w500,
+                color: measured ? AppTheme.ink : AppTheme.inkFaint)),
       ],
     );
   }
@@ -731,11 +757,15 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
     );
   }
 
-  /// 전체 기울기 방향 ("straight" | "leaning_right" | "leaning_left").
+  /// 글줄 방향 — 점수가 아니라 "줄 정렬"을 어느 쪽으로 고쳐야 하는지 알려주는 줄.
+  ///
+  /// ⚠️ 서버가 보내는 값은 `"straight" | "falling" | "rising"`이다. 종전에는 여기서
+  /// `leaning_right`/`leaning_left`를 찾고 있어 **어떤 사진을 넣어도 default로 빠져
+  /// 늘 "반듯하게 썼어요"** 가 떴다(2026-09-02 발견). 값 이름이 한 번도 맞은 적이 없다.
   Widget _buildTiltRow(String tilt) {
     final (icon, label) = switch (tilt) {
-      'leaning_right' => (Icons.rotate_right_rounded, '오른쪽으로 기울었어요'),
-      'leaning_left' => (Icons.rotate_left_rounded, '왼쪽으로 기울었어요'),
+      'falling' => (Icons.trending_down_rounded, '오른쪽으로 내려가요'),
+      'rising' => (Icons.trending_up_rounded, '오른쪽으로 올라가요'),
       _ => (Icons.straighten_rounded, '반듯하게 썼어요'),
     };
     return Row(
@@ -809,6 +839,19 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
     );
   }
 
+  /// 이미지 모드에서 걸린 사유별 글자 수. 많이 걸린 것부터 위에 온다.
+  Map<String, int> _imageReasonCounts(List<ImageBBoxOverlayItem> reds) {
+    final counts = <String, int>{};
+    for (final c in reds) {
+      for (final reason in c.failedItems) {
+        counts[reason] = (counts[reason] ?? 0) + 1;
+      }
+    }
+    final sorted = counts.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    return {for (final e in sorted) e.key: e.value};
+  }
+
   /// 우측 하단: AI 분석 "취약한 습관" 패널.
   ///
   /// ⚠️ [_weakHabits]는 백엔드 CanvasFeedbackResponse/ImageFeedbackResponse 스키마에
@@ -818,13 +861,41 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
   /// (_canvasItems/_imageItems의 severity+message)을 여기서도 같은 색으로
   /// 보여준다 — 캔버스 위 박스를 하나하나 탭하지 않아도 오른쪽에서 한눈에 보이도록.
   Widget _buildWeakHabitCard(BuildContext context, {required bool scrollable}) {
-    final realItems = (_isCanvas
-            ? _canvasItems.map((i) => (charId: i.charId, feedback: i.feedback))
-            : _imageItems.map((i) => (charId: i.charId, feedback: i.feedback)))
-        .where((i) => i.feedback != null && i.feedback!.severity != 'good')
-        .toList();
-    final allGoodCount = (_isCanvas ? _canvasItems.length : _imageItems.length) -
-        realItems.length;
+    // ⚠️ 캔버스는 **성분 박스 판정**을 기준으로 삼는다. 종전에는 글자 단위 severity
+    // (종합 점수 80/50)로 걸렀는데, 박스 색은 **항목별 OR**이라 둘이 어긋났다 —
+    // 종합 82점(=good)이면 성분이 빨개도 카드가 비고 "모든 글자가 기준을 잘
+    // 지켰어요"까지 떴다(2026-09-01 사용자 지적). 빨간 박스엔 반드시 이유가 따라야 한다.
+    final redComponents = _isCanvas
+        ? ComponentOverlayItem.fromAnalyses(_canvasAnalysisByChar.values.toList())
+            .where((c) => !c.ok)
+            .toList()
+        : const <ComponentOverlayItem>[];
+
+    // 캔버스는 성분(초·중·종성) 단위, 이미지는 글자 단위지만 규칙은 같다 —
+    // **서버가 항목별로 판정한 결과**만 모은다. 종합 점수로 다시 거르지 않는다
+    // (그러면 한 항목을 크게 틀려도 다른 항목이 끌어올려 빠져나간다).
+    // 캔버스는 위 redComponents 분기가 성분 단위로 이미 처리한다. 여기는 **이미지
+    // 모드**의 글자 단위 목록이다. 규칙은 같다 — 서버가 항목별로 판정한 결과만
+    // 모으고, 종합 점수로 다시 거르지 않는다(그러면 한 항목을 크게 틀려도 다른
+    // 항목이 끌어올려 빠져나간다).
+    final redChars = _isCanvas
+        ? const <ImageBBoxOverlayItem>[]
+        : _imageItems.where((i) => !i.ok).toList();
+    final hasRedBoxes = redComponents.isNotEmpty || redChars.isNotEmpty;
+    // 항목별 문구 중 **경고만** 추린다. 칭찬(good)은 점수 카드가 이미 숫자로
+    // 보여주므로 취약 습관 카드에 또 쓰면 카드 이름과 어긋난다.
+    //
+    // ⚠️ **이미지 모드에서만** 쓴다. 캔버스의 feedback_items는 항목별이 아니라
+    // **글자별**이고, severity가 그 글자의 **종합 점수**에서 나온다 — 그걸 여기
+    // 섞으면 "종합 82점이라 good인데 성분 박스는 빨강"인 옛 불일치가 되살아난다
+    // (2026-09-01에 고친 것). 캔버스는 redComponents가 이미 항목별 판정이다.
+    final itemWarnings = _isCanvas
+        ? const <FeedbackItem>[]
+        : _itemMessages.where((f) => f.severity != 'good').toList();
+    // 아무것도 못 잰 상태(글자 0자 등)와 "다 잘 썼다"를 구분한다 — 안 잰 것을
+    // 칭찬으로 바꿔 읽으면 안 된다(DATA_FLOW §4-1).
+    final measuredSomething = _itemMessages.isNotEmpty ||
+        (_isCanvas ? _canvasItems.isNotEmpty : _imageItems.isNotEmpty);
 
     final body = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -853,17 +924,99 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
           const SizedBox(height: 14),
           const Text('이 부분들을 신경써서 다시 써볼까요?',
               style: TextStyle(fontSize: 12, color: AppTheme.inkMuted)),
-        ] else if (realItems.isNotEmpty) ...[
-          ...realItems.map((i) => Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: _FeedbackDetailRow(feedback: i.feedback!),
+        ],
+        if (redComponents.isNotEmpty) ...[
+          // 성분마다 어느 항목이 걸렸는지 그대로 보여준다 — 빨간 박스를 일일이
+          // 눌러보지 않아도 오른쪽에서 한눈에 읽히도록.
+          ...redComponents.map((c) => Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.close_rounded,
+                        size: 16, color: Color(0xFFFF3B30)),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        '${c.role} "${c.jamo}" — ${c.failedItems.join(', ')}',
+                        style: const TextStyle(
+                            fontSize: 12.5, height: 1.4, color: AppTheme.ink),
+                      ),
+                    ),
+                  ],
+                ),
               )),
-        ] else if (allGoodCount > 0)
-          const Text(
-            '모든 글자가 기준을 잘 지켰어요! 훌륭해요 🎉',
-            style: TextStyle(fontSize: 12.5, height: 1.4, color: AppTheme.inkMuted),
-          )
-        else
+          const SizedBox(height: 4),
+          const Text('빨간 표시가 고칠 곳이에요.',
+              style: TextStyle(fontSize: 12, color: AppTheme.inkMuted)),
+        ],
+        if (redChars.isNotEmpty) ...[
+          // 무엇이 걸렸는지 **사유별로 묶어** 몇 자인지 보여준다.
+          //
+          // 캔버스는 성분마다 자모('초성 "ㄱ"')를 붙일 수 있지만 이미지 모드에는
+          // 붙일 이름이 없다 — char_id는 'char_3' 같은 내부 식별자라 화면에 쓰지
+          // 않기로 했다. 그래서 글자마다 한 줄씩 뽑으면 **똑같은 문구가 그대로
+          // 반복**된다(빨간 글자 3자면 "크기(너무 큼)" 세 줄). 어느 글자인지는
+          // 사진 위의 빨간 박스가 이미 가리키고 있으므로, 여기서는 "무엇이 몇 자"만
+          // 알려주는 게 읽기 쉽다.
+          ..._imageReasonCounts(redChars).entries.map((e) => Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.close_rounded,
+                        size: 16, color: Color(0xFFFF3B30)),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        '${e.key} — ${e.value}자',
+                        style: const TextStyle(
+                            fontSize: 12.5, height: 1.4, color: AppTheme.ink),
+                      ),
+                    ),
+                  ],
+                ),
+              )),
+          const SizedBox(height: 4),
+          const Text('빨간 표시가 고칠 곳이에요.',
+              style: TextStyle(fontSize: 12, color: AppTheme.inkMuted)),
+        ],
+
+        // ── 항목별 경고 ────────────────────────────────────────────────
+        // 빨간 박스와 **함께** 보여준다(둘 중 하나가 아니다). 자간·행간처럼 글자
+        // 하나에 귀속되지 않는 항목은 박스를 안 치므로, 박스만 보고 판단하면
+        // 80점 미만인 항목이 있는데도 "훌륭해요"가 뜬다(2026-09-02 사용자 지적).
+        if (itemWarnings.isNotEmpty) ...[
+          if (hasRedBoxes) const SizedBox(height: 12),
+          ...itemWarnings.map((f) => Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.error_outline_rounded,
+                        size: 16, color: AppTheme.amberText),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        f.feedbackMessage,
+                        style: const TextStyle(
+                            fontSize: 12.5, height: 1.4, color: AppTheme.ink),
+                      ),
+                    ),
+                  ],
+                ),
+              )),
+        ],
+
+        // ── 다 통과했을 때만 칭찬 ──────────────────────────────────────
+        // 박스도 깨끗하고 **항목별 경고도 없어야** 한다.
+        if (!hasRedBoxes && itemWarnings.isEmpty)
+          if (measuredSomething)
+            const Text(
+              '모든 항목이 기준을 잘 지켰어요! 훌륭해요 🎉',
+              style: TextStyle(fontSize: 12.5, height: 1.4, color: AppTheme.inkMuted),
+            )
+          else
           const Text(
             'AI 취약 습관 분석을 준비 중이에요.\n잠시 후 다시 확인해 주세요.',
             style: TextStyle(fontSize: 12.5, height: 1.4, color: AppTheme.inkFaint),
@@ -1006,7 +1159,15 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
 
     final metadata = widget.canvasMetadata!;
 
-    return CanvasCorrectionOverlayView(
+    // 2026-09-01: 박스 단위를 음절 → **성분(초·중·종성)**으로 내렸다.
+    // 채점 단위가 성분인데 박스가 음절이면 빨간 박스를 봐도 뭐가 문제인지 알 수 없다.
+    final analyses = _canvasAnalysisByChar.values.toList();
+    final componentItems = ComponentOverlayItem.fromAnalyses(analyses);
+    // 문장은 성분 박스가 수십 개(실측 최대 45개)라 전부 칠하면 글씨가 안 보인다.
+    // 잘 쓴 곳은 비우고 고칠 곳만 빨강으로 — 한 글자 연습은 최대 3개라 초록도 그린다.
+    final redOnly = analyses.length > 1;
+
+    return ComponentOverlayView(
       // ⚠️ 오버레이 박스는 CanvasCoordinateMapper가 원본 크기를 BoxFit.contain으로
       // 화면에 맞게 스케일링해서 그린다. 배경(StrokePainter)도 똑같은 스케일 기준을
       // 쓰지 않으면 획이 잘리거나 오버레이와 위치가 안 맞는다 — 그래서 원본 크기의
@@ -1027,14 +1188,25 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
       ),
       sourceWidth: metadata.width.toDouble(),
       sourceHeight: metadata.height.toDouble(),
-      items: _canvasItems,
+      items: componentItems,
+      redOnly: redOnly,
       showOverlay: _showOverlay,
       onItemTap: (item) => _showFeedbackSheet(
         charId: item.charId,
-        message: item.feedback?.feedbackMessage ?? '이 글자는 특별한 교정사항이 없습니다.',
+        message: _componentMessage(item),
         canvasAnalysis: _canvasAnalysisByChar[item.charId],
       ),
     );
+  }
+
+  /// 성분 박스를 눌렀을 때 보여줄 문구.
+  ///
+  /// 어느 **항목**이 걸렸는지를 그대로 알려준다 — 서버가 항목을 따로 판정해
+  /// `failedItems`에 담아 보내므로, 앱이 점수로 다시 추측하지 않는다.
+  String _componentMessage(ComponentOverlayItem item) {
+    final where = '${item.role} "${item.jamo}"';
+    if (item.ok) return '$where — 잘 썼습니다.';
+    return '$where — 고칠 곳: ${item.failedItems.join(', ')}';
   }
 
   Widget _buildImageOverlay() {
@@ -1055,7 +1227,9 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
       showOverlay: _showOverlay,
       onItemTap: (item) => _showFeedbackSheet(
         charId: item.charId,
-        message: item.feedback?.feedbackMessage ?? '이 영역은 아직 문자 단위 피드백이 지원되지 않습니다.',
+        // 2026-09-01부터 글자마다 판정이 내려온다 — 종전의 '지원되지 않습니다'
+        // 안내는 더 이상 필요 없다.
+        message: item.message,
       ),
     );
   }
@@ -1136,7 +1310,11 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
         const Text('이 글자 점수',
             style: TextStyle(fontSize: 12, color: AppTheme.inkMuted)),
         const SizedBox(width: 6),
-        Text('${analysis.overallScore}점',
+        // 잰 항목이 하나도 없으면 점수가 없다(null) — 0점으로 보여주면
+        // "못 쟀다"가 "형편없다"로 뒤바뀐다.
+        Text(analysis.overallScore == null
+                ? '미측정'
+                : '${analysis.overallScore}점',
             style: const TextStyle(
                 fontSize: 14,
                 fontWeight: FontWeight.w700,
@@ -1195,13 +1373,6 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
         const SizedBox(width: 4),
         Text(
           '평균 속도 ${analysis.motion.meanSpeedPxPerMs.toStringAsFixed(2)}px/ms',
-          style: const TextStyle(fontSize: 11.5, color: AppTheme.inkMuted),
-        ),
-        const SizedBox(width: 14),
-        Icon(Icons.touch_app_rounded, size: 15, color: AppTheme.inkFaint),
-        const SizedBox(width: 4),
-        Text(
-          '평균 필압 ${analysis.motion.meanPressure.toStringAsFixed(2)}',
           style: const TextStyle(fontSize: 11.5, color: AppTheme.inkMuted),
         ),
       ],

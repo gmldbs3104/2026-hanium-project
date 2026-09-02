@@ -5,21 +5,22 @@ AI 모델 어댑터 모듈 — AI 트랙 실구현 연결본.
 AI_MODEL_INTERFACE.md 계약 그대로이며, 내부 구현만 `ai/` 패키지의 실제 모듈로
 교체되었다 (기존 placeholder: contour 탐지 / 개수 비교 / passthrough).
 
-계약 함수 3개 (기존과 시그니처 동일):
-  1. lstm_refine_grouping      — 획 그룹핑 2차 보정 (ai/canvas/stroke_grouping.py)
-  2. lstm_analyze_stroke_order — 획순 분석          (ai/canvas/stroke_standards.py)
-  3. craft_detect_chars        — CRAFT 문자 탐지    (ai/detection/craft_detector.py)
+계약 함수:
+  1. craft_detect_chars        — CRAFT 문자 탐지    (ai/detection/craft_detector.py)
+
+⚠️ 종전의 lstm_refine_grouping / lstm_analyze_stroke_order 두 스텁은 2026-09-01에
+제거했다. 전자는 입력을 그대로 반환했고 후자는 실사용 경로에서 쓰이지도 않았다
+(analyze_canvas_writing이 기하 비교로 대체). 실사용자 필기 데이터가 없어 학습이
+불가능했고, 새 채점 체계가 전부 기하 계산으로 풀린다.
 
 추가 제공 (선택 사용):
   - preprocess_image        — SFR-003I AI 전처리, 기존 image_preprocessing.preprocess_image
                               와 동일한 (binary, width, height) 반환 계약의 드롭인 대체
   - preprocess_image_full   — 품질점수/재촬영 판정(REQ-003I-4) 포함 전체 결과
   - analyze_size_angle      — SFR-005I 크기/기울기/기준선 분석 (AI_MODEL_INTERFACE.md 4절)
-  - analyze_canvas_writing  — SFR-005C 획순/자간/크기 종합 분석 (DATA_FLOW.md §8-A).
-                              lstm_analyze_stroke_order(스텁, 획 개수 비교만)를 쓰지 않고
-                              canvas_quality_analyzer.analyze_stroke_order_by_position()
-                              (위치+모양 기하 비교로 순서 오류까지 감지)을 내부에서 사용한다.
-  - canvas_item_scores      — 캔버스 항목별(획순/자간/크기) 점수. 대시보드 집계가 이걸 쓴다.
+  - analyze_canvas_writing  — SFR-005C 캔버스 채점 (DATA_FLOW.md §8-A).
+                              획순/획방향/성분비율/크기/자간을 기하 비교로 판정한다.
+  - canvas_item_scores      — 캔버스 항목별 점수. 대시보드 집계가 이걸 쓴다.
                               채점 기준을 AI가 소유하므로 백엔드에 감점 계수를 따로 두지
                               않는다 — 종전에 config.py에 다른 계수가 있어 결과 화면과
                               분석 화면 점수가 어긋났다(DATA_FLOW.md §8-G).
@@ -52,8 +53,6 @@ from ai.canvas.canvas_quality_analyzer import (  # noqa: E402,F401
     analyze_canvas_writing,
     canvas_item_scores,
 )
-from ai.canvas.stroke_grouping import lstm_refine_grouping  # noqa: E402,F401
-from ai.canvas.stroke_standards import lstm_analyze_stroke_order  # noqa: E402,F401
 from ai.preprocessing.image_preprocessor import ImagePreprocessor  # noqa: E402
 
 # 전처리기는 무상태에 가깝고 생성 비용이 거의 없지만, 관례상 모듈 전역 1개를 재사용

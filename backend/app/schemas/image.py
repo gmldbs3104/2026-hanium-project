@@ -44,6 +44,23 @@ class ImageDetectResponse(BaseModel):
     total_detected: int
 
 
+class ImageCharBox(BaseModel):
+    """화면에 그릴 **글자 단위** 박스와 그 색 판정 (2026-09-01 신설).
+
+    색은 두 가지뿐이다(사용자 결정) — 기본 초록, 아래 세 항목 중 **하나라도**
+    미흡하면 빨강. 크기·기울기는 다른 글자들의 평균에서 벗어났는지, 줄 정렬은
+    자기 행의 기준선에서 벗어났는지를 본다. 자간·행간은 글자 하나에 귀속되지
+    않으므로 박스 색에 영향을 주지 않는다.
+
+    ⚠️ 서버가 이미 `ok`로 판정해서 내려준다. 앱이 점수로 다시 판정하지 말 것 —
+    종합 점수로 색을 정하면 한 항목을 크게 틀려도 다른 항목이 끌어올려 초록이 된다.
+    """
+    char_id: str
+    box: BoundingBox
+    ok: bool
+    failed_items: List[str] = []
+
+
 class ImageCharAnalysis(BaseModel):
     char_id: str
     size_deviation: float
@@ -57,12 +74,21 @@ class ImageAnalysisResponse(BaseModel):
     # 표시하고 평균·집계에서 제외할 것 (DATA_FLOW §4-1).
     size_uniformity_score: Optional[int] = None
     avg_slant_angle: float
+    # 글자 기울기의 중앙값(도, 양수=오른쪽). '기울기 균일성'과 별개 축 —
+    # 전부 똑같이 많이 기울여 쓰면 균일성은 만점이지만 이 값이 크다.
+    # 점수엔 반영하지 않고 문구로만 쓴다. 측정 불가면 None.
+    mean_char_slant: Optional[float] = None
     slant_consistency_score: Optional[int] = None
     line_alignment_score: Optional[int] = None
     overall_score: int
     char_analyses: List[ImageCharAnalysis]
+    # 초록/빨강 박스 판정 — 앱은 이 목록만 그리면 된다(2026-09-01).
+    char_boxes: List[ImageCharBox] = []
     s3_image_url: Optional[str] = None
-    overall_tilt: Optional[str] = None            # "straight" | "leaning_right" | "leaning_left"
+    # 글줄 방향 — "straight" | "falling"(오른쪽으로 내려감) | "rising"(오른쪽으로 올라감).
+    # ⚠️ 주석이 오래 leaning_right/leaning_left로 적혀 있었으나 코드는 그 값을 낸 적이 없다.
+    # 프론트가 그 이름으로 매칭해 늘 "반듯하게 썼어요"가 뜨던 버그의 원인(2026-09-02 수정).
+    overall_tilt: Optional[str] = None
     total_grade: Optional[str] = None             # "우수" | "보통" | "불량"
     clarity_warnings: List[str] = []              # 명료도 경고 (점수엔 반영 안 됨)
     # AI가 5지표로 채점하지만 기존 계약엔 3개(크기/기울기/줄 정렬)만 있었다 — 종합 점수엔

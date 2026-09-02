@@ -1,11 +1,14 @@
 """
 SFR-004C: 획 그룹핑 및 문자 단위 분할
 
-파이프라인 (requirement.md Action ①~⑥):
-  획 시퀀스 → 규칙 기반 1차 그룹핑(거리+시간) → lstm_refine_grouping(현재 placeholder)
-  → char_id/bounding_box 부여 → 저신뢰 그룹 플래그
+파이프라인:
+  획 시퀀스 → 규칙 기반 그룹핑(거리+시간, 또는 목표 글자 수) → char_id/bounding_box
+  부여 → 저신뢰 그룹 플래그
 
-AI_MODEL_INTERFACE.md 섹션 1(lstm_refine_grouping) 스펙 준수.
+⚠️ 종전에는 여기에 LSTM 2차 보정 단계(입력을 그대로 반환하는 스텁)가 하나 더 있었다.
+실사용자 필기 데이터가 없어 학습이 불가능했고, 새 채점 체계(획순·획방향·성분비율)가
+전부 기하 계산으로 풀리므로 2026-09-01에 제거했다. 되살릴 일이 생기면
+group_strokes_by_rules 결과를 후처리하는 자리에 넣으면 된다.
 """
 import math
 from typing import Dict, List, Optional
@@ -54,13 +57,19 @@ def group_strokes_by_rules(
     expected_count개 그룹으로 나눈다 — 임계값을 안 넘는 애매한 머뭇거림 때문에 잘못
     합쳐지는 걸 줄인다. 없으면(기존 자음/모음/받침 화면처럼 한 글자만 쓰는 경우) 지금
     방식 그대로 동작한다.
+
+    ⚠️ **한 글자(expected_count == 1)도 이 경로를 탄다.** 종전에는 `1 < expected_count`라
+    한 글자 연습이 옛 임계값(거리·시간)으로 빠졌는데, 한 글자 안의 자모끼리도 50px는 우습게
+    넘어서 '각'이 3조각으로 쪼개졌다(2026-09-01 실측: 연습 글자 15개 중 8개가 쪼개짐).
+    글자 수를 **가장 확실히 아는** 경우에 그 정보를 못 쓰던 셈이다. expected_count가 1이면
+    자를 곳이 0개이므로 전부 한 덩어리가 된다 — 그게 정확히 원하는 동작이다.
     """
     if not strokes:
         return []
 
     ordered = sorted(strokes, key=lambda s: min(p["timestamp"] for p in s["points"]))
 
-    if expected_count and 1 < expected_count <= len(ordered):
+    if expected_count and 1 <= expected_count <= len(ordered):
         return _group_by_expected_count(ordered, expected_count, dist_threshold, time_threshold_ms)
 
     groups: List[List[Dict]] = [[ordered[0]]]
@@ -131,17 +140,6 @@ def _group_by_expected_count(
     return groups
 
 
-def lstm_refine_grouping(stroke_groups: List[List[Dict]]) -> List[List[Dict]]:
-    """
-    AI_MODEL_INTERFACE.md 섹션 1 규격 함수.
-
-    현재: 1차 규칙 기반 결과를 그대로 반환 (placeholder).
-    교체 목표: 획의 공간·시간 특징을 LSTM에 입력해 재분류 — 실 사용자 필기 stroke
-    학습 데이터가 확보되기 전까지는 학습이 불가능해 스텁으로 유지.
-    """
-    return stroke_groups
-
-
 def _group_confidence(group: List[Dict], dist_threshold: float, time_threshold_ms: float) -> float:
     """
     그룹 내 인접 획 쌍들의 거리/시간 간격이 임계값에 얼마나 여유 있게 못 미치는지로
@@ -174,7 +172,7 @@ def group_strokes_into_chars(
     expected_count: Optional[int] = None,
 ) -> List[Dict]:
     """
-    SFR-004C 전체 파이프라인: 규칙 기반 그룹핑 → lstm_refine_grouping → 문자 단위 결과.
+    SFR-004C 전체 파이프라인: 규칙 기반 그룹핑 → 문자 단위 결과.
 
     expected_count: group_strokes_by_rules 참고 — 목표 텍스트 길이를 알 때(문장 쓰기 등)
     넘기면 정확히 그 개수로 그룹핑한다.
@@ -184,7 +182,6 @@ def group_strokes_into_chars(
     List[Dict] — [{char_id, strokes, bounding_box, stroke_count, confidence, low_confidence}]
     """
     groups = group_strokes_by_rules(strokes, dist_threshold, time_threshold_ms, expected_count=expected_count)
-    groups = lstm_refine_grouping(groups)
 
     result: List[Dict] = []
     for i, group in enumerate(groups):

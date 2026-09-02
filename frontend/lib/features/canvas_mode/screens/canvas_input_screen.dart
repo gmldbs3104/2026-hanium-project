@@ -96,7 +96,6 @@ class _CanvasInputScreenState extends State<CanvasInputScreen> {
       StrokePoint(
         x: p.dx,
         y: p.dy,
-        pressure: 1.0,
         timestamp: DateTime.now().millisecondsSinceEpoch,
       ),
     );
@@ -150,6 +149,10 @@ class _CanvasInputScreenState extends State<CanvasInputScreen> {
         strokes: _strokes,
         metadata: metadata,
         targetText: _currentChar,
+        // 사용자가 따라 쓴 획순 가이드와 **같은 영역**을 채점 기준으로 넘긴다
+        // (계산은 strokeGuideBox 한 곳에만 둔다). 안 보내면 한 글자 연습에서는
+        // 비교할 옆 글자가 없어 크기가 미측정으로 남는다.
+        guideBox: strokeGuideBox(canvasSize),
       );
       if (mounted) {
         context.go('/feedback', extra: {

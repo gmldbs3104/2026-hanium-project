@@ -38,6 +38,7 @@ async def analyze_canvas(payload: CanvasAnalyzeRequest):
         "strokes": [stroke.model_dump() for stroke in payload.strokes],
         "metadata": payload.metadata.model_dump(),
         "target_text": payload.target_text,
+        "guide_box": payload.guide_box.model_dump() if payload.guide_box else None,
     })
 
     return CanvasAnalyzeResponse(
@@ -98,7 +99,8 @@ async def analyze_canvas_detail(
     # ai/canvas/canvas_quality_analyzer.analyze_canvas_writing()을 호출한다.
     # target_text가 있으면(제시형 연습) 위치+모양 기하 비교로 획순 순서 오류까지 잡는다.
     target_text = session_data.get("target_text")
-    analysis = analyze_canvas_writing(char_groups, target_text)
+    guide_box = session_data.get("guide_box")
+    analysis = analyze_canvas_writing(char_groups, target_text, guide_box=guide_box)
 
     results = []
     for item in analysis:
@@ -107,11 +109,17 @@ async def analyze_canvas_detail(
             user_id=current_user.id,
             char_id=item["char_id"],
             stroke_order_result=item["stroke_order_result"],
+            direction_result=item.get("direction_result"),
+            tilt_result=item.get("tilt_result"),
+            balance_result=item.get("balance_result"),
+            component_boxes=item.get("component_boxes"),
             spacing_deviation=item["spacing_deviation"],
             size_deviation=item["size_deviation"],
+            size_fill_ratio=item.get("size_fill_ratio"),
             overall_score=item["overall_score"],
             # 응답에만 실리고 사라지던 값 (§8-B·C). 소급이 안 되므로 화면 노출
-            # 여부와 무관하게 지금부터 쌓는다. 필압은 프론트가 1.0 고정이라 제외.
+            # 여부와 무관하게 지금부터 쌓는다. 속도는 채점에 안 쓰지만 계속 쌓는다
+            # (2026-09-01 결정). 필압은 같은 날 완전히 제거했다.
             speed_profile=item.get("speed_profile"),
             correction_flags=item.get("correction_flags"),
         )

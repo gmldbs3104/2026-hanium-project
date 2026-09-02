@@ -20,14 +20,17 @@ Offset _o(double x, double y) => Offset(x, y);
 ///  영역에 배치해 조합한다.)
 final Map<String, List<List<Offset>>> _jamo = {
   // 자음
-  // ㄱ: ①(윗 가로획, 오른쪽) → ②(내림 획, 아래로) 2획. (가로획을 먼저 긋고 내려온다)
+  // ⚠️ 획수는 **초등 국어 교과서 필순**을 따른다. AI 표준(stroke_standards.py의
+  // _BASE_CONSONANT_STROKES)과 반드시 같아야 한다 — 어긋나면 가이드대로 그은
+  // 사용자가 무조건 '획순 오류' 판정을 받는다(2026-09-01에 ㄱ·ㄴ·ㅁ에서 실제로 발생).
+  // ai/tests/test_jamo_layout_contract.py가 양쪽 획수를 대조해 고정한다.
+  //
+  // ㄱ·ㄴ은 **1획**이다. 꺾어지지만 펜을 떼지 않는다.
   'ㄱ': [
-    [_o(.16, .22), _o(.82, .22)],
-    [_o(.82, .22), _o(.6, .86)],
+    [_o(.16, .22), _o(.82, .22), _o(.6, .86)],
   ],
   'ㄴ': [
-    [_o(.26, .14), _o(.26, .82)],
-    [_o(.26, .82), _o(.82, .82)],
+    [_o(.26, .14), _o(.26, .82), _o(.82, .82)],
   ],
   'ㄷ': [
     [_o(.2, .2), _o(.82, .2)],
@@ -113,16 +116,20 @@ List<List<Offset>> _strokesOf(String jamo) =>
 List<List<Offset>> _single(String ch) =>
     _placed(_strokesOf(ch), const Rect.fromLTWH(0.2, 0.16, 0.6, 0.68));
 
-/// 받침 음절 조합:
-///  - 초성: 좌상단
-///  - 중성 ㅏ: 우측(아래쪽은 종성 자리를 위해 비워 둠)
-///  - 종성(받침): 하단 중앙 → 초성·중성과 자연스럽게 어울리도록.
-/// (명조체 합자 글리프의 초성/중성/종성 위치에 맞춰 정한 영역이다.)
+/// 받침 음절 조합 (초성 좌상 / 중성 ㅏ 우측 / 종성 하단).
+///
+/// ⚠️ 이 좌표는 **AI의 jamo_boxes()와 반드시 같아야 한다.** 어긋나면 사용자는
+/// 가이드대로 썼는데 "성분 비율이 틀렸다"는 판정을 받는다.
+/// ai/tests/test_jamo_layout_contract.py가 이 dart 소스를 직접 파싱해 대조한다.
+///
+/// 값의 출처: 2026-09-01에 **캔버스에 깔리는 명조체 그림자 글씨를 실제로 렌더링해
+/// 픽셀을 훑어** 잰 자모별 잉크 영역이다(각·간·달·밤·상 등 12자). 종전 값은 획순
+/// 번호를 놓으려고 눈대중으로 잡은 사각형이라 실제 글리프와 달랐다.
 List<List<Offset>> _syllable(String initial, String finalC) {
   final out = <List<Offset>>[];
-  out.addAll(_placed(_strokesOf(initial), const Rect.fromLTWH(0.10, 0.14, 0.34, 0.40)));
-  out.addAll(_placed(_strokesOf('ㅏ'), const Rect.fromLTWH(0.52, 0.12, 0.36, 0.50)));
-  out.addAll(_placed(_strokesOf(finalC), const Rect.fromLTWH(0.18, 0.60, 0.46, 0.30)));
+  out.addAll(_placed(_strokesOf(initial), const Rect.fromLTWH(0.060, 0.168, 0.451, 0.422)));
+  out.addAll(_placed(_strokesOf('ㅏ'), const Rect.fromLTWH(0.576, 0.060, 0.364, 0.504)));
+  out.addAll(_placed(_strokesOf(finalC), const Rect.fromLTWH(0.247, 0.613, 0.588, 0.327)));
   return out;
 }
 

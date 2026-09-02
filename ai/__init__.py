@@ -12,6 +12,6 @@ AI 모듈 최상위 패키지.
     from ai.preprocessing.image_preprocessor import ImagePreprocessor
     from ai.detection.craft_detector import craft_detect_chars      # torch 로드됨
     from ai.analysis.handwriting_analyzer import analyze_size_angle
-    from ai.canvas.stroke_grouping import lstm_refine_grouping
-    from ai.canvas.stroke_standards import lstm_analyze_stroke_order
+    from ai.canvas.stroke_grouping import group_strokes_into_chars
+    from ai.canvas.canvas_quality_analyzer import analyze_canvas_writing
 """

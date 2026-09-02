@@ -20,7 +20,17 @@ from canvas.canvas_quality_analyzer import (
 from canvas.synthetic_stroke_generator import _syllable_layout
 from canvas.stroke_standards import decompose_syllable
 
-FULL_BBOX = {"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0}
+def _bbox(strokes):
+    """획들의 실제 잉크 bbox — 실서비스(stroke_grouping._stroke_bbox)와 같은 방식.
+
+    종전에는 {0,0,1,1} 상수를 넘겼는데, 그건 실서비스가 주는 값이 아니다. 실서비스는
+    사용자 획의 tight bbox를 넘기므로 획이 [0,1] 전체로 펴진다. 표준 템플릿도 같은
+    잉크 기준으로 정규화되면서 이 차이가 드러났다(2026-09-01).
+    """
+    xs = [p["x"] for s in strokes for p in s["points"]]
+    ys = [p["y"] for s in strokes for p in s["points"]]
+    return {"x": min(xs), "y": min(ys),
+            "width": max(xs) - min(xs), "height": max(ys) - min(ys)}
 
 
 def _standard_paths(char):
@@ -37,7 +47,7 @@ def _build_strokes(char, order=None):
         paths = [paths[i] for i in order]
     strokes = []
     for i, path in enumerate(paths):
-        pts = [{"x": x, "y": y, "pressure": 1.0, "timestamp": i * 100 + j}
+        pts = [{"x": x, "y": y, "timestamp": i * 100 + j}
                for j, (x, y) in enumerate(path)]
         strokes.append({"stroke_id": f"s{i}", "points": pts})
     return strokes
@@ -48,7 +58,7 @@ def _build_strokes(char, order=None):
 
 def test_standard_order_has_no_error_and_no_alternative_note():
     strokes = _build_strokes("트")  # 표준 순서
-    result = analyze_stroke_order_by_position(strokes, FULL_BBOX, "트")
+    result = analyze_stroke_order_by_position(strokes, _bbox(strokes), "트")
     assert result["error_count"] == 0
     assert result.get("used_alternative_order") is False
     assert not result.get("notes")
@@ -56,14 +66,14 @@ def test_standard_order_has_no_error_and_no_alternative_note():
 
 def test_alternative_taeut_order_is_accepted_without_penalty():
     strokes = _build_strokes("트", order=[0, 2, 1, 3])  # ㅌ 가운데 가로를 마지막에
-    result = analyze_stroke_order_by_position(strokes, FULL_BBOX, "트")
+    result = analyze_stroke_order_by_position(strokes, _bbox(strokes), "트")
     assert result["error_count"] == 0
     assert result.get("used_alternative_order") is True
 
 
 def test_alternative_order_carries_informational_note():
     strokes = _build_strokes("트", order=[0, 2, 1, 3])
-    result = analyze_stroke_order_by_position(strokes, FULL_BBOX, "트")
+    result = analyze_stroke_order_by_position(strokes, _bbox(strokes), "트")
     notes = result.get("notes") or []
     assert len(notes) >= 1
     joined = " ".join(notes)
@@ -73,14 +83,14 @@ def test_alternative_order_carries_informational_note():
 def test_genuinely_wrong_order_still_counts_as_error():
     # 첫 두 획을 뒤바꾼 순서 [1,0,2,3]는 허용 대안이 아니므로 오류로 남아야 한다.
     strokes = _build_strokes("트", order=[1, 0, 2, 3])
-    result = analyze_stroke_order_by_position(strokes, FULL_BBOX, "트")
+    result = analyze_stroke_order_by_position(strokes, _bbox(strokes), "트")
     assert result["error_count"] > 0
     assert result.get("used_alternative_order") is False
 
 
 def test_alternative_order_yields_no_penalty_flag_in_full_analysis():
     strokes = _build_strokes("트", order=[0, 2, 1, 3])
-    char_groups = [{"char_id": "c0", "strokes": strokes, "bounding_box": FULL_BBOX}]
+    char_groups = [{"char_id": "c0", "strokes": strokes, "bounding_box": _bbox(strokes)}]
     results = analyze_canvas_writing(char_groups, target_text="트")
     assert len(results) == 1
     assert "stroke_order_error" not in results[0]["correction_flags"]

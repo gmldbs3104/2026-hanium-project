@@ -11,15 +11,23 @@ class CanvasAnalysisResult(Base):
     user_id = Column(Uuid(as_uuid=True), ForeignKey("users.id"), nullable=False)
     char_id = Column(String, nullable=False)
     stroke_order_result = Column(JSON, nullable=True)
+    # 2026-09-01 채점 개편으로 추가된 두 항목 (획을 바르게 그었는가 / 자모 균형).
+    # 대시보드가 항목별로 집계하려면 DB에 있어야 한다 — 응답에만 실으면 집계 불가.
+    direction_result = Column(JSON, nullable=True)   # {checked, error_count, score, ...}
+    tilt_result = Column(JSON, nullable=True)        # 곧게 그을 획의 기울기(15도 기준)
+    balance_result = Column(JSON, nullable=True)     # {components:[...], score, ...}
+    component_boxes = Column(JSON, nullable=True)    # 성분 단위 박스 + 색 판정
     spacing_deviation = Column(Float, nullable=True)
     size_deviation = Column(Float, nullable=True)
+    size_fill_ratio = Column(Float, nullable=True)   # 표준 자형 대비 크기 배율(1.0=표준)
     overall_score = Column(Integer, nullable=True)
     # AI가 내주지만 응답에만 실리고 사라지던 값들 (DATA_FLOW.md §8-B·C, 2026-08-12 추가).
     # 소급이 안 되는 값이라 화면 노출 여부와 무관하게 먼저 쌓기 시작한다.
     speed_profile = Column(JSON, nullable=True)      # {mean_speed_px_per_ms: ...}
     correction_flags = Column(JSON, nullable=True)   # ["size_large", "spacing_too_narrow", ...]
-    # 필압(pressure_profile)은 일부러 안 넣었다 — 프론트가 1.0을 하드코딩해서 보내
-    # 전부 같은 값이다. 진짜 값을 읽게 고친 뒤에 컬럼을 만든다.
+    # 필압(pressure_profile)은 2026-09-01에 채점·응답에서 완전히 제거했다(사용자 결정).
+    # 미지원 기기에서 늘 1.0 상수라 신호가 아니었고, DB에 없었으므로 잃은 과거 데이터도 없다.
+    # 속도(speed_profile)는 반대로 **채점에는 안 쓰되 계속 쌓는다** — 같은 날 결정.
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

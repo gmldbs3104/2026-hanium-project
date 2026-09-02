@@ -28,11 +28,21 @@ def _canvas_item_scores(row: CanvasAnalysisResult) -> dict[str, float]:
     AI가 세션 점수를 만들 때 쓰는 계수(0.8 / 0.3 / 15)와 달라서 **같은 글씨인데
     결과 화면과 분석 화면의 점수가 어긋났다**(DATA_FLOW.md §8-G).
 
-    목표 글자를 몰라 획순을 못 잰 경우 "획순"은 None으로 오며, 호출부가 집계에서
-    제외한다 — 0건 오류로 보고 만점을 주면 안 잰 지표로 칭찬하는 셈이다(§4-1).
+    못 잰 항목은 None으로 오며 아래에서 걸러낸다 — 0으로 세거나 만점을 주면 안 잰
+    지표로 감점·칭찬하는 셈이다(§4-1). 연습 종류마다 잰 항목이 다르므로(낱자 3개 /
+    한 글자 4개 / 문장 5개) 집계는 **항목별 평균**이어야지 행마다 항목 수가 같다고
+    가정하면 안 된다.
+
+    2026-09-01부터 획방향·성분비율·크기배율도 DB에 남아 함께 집계된다.
     """
     scores = canvas_item_scores(
-        row.size_deviation, row.spacing_deviation, row.stroke_order_result
+        size_deviation_pct=row.size_deviation,
+        spacing_deviation_px=row.spacing_deviation,
+        stroke_order_result=row.stroke_order_result,
+        direction_result=row.direction_result,
+        tilt_result=row.tilt_result,
+        balance_result=row.balance_result,
+        size_fill_ratio=row.size_fill_ratio,
     )
     return {name: score for name, score in scores.items() if score is not None}
 

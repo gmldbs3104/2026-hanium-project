@@ -15,7 +15,21 @@ AI 모델이 완성되면 아래 3개 함수의 **내부 구현만 교체**하�
 
 ---
 
-## 1. LSTM 획 그룹핑 보정 (SFR-004C)
+> ## ⚠️ LSTM 함수 2개는 코드에서 제거됐습니다 (2026-09-01, DEVLOG 30막)
+>
+> 아래 §1 `lstm_refine_grouping`과 §2 `lstm_analyze_stroke_order`는 **더 이상 `ai/`에
+> 존재하지 않습니다.** 새 캔버스 채점이 전부 기하 계산으로 풀리고 학습 데이터도 없어
+> 스텁을 유지할 이유가 사라졌습니다(사용자 결정).
+>
+> **실사용 경로는 원래도 이 둘을 안 쓰고 있었습니다** — 2026-08-11 `ab9de5a`부터
+> `routes/handwriting.py`가 `analyze_canvas_writing()`을 직접 호출합니다. 즉 스텁을
+> 우회한 상태로 오래 돌았고, 이번에 껍데기를 치운 것입니다.
+>
+> ⚠️ `requirement.md`의 `REQ-004C-1`·`REQ-005C-3`은 **아직 LSTM을 요구하는 상태**이며
+> 명세 개정은 팀 결정 대기 중입니다(STATUS §2). 아래 §1·§3은 **그 결정이 날 때까지
+> 계약 기록으로 남겨둡니다** — 되살릴 경우의 시그니처가 아래 §1·§2에 있습니다.
+
+## 1. ~~LSTM 획 그룹핑 보정~~ (SFR-004C — 2026-09-01 제거됨)
 
 **함수명**: `lstm_refine_grouping`  
 **역할**: 규칙 기반 1차 그룹핑 결과를 LSTM으로 보정한다.
@@ -80,7 +94,7 @@ List[List[Dict]]  # 입력과 동일한 구조
 
 ---
 
-## 2. LSTM 획순 분석 (SFR-005C)
+## 2. ~~LSTM 획순 분석~~ (SFR-005C — 2026-09-01 제거됨)
 
 **함수명**: `lstm_analyze_stroke_order`  
 **역할**: 한 문자를 구성하는 획들의 순서가 올바른지 분석한다.
@@ -246,6 +260,7 @@ Dict
   "mean_angle": 2.1,
   "angle_std": 3.5,
   "tilt_consistency_score": 82.5,
+  "mean_char_slant": 1.8,
   "overall_tilt": "straight",
   "total_score": 78.9,
   "total_grade": "보통",
@@ -255,9 +270,8 @@ Dict
                                 "n_outlier": 2, "n_unmeasured": 5},
     "spacing_uniformity":      {"value": 8.2,  "unit": "%", "grade": "우수", "score": 89.0, "n_gaps": 14},
     "line_spacing_uniformity": {"value": 2.8,  "unit": "%", "grade": "우수", "score": 94.4, "n_rows": 3},
-    "baseline_deviation":      {"value": 5.6,  "unit": "%", "grade": "보통", "score": 77.6},
-    "stroke_width_uniformity": {"value": 17.7, "unit": "%", "grade": "보통", "score": 59.5,
-                                "mean_width_px": 5.3}
+    "baseline_deviation":      {"value": 5.6,  "unit": "%", "grade": "보통", "score": 77.6,
+                                "driver": "baseline"}
   },
   "line_alignment_score": 91.2,
   "issues": ["글씨가 전체적으로 오른쪽으로 약간(2.1°) 기울어져 있습니다"],
@@ -274,24 +288,35 @@ Dict
       "angle": 1.8,
       "size_flag": "normal",
       "angle_flag": "normal",
-      "clarity_flag": "clear"
+      "baseline_flag": "normal",
+      "clarity_flag": "clear",
+      "ok": true,
+      "failed_items": []
     }
   ]
 }
 ```
+
+> **2026-09-02 추가 (DEVLOG 32막)** — 필드만 늘었고 **함수 시그니처는 그대로**입니다.
+> `mean_char_slant`, 글자별 `baseline_flag`·`ok`·`failed_items`,
+> `metrics["baseline_deviation"]["driver"]`가 추가됐습니다. 기존 소비자는 영향받지 않습니다.
 
 | 필드 | 타입 | 설명 |
 |------|------|------|
 | `size_uniformity_score` | `float` | 크기 균일성 0~100점 (100=완전균일) |
 | `mean_angle` | `float` | 전체 평균 기울기 (degrees, 양수=시계방향; `angle_reliable` 글자만 집계) |
 | `angle_std` | `float` | 기울기 표준편차 (신뢰 글자만 집계) |
-| `tilt_consistency_score` | `float` | 기울기 일관성 0~100점 (신뢰 글자 3자 미만이면 100) |
+| `tilt_consistency_score` | `float \| None` | **기울기 균일성** 0~100점 — 글자별 세로획 slant의 **표준편차**. ⚠️ 2026-09-02에 재는 대상이 바뀌었습니다(줄 오르내림 → 글자끼리 고른가). 잴 수 있는 글자 3자 미만이면 **`None`(미측정)** — 예전의 100이 아닙니다 |
+| `mean_char_slant` | `float \| None` | 글자 세로획 slant의 **중앙값**(°, 양수=오른쪽). 균일성과 **별개 축** — 전부 똑같이 많이 기울여 쓰면 균일성은 만점이지만 이 값이 큽니다. **점수 미반영·문구 전용**, 3자 미만이면 `None` |
 | `total_score` | `float` | 종합 점수 — 측정된 지표(skipped 제외)의 평균 |
 | `metrics` | `Dict` | 지표별 상세 (handwriting_evaluation.md ①~⑥ + clarity). 각 항목 `{value, unit, grade(우수/보통/불량), score}` 또는 측정 불가 시 `{"skipped": 사유}` |
-| `overall_tilt` | `str` | `"straight"` \| `"leaning_right"` \| `"leaning_left"` |
-| `line_alignment_score` | `float` | 기준선 이탈도 점수 0~100 (행별 **회귀선** 잔차 기반 — 지표 5) |
+| `overall_tilt` | `str` | **글줄** 방향 — `"straight"` \| `"falling"`(오른쪽으로 내려감) \| `"rising"`(오른쪽으로 올라감). ⚠️ 문서에 오래 `leaning_right`/`leaning_left`로 적혀 있었으나 **코드는 한 번도 그 값을 낸 적이 없습니다**(프론트가 그 이름으로 매칭해 늘 "반듯하게 썼어요"가 뜨던 버그의 원인 — 2026-09-02 수정) |
+| `line_alignment_score` | `float \| None` | **줄 정렬** 점수 0~100 — 행 회귀선 **잔차**와 **수평 이탈** 중 **나쁜 쪽**(2026-09-02 확장). 어느 쪽이 정했는지는 `metrics["baseline_deviation"]["driver"]`(`"baseline"`/`"tilt"`)에 남습니다 |
 | `total_score` | `float` | 측정된 지표들의 평균 (skipped 지표는 제외) |
-| `metrics` | `Dict` | handwriting_evaluation.md 지표 1~6 + `clarity`(명료도). 각 항목은 `{value, unit, grade(우수/보통/불량), score}` 또는 측정 불가 시 `{skipped: 사유}` |
+| `metrics` | `Dict` | handwriting_evaluation.md 지표 1~5 + `clarity`(명료도). 각 항목은 `{value, unit, grade(우수/보통/불량), score}` 또는 측정 불가 시 `{skipped: 사유}`. ⚠️ 지표 ⑥ 획 굵기는 2026-07-27 T4에서 **제거**됐습니다 |
+| `chars[].baseline_flag` | `str` | 자기 행 기준선에서 벗어남 — `"normal"` \| `"above"` \| `"below"` \| `"unmeasured"` (2026-09-02 신설) |
+| `chars[].ok` | `bool` | **화면 박스 색** — `true`면 초록, `false`면 빨강. 크기·기울기·줄 정렬을 **항목별로 판정해 OR**로 합칩니다. ⚠️ 소비자는 점수로 다시 판정하지 말 것 — 종합 점수로 색을 정하면 한 항목을 크게 틀려도 다른 항목이 끌어올려 초록이 됩니다 |
+| `chars[].failed_items` | `List[str]` | 빨강일 때 걸린 항목 — 예: `["크기(너무 큼)", "줄 정렬(아래로 벗어남)"]` |
 | `issues` | `List[str]` | SFR-007에 전달할 피드백 메시지 목록 |
 | `total_grade` | `str` | 종합점수 등급 `"우수"`(≥80) \| `"보통"`(≥40) \| `"불량"` |
 | `clarity_warnings` | `List[str]` | 명료도 경고(점수 미반영). 탐지 이상 글자를 필체 탓으로 돌리지 않기 위해 점수 대신 경고로만 |

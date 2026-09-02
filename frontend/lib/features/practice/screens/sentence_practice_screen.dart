@@ -114,7 +114,6 @@ class _SentencePracticeScreenState extends State<SentencePracticeScreen> {
       StrokePoint(
         x: p.dx,
         y: p.dy,
-        pressure: 1.0,
         timestamp: DateTime.now().millisecondsSinceEpoch,
       ),
     );
@@ -158,6 +157,9 @@ class _SentencePracticeScreenState extends State<SentencePracticeScreen> {
         metadata: metadata,
         targetText: _sentence.replaceAll(' ', ''),
         charPositions: _computeCharPositions(),
+        // 문장 연습에는 글자 한 칸짜리 획순 가이드가 없다(줄 위에 이어 쓴다).
+        // guideBox를 안 보내므로 크기는 '글자끼리 고른가'(상대 편차)로 채점된다 —
+        // 글자가 여러 개라 그 비교가 성립한다. 한 글자 연습과는 기준이 다르다.
       );
       if (mounted) {
         context.go('/feedback', extra: {

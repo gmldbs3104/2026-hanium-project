@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart' show Rect;
 import 'package:uuid/uuid.dart';
 
 import '../../../core/app_config.dart';
@@ -40,11 +41,15 @@ class CanvasApiService {
   /// 렌더링 좌표({char, index, x, y, width, height})다. 백엔드 스키마
   /// (CanvasAnalyzeRequest)가 아직 이 필드를 정의하지 않아 현재는 그대로 무시되지만,
   /// pydantic 기본 동작상 알 수 없는 필드가 있어도 요청은 정상 처리된다.
+  /// [guideBox]는 화면에 그려준 획순 가이드 영역(획 좌표와 같은 좌표계)이다.
+  /// 서버의 **크기 채점 기준**이라, 안 보내면 글자가 하나뿐인 연습에서 크기가
+  /// 미측정으로 남는다(비교할 옆 글자가 없기 때문). strokeGuideBox()로 만들 것.
   static Future<CanvasAnalyzeResult> analyze({
     required List<Stroke> strokes,
     required CanvasMetadata metadata,
     String? targetText,
     List<Map<String, dynamic>>? charPositions,
+    Rect? guideBox,
   }) async {
     if (AppConfig.useMockApi) {
       return _mockAnalyze(strokes, metadata);
@@ -57,6 +62,13 @@ class CanvasApiService {
         'metadata': metadata.toJson(),
         if (targetText != null) 'target_text': targetText,
         if (charPositions != null) 'char_positions': charPositions,
+        if (guideBox != null)
+          'guide_box': {
+            'x': guideBox.left,
+            'y': guideBox.top,
+            'width': guideBox.width,
+            'height': guideBox.height,
+          },
       },
     );
     return CanvasAnalyzeResult.fromJson(response);
@@ -187,10 +199,15 @@ class CanvasApiService {
                 notes: [],
               )
             : null,
+        directionResult: null,
+        tiltResult: null,
+        balanceResult: null,
+        componentBoxes: null,
         spacingDeviation: i == 1 ? 8.0 : 0.0,
         sizeDeviation: i == 3 ? -15.0 : 0.0,
+        sizeFillRatio: null,
+        itemScores: const {},
         motion: WritingMotionProfile(
-          meanPressure: 0.6 + i * 0.05,
           meanSpeedPxPerMs: 0.3 + i * 0.02,
         ),
         overallScore: 90 - i * 8,

@@ -19,6 +19,7 @@ from app.services.ai_adapters import (
     craft_detect_chars,
     analyze_size_angle,
 )
+from ai.analysis.handwriting_analyzer import CHAR_SLANT_NORM_DEG
 from app.schemas.image import (
     ImagePreprocessResponse,
     ImageDetectResponse,
@@ -26,6 +27,7 @@ from app.schemas.image import (
     BoundingBox,
     ImageAnalysisResponse,
     ImageCharAnalysis,
+    ImageCharBox,
     ImageFeedbackResponse,
     ImageFeedbackItem,
 )
@@ -211,11 +213,27 @@ async def analyze(
         for c in ana["chars"]
     ]
 
+    # 초록/빨강 박스 (2026-09-01) — 판정은 AI가 항목별로 끝내서 ok/failed_items로
+    # 내려주고, 여기서는 탐지 좌표만 붙인다. 좌표계는 **전처리 후** 이미지 기준이라
+    # 앱은 반드시 전처리 이미지 위에 그려야 한다(원본 사진 위에 그리면 다 어긋난다).
+    _boxes_by_id = {c["char_id"]: c["bounding_box"] for c in detected_chars}
+    char_boxes = [
+        ImageCharBox(
+            char_id=c["char_id"],
+            box=BoundingBox(**_boxes_by_id[c["char_id"]]),
+            ok=c["ok"],
+            failed_items=c["failed_items"],
+        )
+        for c in ana["chars"] if c["char_id"] in _boxes_by_id
+    ]
+
     result_row = ImageAnalysisResult(
         session_id=image_session_id,
         user_id=current_user.id,
         size_uniformity_score=size_uniformity_score,
         avg_slant_angle=avg_slant_angle,
+        # mean_char_slant는 DB에 컬럼이 없어 저장하지 않는다 — 점수가 아니라 문구용
+        # 값이라 소급 집계 대상이 아니다. 필요해지면 마이그레이션과 함께 추가할 것.
         slant_consistency_score=slant_consistency_score,
         line_alignment_score=line_alignment_score,
         # 5지표를 다 쌓는다 — 종전엔 3개만 저장돼 대시보드에 자간·행간이 안 올라왔다(§5-8)
@@ -234,6 +252,7 @@ async def analyze(
     session_data["analysis_results"] = {
         "size_uniformity_score": size_uniformity_score,
         "avg_slant_angle": avg_slant_angle,
+        "mean_char_slant": ana.get("mean_char_slant"),
         "slant_consistency_score": slant_consistency_score,
         "line_alignment_score": line_alignment_score,
         "overall_score": overall_score,
@@ -241,6 +260,7 @@ async def analyze(
         "total_grade": ana["total_grade"],
         "clarity_warnings": ana["clarity_warnings"],
         "char_analyses": [c.model_dump() for c in char_analyses],
+        "char_boxes": [b.model_dump() for b in char_boxes],
         "spacing_uniformity_score": spacing_uniformity_score,
         "line_spacing_uniformity_score": line_spacing_uniformity_score,
     }
@@ -250,10 +270,12 @@ async def analyze(
         image_session_id=image_session_id,
         size_uniformity_score=size_uniformity_score,
         avg_slant_angle=avg_slant_angle,
+        mean_char_slant=ana.get("mean_char_slant"),
         slant_consistency_score=slant_consistency_score,
         line_alignment_score=line_alignment_score,
         overall_score=overall_score,
         char_analyses=char_analyses,
+        char_boxes=char_boxes,
         s3_image_url=session_data.get("s3_image_url"),
         overall_tilt=ana["overall_tilt"],
         total_grade=ana["total_grade"],
@@ -276,32 +298,81 @@ async def feedback(image_session_id: str):
     if results is None:
         raise HTTPException(status_code=400, detail="먼저 /analyze 엔드포인트를 호출해야 합니다.")
 
+    # ── 항목별 문구: **5개 항목 모두 한 문장씩** (사용자 결정 2026-09-01) ──
+    #
+    # 종전에는 60점 미만이면 지적, 85점 이상이면 칭찬이라 **60~84점 구간은 아무 문구도
+    # 안 나갔다** — 정작 개선이 필요한 구간인데 화면이 비었다. 또 자간·행간은 점수를
+    # 재서 대시보드에 쌓으면서도 문구가 아예 없어, 왜 감점됐는지 알 수 없었다.
+    # 이제 기준은 80점 하나다(= _band_score의 '우수' 경계라 등급과도 정합).
+    #
+    # 수치는 넣지 않는다. "높이 CV 24.3%"는 사용자에게 아무 뜻이 없다(사용자 결정).
     feedback_items = []
 
-    def _score_feedback(score: int | None, warn: str, praise: str) -> None:
-        """점수 구간별 문구. 측정 불가(None)면 아무 문구도 만들지 않는다 —
-        안 잰 지표로 지적하거나 칭찬하지 않기 위함(DATA_FLOW §4-1)."""
+    def _item(score: int | None, warn: str, praise: str) -> None:
+        """측정 불가(None)면 문구를 만들지 않는다 — 안 잰 지표로 지적도 칭찬도 하지
+        않기 위함(DATA_FLOW §4-1). 그래서 문구가 6개보다 적을 수는 있다."""
         if score is None:
             return
-        if score < 60:
-            feedback_items.append(ImageFeedbackItem(
-                target_id="global", feedback_message=warn, severity="warning"))
-        elif score >= 85:
-            feedback_items.append(ImageFeedbackItem(
-                target_id="global", feedback_message=praise, severity="good"))
+        good = score >= 80
+        feedback_items.append(ImageFeedbackItem(
+            target_id="global",
+            feedback_message=praise if good else warn,
+            severity="good" if good else "warning"))
 
-    _score_feedback(
-        results["size_uniformity_score"],
-        "글자 크기가 고르지 않습니다. 일정한 크기로 써보세요.",
-        "글자 크기가 균일합니다!")
-    _score_feedback(
-        results["slant_consistency_score"],
-        "글자 기울기가 일정하지 않습니다. 일관된 방향으로 써보세요.",
-        "글자 기울기가 일정합니다!")
-    _score_feedback(
-        results["line_alignment_score"],
-        "글자들이 수평선에 맞지 않습니다. 줄을 맞춰 써보세요.",
-        "줄 정렬이 잘 되어 있습니다!")
+    _item(results["size_uniformity_score"],
+          "글자 크기가 고르지 않습니다. 일정한 크기로 써보세요.",
+          "글자 크기가 고르게 유지되고 있습니다.")
+    # 기울기는 **두 가지**를 한 문장에 담는다(사용자 요청 2026-09-02).
+    #   ① 글자들끼리 고른가 (= 점수, slant_consistency_score)
+    #   ② 그 기울기 자체가 수직에서 너무 벗어났나 (= mean_char_slant, 점수 미반영)
+    # ②가 없으면 **전부 똑같이 많이 기울여 쓴 글씨가 만점**으로 나간다 — 고르기는
+    # 고르니까. 그건 "바르게 쓴 글씨"가 아니다. 다만 글자 하나의 잘못이 아니라
+    # 글씨체 전체의 습관이므로 **박스는 치지 않는다**(사용자 결정).
+    _slant = results.get("mean_char_slant")
+    _too_slanted = _slant is not None and abs(_slant) > CHAR_SLANT_NORM_DEG
+    _tilt_score = results["slant_consistency_score"]
+    if _tilt_score is not None:
+        _dir = "오른쪽" if (_slant or 0) > 0 else "왼쪽"
+        _even = _tilt_score >= 80
+        if _too_slanted and _even:
+            _msg = f"글자 기울기는 고르지만, 전체적으로 {_dir}으로 많이 기울어 있습니다. 조금 더 세워서 써보세요."
+        elif _too_slanted:
+            _msg = f"글자마다 기울기가 제각각이고, 전체적으로도 {_dir}으로 많이 기울어 있습니다. 세워서 써보세요."
+        elif _even:
+            _msg = "글자 기울기가 고르게 유지되고 있습니다."
+        else:
+            _msg = "글자마다 기울기가 제각각입니다. 같은 기울기로 써보세요."
+        # ⚠️ 고르기만 하면 칭찬(good)으로 나가면 안 된다 — 전부 똑같이 많이 기울여
+        # 쓴 글씨가 초록으로 칭찬받게 된다. 둘 중 하나라도 걸리면 경고다.
+        feedback_items.append(ImageFeedbackItem(
+            target_id="global",
+            feedback_message=_msg,
+            severity="good" if (_even and not _too_slanted) else "warning"))
+
+    # 줄 정렬만 방향을 함께 알려준다 — 줄이 어느 쪽으로 기울었는지는 사용자가
+    # 바로 고칠 수 있는 정보다. overall_tilt는 글줄 회귀선의 방향이다
+    # ("falling" = 오른쪽으로 내려감, "rising" = 오른쪽으로 올라감).
+    _tilt = results.get("overall_tilt")
+    # ⚠️ 글은 왼쪽에서 오른쪽으로 나아가므로 **올라가든 내려가든 방향은 '오른쪽'**이다.
+    # 종전에 rising을 "왼쪽으로 기울어 올라갑니다"라고 썼는데, 같은 값을 점수 카드는
+    # "오른쪽으로 올라가요"로 표시해 **한 화면에서 좌우가 반대로** 보였다
+    # (2026-09-02 사용자 지적). 문구는 점수 카드 쪽 표현에 맞춘다.
+    if _tilt == "falling":
+        _line_warn = "글줄이 오른쪽으로 내려갑니다. 수평을 맞춰 써보세요."
+    elif _tilt == "rising":
+        _line_warn = "글줄이 오른쪽으로 올라갑니다. 수평을 맞춰 써보세요."
+    else:
+        _line_warn = "글자들이 줄에서 벗어나 있습니다. 줄을 맞춰 써보세요."
+    _item(results["line_alignment_score"],
+          _line_warn,
+          "글자들이 줄에 잘 맞춰져 있습니다.")
+
+    _item(results.get("spacing_uniformity_score"),
+          "글자 사이 간격이 고르지 않습니다. 일정하게 띄워 보세요.",
+          "글자 사이 간격이 고르게 유지되고 있습니다.")
+    _item(results.get("line_spacing_uniformity_score"),
+          "줄 간격이 고르지 않습니다. 일정하게 띄워 보세요.",
+          "줄 간격이 고르게 유지되고 있습니다.")
 
     # 명료도 경고 — 점수엔 반영하지 않고 경고 문구로만 안내 (팀 결정, ai/BACKEND_INTEGRATION.md §1.1)
     for warning in results.get("clarity_warnings") or []:

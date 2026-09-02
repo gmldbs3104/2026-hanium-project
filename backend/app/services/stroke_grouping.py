@@ -1,7 +1,6 @@
 from typing import List, Dict, Any, Optional
 import math
 from app.core.config import settings
-from app.services.ai_adapters import lstm_refine_grouping
 
 
 def _stroke_centroid(points: List[Dict]) -> tuple[float, float]:
@@ -50,9 +49,8 @@ def rule_based_grouping(
     if not strokes:
         return []
 
-    if expected_count and 1 < expected_count <= len(strokes):
-        groups = _group_by_expected_count(strokes, expected_count)
-        return lstm_refine_grouping(groups)
+    if expected_count and 1 <= expected_count <= len(strokes):
+        return _group_by_expected_count(strokes, expected_count)
 
     groups: List[List[Dict[str, Any]]] = [[strokes[0]]]
 
@@ -72,7 +70,7 @@ def rule_based_grouping(
         else:
             groups.append([stroke])
 
-    return lstm_refine_grouping(groups)
+    return groups
 
 
 def _group_by_expected_count(

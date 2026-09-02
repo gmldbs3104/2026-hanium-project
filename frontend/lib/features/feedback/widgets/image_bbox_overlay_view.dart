@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../shared/models/feedback_item.dart';
 import '../models/image_bbox_overlay_item.dart';
 import '../utils/canvas_coordinate_mapper.dart';
 import '../utils/severity_style.dart';
@@ -86,7 +87,11 @@ class ImageBBoxOverlayPainter extends CustomPainter {
   final List<ImageBBoxOverlayItem> items;
   final CanvasCoordinateMapper mapper;
 
-  static const _neutralColor = Color(0xFF8E8E93); // 피드백 없음(target_id 매칭 안 됨) 시 중립 회색
+  /// 2색만 쓴다(사용자 결정 2026-09-01) — 캔버스 모드 성분 박스와 같은 팔레트다.
+  ///   · 🟢 초록 — 이 글자에 걸린 항목이 전부 통과
+  ///   · 🔴 빨강 — 크기·기울기·줄 정렬 중 **하나라도** 미흡
+  static const _green = Color(0xFF34C759);
+  static const _red = Color(0xFFFF3B30);
 
   ImageBBoxOverlayPainter({required this.items, required this.mapper});
 
@@ -94,28 +99,35 @@ class ImageBBoxOverlayPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     for (final item in items) {
       final rect = mapper.toDisplayRect(item.boundingBox);
-      final severity = item.severity;
-      // 피드백이 있는 글자만 심각도 색, 나머지는 중립색으로 통일한다.
-      // 종전에는 탐지 신뢰도로 "애매한 박스"를 옅은 주황으로 갈랐는데,
-      // 그 값이 항상 0.5 상수라 조건에 늘 걸려 **모든 박스가 주황**이었다
-      // (DEVLOG 17막 실측). 색 구분 자체가 requirement.md에 없던 동작이라
-      // 제거한다(팀 결정 2026-08-16).
+      // 색은 **서버 판정(ok)** 하나로 정한다. 종전에는 target_id="global" 피드백만
+      // 와서 매칭이 안 돼 모든 박스가 중립 회색이었다 — 어느 글자가 문제인지 알 수
+      // 없었다. 그 전에는 탐지 신뢰도로 갈랐는데 그 값이 항상 0.5 상수라 **모든
+      // 박스가 주황**이었다(DEVLOG 17막 실측).
       //
       // ⚠️ 여기서 "애매한 탐지를 걸러내는 일"을 하려 하지 말 것 — 그건 CRAFT
       // 디코딩 단계에서 이미 한다(text_threshold 0.7 / low_text 0.4, 평가셋으로
       // 측정해 정한 값). 응답의 confidence는 게이트가 아니라 보고용 숫자다.
-      final color =
-          severity != null ? SeverityStyle.color(severity) : _neutralColor;
+      final color = item.ok ? _green : _red;
 
-      final strokePaint = Paint()
-        ..color = color
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.5;
-      canvas.drawRect(rect, strokePaint);
+      // 잘못 쓴 글자를 더 두껍게 그려, 색을 못 봐도 굵기로 구분되게 한다.
+      canvas.drawRect(
+        rect,
+        Paint()
+          ..color = color.withValues(alpha: 0.10)
+          ..style = PaintingStyle.fill,
+      );
+      canvas.drawRect(
+        rect,
+        Paint()
+          ..color = color
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = item.ok ? 1.5 : 2.6,
+      );
 
-      // REQ-007-6: severity가 있는 박스에만 색맹 보조 아이콘 배지 (색상 + 형태)
-      if (severity != null) {
-        SeverityStyle.paintBadge(canvas, rect.topLeft, severity);
+      // REQ-007-6: 색상 + 형태로 이중 표현 — 빨간 박스에만 배지를 얹는다.
+      // 초록까지 배지를 달면 사진 위가 아이콘으로 뒤덮여 글씨가 안 보인다.
+      if (!item.ok) {
+        SeverityStyle.paintBadge(canvas, rect.topLeft, FeedbackSeverity.error);
       }
     }
   }

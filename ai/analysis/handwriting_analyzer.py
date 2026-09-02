@@ -49,11 +49,31 @@ TILT_OUTLIER_DEG = 10.0   # 중앙값에서 이 이상 벗어난 측정값은 �
 #    (우수 상한, 보통 상한) — 값이 작을수록 좋다
 BANDS = {
     "height_uniformity":       (10.0, 20.0),   # CV %
-    "tilt_consistency":        (3.0, 7.0),     # 문장 기울기 |평균 각도| ° (수평 이탈)
+    "tilt_consistency":        (3.0, 7.0),     # 글자 기울기 σ ° (글자끼리 얼마나 고른가)
     "spacing_uniformity":      (15.0, 30.0),   # CV %
     "line_spacing_uniformity": (10.0, 20.0),   # CV %
     "baseline_deviation":      (5.0, 15.0),    # 잔차σ/평균높이 %
 }
+
+# ── 글자별 '미흡' 판정 기준 (2026-09-01 신설) ─────────────────────────
+# 이미지 모드 바운딩 박스를 초록/빨강 2색으로 칠하기 위한 값. 세 항목만 글자별로
+# 판정된다 — 크기·기울기는 **다른 글자들의 평균에서 얼마나 벗어났나**, 줄 정렬은
+# **자기 행의 기준선에서 얼마나 벗어났나**. 자간·행간은 글자 하나에 귀속되지 않아
+# 박스 색에 영향을 주지 않는다(사용자 결정).
+ANGLE_UNIFORM_TOL_DEG = 7.0     # 평균 기울기에서 이 이상 벗어난 글자 = 기울기 미흡
+BASELINE_CHAR_TOL_RATIO = 0.25  # 행 기준선에서 (행 중앙 높이 × 이 값) 이상 벗어나면 미흡
+
+# ── 글자 기울기의 **절대** 기울어짐 (2026-09-02 신설, 사용자 요청) ──────────
+# '기울기 균일성'은 글자들이 서로 고른가만 본다. 그래서 **전부 똑같이 많이 기울여
+# 쓰면 만점**이 나온다 — 고르기는 고르니까. 하지만 그건 "바르게 쓴 글씨"가 아니다.
+# 그래서 기울기의 **중앙값 자체가 수직에서 얼마나 벗어났나**를 따로 본다.
+#
+# 값 근거: NORM_STROKE_RESEARCH.md ①의 문헌 실험(세로획 기준) — 0~4°는 곧게 쓴
+# 글씨로 인식, 5~10°는 뚜렷이 기울어진 글씨, 12°부터 과도. "너무 기울여 쓴다"는
+# 단순한 '눈에 띔'보다 강한 지적이므로 뚜렷이 기울어진 대역의 위쪽(10°)을 쓴다.
+# ⚠️ 점수에는 반영하지 않고 **문구로만** 알린다. 박스도 치지 않는다(사용자 결정) —
+# 글자 하나의 잘못이 아니라 글씨체 전체의 습관이라 특정 글자를 짚을 수 없다.
+CHAR_SLANT_NORM_DEG = 10.0
 
 # ── 자간/행간/명료도 파라미터 ─────────────────────────────────────────
 WORD_GAP_RATIO = 0.55     # 간격 > 행 중앙 높이 × 이 값 → 띄어쓰기로 보고 자간에서 제외
@@ -126,8 +146,40 @@ class CharAnalysis:
     size_ratio: float    # char_height / 행_median_height  (1.0 = 정상)
     angle: float          # craft_detect_chars()의 세로획 slant (unmeasured면 0.0)
     size_flag: str        # "normal" | "large" | "small"
+    # ⚠️ 2026-09-01부터 **평균 대비 상대 판정**이다. 종전에는 수직(0°)에서 7°를 넘으면
+    # 무조건 기울었다고 봤는데, 그러면 글씨체가 원래 비스듬한 사람은 아무리 고르게 써도
+    # 전부 빨개진다. 항목 이름이 '기울기 **균일성**'이므로 기준은 **다른 글자들의 평균**이다.
     angle_flag: str       # "normal" | "tilted_cw" | "tilted_ccw" | "unmeasured"
+    # 자기 행의 기준선(회귀선)에서 위/아래로 벗어났나 (2026-09-01 신설)
+    baseline_flag: str    # "normal" | "above" | "below" | "unmeasured"
     clarity_flag: str     # "clear" | "merged_suspect" | "tilt_outlier" | "low_confidence"
+
+    @property
+    def failed_items(self) -> List[str]:
+        """이 글자가 걸린 항목 — 하나라도 있으면 박스가 빨강이 된다.
+
+        ★ 종합 점수로 색을 정하지 않는다. 항목을 따로 판정하고 OR로 합친다 —
+        캔버스 모드와 같은 규칙이다(가중 평균을 쓰면 한 항목을 크게 틀려도 다른
+        항목이 끌어올려 초록이 나온다).
+        """
+        out: List[str] = []
+        if self.size_flag == "large":
+            out.append("크기(너무 큼)")
+        elif self.size_flag == "small":
+            out.append("크기(너무 작음)")
+        if self.angle_flag == "tilted_cw":
+            out.append("기울기(오른쪽으로 기욺)")
+        elif self.angle_flag == "tilted_ccw":
+            out.append("기울기(왼쪽으로 기욺)")
+        if self.baseline_flag == "above":
+            out.append("줄 정렬(위로 벗어남)")
+        elif self.baseline_flag == "below":
+            out.append("줄 정렬(아래로 벗어남)")
+        return out
+
+    @property
+    def ok(self) -> bool:
+        return not self.failed_items
 
 
 @dataclass
@@ -139,8 +191,14 @@ class SizeAngleResult:
     size_uniformity_score: Optional[float]    # 0~100 (지표 1)
     mean_angle: float               # degrees (이상치 제외 후 평균)
     angle_std: float                # degrees (이상치 제외 후 편차)
-    tilt_consistency_score: Optional[float]   # 0~100 (지표 2) — 행에 3글자 미만이면 None
-    overall_tilt: str               # "straight" | "leaning_right" | "leaning_left"
+    # 지표 2 = 글자 기울기 **균일성**(σ). 잴 수 있는 글자가 3자 미만이면 None.
+    tilt_consistency_score: Optional[float]
+    # 글자 기울기의 **중앙값**(도, 양수=오른쪽으로 기욺). 균일성과 별개 축 —
+    # 전부 똑같이 많이 기울여 쓰면 균일성은 만점이지만 이 값이 크다.
+    # 잴 수 있는 글자가 3자 미만이면 None(미측정). 점수 미반영·문구 전용.
+    mean_char_slant: Optional[float]
+    # 글줄이 올라가며/내려가며 쓰였나 — 점수가 아니라 줄 정렬 문구의 방향으로 쓴다.
+    overall_tilt: str               # "straight" | "falling" | "rising"
     line_alignment_score: Optional[float]     # 0~100 (지표 5) — 행별 글자 수 부족이면 None
     total_score: float              # 교육적 가중(3:2:1) 평균, clarity 제외 (skipped 제외)
     total_grade: str                # 종합점수 등급 (우수/보통/불량)
@@ -161,6 +219,7 @@ class SizeAngleAnalyzer:
             return SizeAngleResult(
                 chars=[], size_uniformity_score=None, mean_angle=0.0,
                 angle_std=0.0, tilt_consistency_score=None,
+                mean_char_slant=None,
                 overall_tilt="straight", line_alignment_score=None,
                 total_score=100.0, total_grade="우수", metrics={}, issues=[],
                 clarity_warnings=[],
@@ -184,8 +243,10 @@ class SizeAngleAnalyzer:
         clarity = self._clarity_flags(chars, rows)
         clear_ids = {cid for cid, f in clarity.items() if f == "clear"}
 
-        # ── per-char 크기 플래그 + 지표 1 (명료 글자만 집계) ─────────
-        char_analyses = self._per_char(chars, rows, clarity)
+        # ── per-char 플래그 + 지표 1 (명료 글자만 집계) ──────────────
+        # 기준선 이탈은 행 회귀선이 있어야 정해지므로 _baseline을 먼저 부른다.
+        baselines, baseline_metric, baseline_flags = self._baseline(rows, clear_ids)
+        char_analyses = self._per_char(chars, rows, clarity, baseline_flags)
         heights = np.array(
             [c["bounding_box"]["height"] for c in chars
              if c["char_id"] in clear_ids], dtype=np.float32)
@@ -195,15 +256,29 @@ class SizeAngleAnalyzer:
         cv = float(np.std(heights) / np.mean(heights) * 100) if np.mean(heights) > 0 else 0.0
         metrics["height_uniformity"] = self._metric(cv, "height_uniformity", "%")
 
-        # ── 지표 2: 문장 기울기 (행별 중심선 회귀 기울기, 수평 이탈) ──
+        # ── 지표 2: 글자 기울기 균일성 ───────────────────────────────
+        # ⚠️ 2026-09-01에 **재는 대상이 바뀌었다**(사용자 결정). 종전에는 "글줄이
+        # 올라가며/내려가며 쓰이는가"(문서 전체에 값 1개)였는데, 그 값으로는 글자마다
+        # 색을 칠할 수 없어 화면에서 어느 글자가 문제인지 짚어 줄 수 없었다.
+        # 이제 **글자들끼리 기울기가 고른가**(각도 σ)를 본다 — 항목 이름 그대로다.
+        # 줄이 올라가나 내려가나는 아래 _sentence_tilt가 계속 재서, '줄 정렬' 문구의
+        # 방향("오른쪽으로 기울어졌습니다")으로 쓰인다.
+        metrics["tilt_consistency"] = self._tilt_uniformity(chars, clarity)
+
+        # 줄 방향 — 점수 항목이 아니라 줄 정렬 문구의 방향과 규범 경고에 쓴다.
         tilt = self._sentence_tilt(rows, clear_ids)
-        metrics["tilt_consistency"] = tilt["metric"]
 
         # ── 지표 3: 자간 ─────────────────────────────────────────────
         metrics["spacing_uniformity"] = self._spacing(rows, clear_ids)
 
-        # ── 지표 4·5: 행간 / 기준선(회귀선) ──────────────────────────
-        baselines, metrics["baseline_deviation"] = self._baseline(rows, clear_ids)
+        # ── 지표 4·5: 행간 / 줄 정렬 ─────────────────────────────────
+        # ⚠️ 줄 정렬은 **두 가지를 같이** 본다(사용자 결정 2026-09-01).
+        #   ① 그 줄이 수평인가        — 기울어져 쓰였나 (tilt)
+        #   ② 글자가 그 줄에 앉았나   — 회귀선 잔차 (baseline)
+        # 잔차만 보면 **비스듬히 반듯하게 쓴 글**이 만점이 된다 — 회귀선이 기울기를
+        # 통째로 흡수하기 때문이다(2026-09-01 실측: 5.7° 내려가는 글이 줄 정렬 100점).
+        # 둘 중 **나쁜 쪽**을 항목 점수로 삼는다 — 하나만 어긋나도 줄은 안 맞은 것이다.
+        metrics["baseline_deviation"] = self._line_alignment(baseline_metric, tilt["metric"])
         metrics["line_spacing_uniformity"] = self._line_spacing(baselines)
 
         # ── 명료도: 경고만 (점수 미반영, 2026-07-20 결정) ────────────
@@ -249,7 +324,13 @@ class SizeAngleAnalyzer:
             # 측정 불가(skipped)면 None — 만점으로 덮지 않는다(DATA_FLOW §4-1).
             size_uniformity_score=metrics["height_uniformity"].get("score"),
             mean_angle=tilt["mean"], angle_std=tilt["std"],
-            tilt_consistency_score=tilt["metric"].get("score"),
+            # ⚠️ 이제 '글줄의 수평 이탈'이 아니라 **글자 기울기 균일성**이다(위 지표 2).
+            # 줄이 올라가나 내려가나는 overall_tilt/mean_angle에 그대로 남아 있다.
+            tilt_consistency_score=metrics["tilt_consistency"].get("score"),
+            # per-char 기울기 판정의 기준값과 **같은 값**을 싣는다 — 화면 문구와
+            # 빨간 박스가 서로 다른 기준을 말하지 않도록.
+            mean_char_slant=(None if (_ref := self._reference_angle(chars)) is None
+                             else round(_ref, 2)),
             overall_tilt=tilt["overall"],
             line_alignment_score=metrics["baseline_deviation"].get("score"),
             total_score=total, total_grade=_total_grade(total),
@@ -298,8 +379,24 @@ class SizeAngleAnalyzer:
         flags["__gated__"] = False
         return flags
 
+    def _reference_angle(self, chars: List[Dict]) -> Optional[float]:
+        """글자 기울기의 **기준값** — 신뢰 가능한 각도들의 중앙값.
+
+        평균이 아니라 중앙값을 쓰는 이유: 한 글자가 크게 튀면 평균이 그쪽으로 끌려가
+        **멀쩡한 글자들이 되레 '평균에서 벗어났다'고 빨개진다.** 중앙값은 정상 글자
+        쪽에 남아, 튄 글자만 편차로 드러난다(캔버스 성분 비율에서 쓴 것과 같은 이유).
+        """
+        vals = [float(c.get("angle", 0.0)) for c in chars
+                if c.get("angle_reliable", True)]
+        if len(vals) < TILT_MIN_RELIABLE:
+            return None
+        return float(np.median(vals))
+
     def _per_char(self, chars: List[Dict], rows: List[List[Dict]],
-                  clarity: Dict) -> List[CharAnalysis]:
+                  clarity: Dict,
+                  baseline_flags: Optional[Dict[str, str]] = None) -> List[CharAnalysis]:
+        baseline_flags = baseline_flags or {}
+        ref_angle = self._reference_angle(chars)
         out = {}
         for row in rows:
             row_h = float(np.median([c["bounding_box"]["height"] for c in row]))
@@ -312,11 +409,13 @@ class SizeAngleAnalyzer:
                 else:
                     size_flag = "normal"
                 angle = float(c.get("angle", 0.0))
-                if not c.get("angle_reliable", True):
+                # 기준은 수직(0°)이 아니라 **다른 글자들의 기울기**다 — 항목이
+                # '기울기 균일성'이기 때문. 글씨체가 원래 비스듬해도 고르게만 쓰면 통과한다.
+                if not c.get("angle_reliable", True) or ref_angle is None:
                     angle_flag = "unmeasured"
-                elif angle > ANGLE_FLAG_DEG:
+                elif angle - ref_angle > ANGLE_UNIFORM_TOL_DEG:
                     angle_flag = "tilted_cw"
-                elif angle < -ANGLE_FLAG_DEG:
+                elif angle - ref_angle < -ANGLE_UNIFORM_TOL_DEG:
                     angle_flag = "tilted_ccw"
                 else:
                     angle_flag = "normal"
@@ -324,8 +423,48 @@ class SizeAngleAnalyzer:
                     char_id=c["char_id"], size_ratio=round(ratio, 3),
                     angle=round(angle, 2), size_flag=size_flag,
                     angle_flag=angle_flag,
+                    baseline_flag=baseline_flags.get(c["char_id"], "unmeasured"),
                     clarity_flag=clarity.get(c["char_id"], "clear"))
         return [out[c["char_id"]] for c in chars]
+
+    @staticmethod
+    def _line_alignment(baseline_metric: Dict, tilt_metric: Dict) -> Dict:
+        """줄 정렬 = (줄이 수평인가) 와 (글자가 줄에 앉았나) 중 **나쁜 쪽**.
+
+        둘 중 하나만 측정됐으면 그것을 쓰고, 둘 다 못 쟀으면 skipped를 유지한다 —
+        안 잰 지표로 감점하지 않기 위함(DATA_FLOW §4-1). `driver`에 어느 쪽이
+        점수를 결정했는지 남겨, 나중에 문구를 세분화할 때 쓸 수 있게 한다.
+        """
+        scored = [(m, key) for m, key in ((baseline_metric, "baseline"), (tilt_metric, "tilt"))
+                  if m and "score" in m]
+        if not scored:
+            return baseline_metric
+        worst, driver = min(scored, key=lambda t: t[0]["score"])
+        out = dict(worst)
+        out["driver"] = driver
+        return out
+
+    def _tilt_uniformity(self, chars: List[Dict], clarity: Dict) -> Dict:
+        """지표 2 — **글자들끼리 기울기가 고른가** (2026-09-01 신설).
+
+        수직(0°)에서 얼마나 벗어났나가 아니라 **서로 얼마나 다른가**(표준편차)를 본다.
+        글씨체가 원래 비스듬한 사람도 고르게만 쓰면 만점이다. 수직 규범 이탈은
+        점수가 아니라 norm_deviations의 경고로만 나간다(2026-07-20 결정 유지).
+        """
+        # ⚠️ 여기서 이상치(크게 기운 글자)를 빼면 안 된다. 그 글자야말로 '기울기가
+        # 고르지 않다'는 증거인데, 빼고 나면 **박스는 빨간데 점수는 100점**이 된다
+        # (2026-09-01 실측: 한 글자만 16° 기울였더니 σ=0, 점수 100).
+        #
+        # 특히 clarity의 "tilt_outlier"로 거르면 안 된다 — 그 플래그 자체가 **각도로**
+        # 정해지므로, 기울기 지표가 정작 기운 글자를 영영 못 보는 순환이 된다.
+        # 걸러야 할 것은 **탐지가 의심스러운 글자**(병합 의심·저신뢰)뿐이다.
+        _DETECTION_SUSPECT = {"merged_suspect", "low_confidence"}
+        vals = [float(c.get("angle", 0.0)) for c in chars
+                if c.get("angle_reliable", True)
+                and clarity.get(c["char_id"], "clear") not in _DETECTION_SUSPECT]
+        if len(vals) < TILT_MIN_RELIABLE:
+            return {"skipped": f"기울기를 잴 수 있는 글자가 {TILT_MIN_RELIABLE}자 미만"}
+        return self._metric(float(np.std(vals)), "tilt_consistency", "°")
 
     def _sentence_tilt(self, rows: List[List[Dict]], clear_ids: set) -> Dict:
         """문장 기울기 — 행별 글자 중심선의 회귀 기울기(전처리 좌표 그대로).
@@ -401,8 +540,14 @@ class SizeAngleAnalyzer:
         return self._metric(cv, "spacing_uniformity", "%", n_gaps=len(pitches))
 
     def _baseline(self, rows: List[List[Dict]], clear_ids: set):
-        """행별 회귀선 적합 → (행 기준선 y 목록, 지표5 metric)."""
+        """행별 회귀선 적합 → (행 기준선 y 목록, 지표5 metric, 글자별 이탈 플래그).
+
+        글자별 플래그는 2026-09-01에 추가됐다 — 화면에서 **기준선을 벗어난 글자만**
+        빨간 박스로 짚어 주기 위해서다(사용자 결정). 기준선은 행마다 따로 잡으므로
+        줄이 기울어져 있어도 "그 줄 안에서 튀는 글자"를 골라낸다.
+        """
         ratios, baselines = [], []
+        flags: Dict[str, str] = {}
         for row in rows:
             pts = [(c["bounding_box"]["x"] + c["bounding_box"]["width"] / 2,
                     c["bounding_box"]["y"] + c["bounding_box"]["height"])
@@ -421,12 +566,42 @@ class SizeAngleAnalyzer:
                     ratios.append(float(np.std(resid)) / row_h * 100)
                 mid_x = float(np.mean(xs))
                 baselines.append(float(np.polyval(coef, mid_x)))
+                # 이 행의 기준선에서 얼마나 벗어났나 — 행 높이에 대한 비율로 본다.
+                # y는 아래로 증가하므로 잔차가 양수면 기준선보다 아래로 처진 글자다.
+                #
+                # ⚠️ 잔차를 **중앙값으로 다시 맞춘다.** 회귀선은 최소제곱이라 크게 튄
+                # 글자 하나가 선을 통째로 끌어당기고, 그러면 **멀쩡한 이웃 글자들이
+                # 되레 '줄에서 벗어났다'고 빨개진다**(2026-09-01 실측: 한 글자만 키를
+                # 1.75배로 키웠더니 옆 글자까지 빨강). 중앙값은 정상 글자 쪽에 남으므로
+                # 튄 글자만 편차로 드러난다 — 캔버스 성분 비율에서 쓴 것과 같은 보정이다.
+                tol = row_h * BASELINE_CHAR_TOL_RATIO
+                all_resid = {
+                    c["char_id"]: float(
+                        c["bounding_box"]["y"] + c["bounding_box"]["height"]
+                        - np.polyval(coef, c["bounding_box"]["x"]
+                                     + c["bounding_box"]["width"] / 2))
+                    for c in row
+                }
+                center = float(np.median(list(all_resid.values())))
+                for cid, raw in all_resid.items():
+                    r = raw - center
+                    if tol <= 0:
+                        flags[cid] = "unmeasured"
+                    elif r > tol:
+                        flags[cid] = "below"
+                    elif r < -tol:
+                        flags[cid] = "above"
+                    else:
+                        flags[cid] = "normal"
             else:
                 baselines.append(float(np.mean(ys)))
+                # 글자가 2개 이하인 행은 기준선이 정의되지 않는다 — 안 잰 것으로 둔다.
+                for c in row:
+                    flags[c["char_id"]] = "unmeasured"
         if not ratios:
-            return baselines, {"skipped": "행별 글자 수가 부족해 기준선 평가 생략"}
+            return baselines, {"skipped": "행별 글자 수가 부족해 기준선 평가 생략"}, flags
         ratio = float(np.mean(ratios))
-        return baselines, self._metric(ratio, "baseline_deviation", "%")
+        return baselines, self._metric(ratio, "baseline_deviation", "%"), flags
 
     def _line_spacing(self, baselines: List[float]) -> Dict:
         if len(baselines) < LINESPACE_MIN_ROWS:
@@ -587,6 +762,7 @@ def analyze_size_angle(chars: List[Dict],
         "mean_angle":             result.mean_angle,
         "angle_std":              result.angle_std,
         "tilt_consistency_score": result.tilt_consistency_score,
+        "mean_char_slant":        result.mean_char_slant,
         "overall_tilt":           result.overall_tilt,
         "line_alignment_score":   result.line_alignment_score,
         "total_score":            result.total_score,
@@ -602,7 +778,12 @@ def analyze_size_angle(chars: List[Dict],
                 "angle":        c.angle,
                 "size_flag":    c.size_flag,
                 "angle_flag":   c.angle_flag,
+                "baseline_flag": c.baseline_flag,
                 "clarity_flag": c.clarity_flag,
+                # 박스 색은 서버가 이미 정해서 내려준다 — 앱이 점수로 다시
+                # 판정하면 항목별 OR 규칙이 깨진다(캔버스와 동일).
+                "ok":           c.ok,
+                "failed_items": c.failed_items,
             }
             for c in result.chars
         ],

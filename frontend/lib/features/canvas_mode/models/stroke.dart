@@ -1,21 +1,22 @@
-/// 획 내의 한 점 (SFR-003C Inputs 기준: {x, y, pressure, timestamp})
+/// 획 내의 한 점.
+///
+/// 필압(pressure)은 2026-09-01에 제거했다(사용자 결정) — 필압 센서를 지원하지 않는
+/// 기기에서 늘 1.0 상수라 신호가 아니었고, 채점에도 DB에도 쓰이지 않았다.
+/// 타임스탬프는 남는다: 속도 기록(speed_profile)과 획 순서 판정이 쓴다.
 class StrokePoint {
   final double x;
   final double y;
-  final double pressure;
   final int timestamp;
 
   const StrokePoint({
     required this.x,
     required this.y,
-    required this.pressure,
     required this.timestamp,
   });
 
   Map<String, dynamic> toJson() => {
         'x': x,
         'y': y,
-        'pressure': pressure,
         'timestamp': timestamp,
       };
 }

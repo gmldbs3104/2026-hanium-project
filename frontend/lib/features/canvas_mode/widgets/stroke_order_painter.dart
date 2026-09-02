@@ -10,6 +10,16 @@ import '../data/stroke_order_data.dart';
 /// 2) 각 획의 시작점에 순서 번호(①②③…)만 얹는다. (화살표는 표시하지 않음)
 ///
 /// 글자(명조체)와 순서 번호는 같은 정사각 박스에 매핑되어 서로 정렬된다.
+///
+/// ⚠️ 이 박스는 **크기 채점의 기준**이기도 하다. 서버가 "표준만큼 크게 썼는가"를
+/// 판정하려면 사용자가 본 가이드 영역을 알아야 하므로, 같은 값을 guide_box로
+/// 함께 보낸다(canvas_api_service.analyze). 그래서 계산을 여기 한 곳에 두고
+/// 페인터와 전송이 같은 함수를 부른다 — 두 벌로 두면 조용히 어긋난다.
+Rect strokeGuideBox(Size size) {
+  final s = math.min(size.width, size.height) * 0.88;
+  return Rect.fromLTWH((size.width - s) / 2, (size.height - s) / 2, s, s);
+}
+
 class StrokeOrderGuidePainter extends CustomPainter {
   final String char;
   final List<GuideStroke> strokes;
@@ -25,10 +35,11 @@ class StrokeOrderGuidePainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    // 글자·화살표 공통 박스 (정사각, 여백 포함)
-    final s = math.min(size.width, size.height) * 0.88;
-    final boxLeft = (size.width - s) / 2;
-    final boxTop = (size.height - s) / 2;
+    // 글자·화살표 공통 박스 (정사각, 여백 포함) — 채점 기준과 같은 값
+    final box = strokeGuideBox(size);
+    final s = box.width;
+    final boxLeft = box.left;
+    final boxTop = box.top;
     Offset m(Offset e) => Offset(boxLeft + e.dx * s, boxTop + e.dy * s);
 
     // 1) 명조체 글자 — 박스 높이에 맞춰 스케일(한글 글리프 잉크가 박스를 채우도록)

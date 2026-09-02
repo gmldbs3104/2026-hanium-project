@@ -10,9 +10,8 @@ REQ-005C-5: "표준 획순 DB는 한글 11,172자(완성형) 전체의 획순 �
 ------------------
 각 자모의 라벨은 `"{자모}_{순번}"` 형식(예: "ㄱ_1", "ㅂ_2")으로, 실제 붓글씨체의
 정밀한 획 방향(가로/세로/사선 등)까지는 구분하지 않고 **개수와 순서만 보장**한다.
-지금 `lstm_analyze_stroke_order`의 실제 동작이 "stroke 개수 비교"뿐이라 개수·순서
-정확도가 우선이고, 방향까지 세밀하게 필요해지면(LSTM 도입 시) 자모별 라벨을
-"horizontal"/"vertical"/"dot" 같은 의미 있는 카테고리로 정밀화하면 된다.
+라벨은 획순 판정의 **자모 귀속**을 알려주는 용도이고, 실제 순서·방향 판정은
+canvas_quality_analyzer가 기하 템플릿(synthetic_stroke_generator)으로 한다.
 """
 from typing import List
 
@@ -26,7 +25,7 @@ JONGSUNG = [""] + list("ㄱㄲㄳㄴㄵㄶㄷㄹㄺㄻㄼㄽㄾㄿㅀㅁㅂㅄ�
 # 겹자음/겹모음은 구성 성분의 획수 합으로 계산.
 
 _BASE_CONSONANT_STROKES = {
-    "ㄱ": 1, "ㄴ": 1, "ㄷ": 2, "ㄹ": 3, "ㅁ": 4, "ㅂ": 4, "ㅅ": 2,
+    "ㄱ": 1, "ㄴ": 1, "ㄷ": 2, "ㄹ": 3, "ㅁ": 3, "ㅂ": 4, "ㅅ": 2,
     "ㅇ": 1, "ㅈ": 2, "ㅊ": 3, "ㅋ": 2, "ㅌ": 3, "ㅍ": 4, "ㅎ": 3,
 }
 _DOUBLE_CONSONANT_BASE = {"ㄲ": "ㄱ", "ㄸ": "ㄷ", "ㅃ": "ㅂ", "ㅆ": "ㅅ", "ㅉ": "ㅈ"}
@@ -140,37 +139,3 @@ def get_expected_sequence(char: str) -> List[str]:
     if char in _JUNGSUNG_SEQ:
         return _JUNGSUNG_SEQ[char]
     return []
-
-
-# ------------------------------------------------------------------
-# SFR-005C 인터페이스 함수 (AI_MODEL_INTERFACE.md 섹션 2)
-# ------------------------------------------------------------------
-
-def lstm_analyze_stroke_order(strokes: List[dict], expected_sequence: List[str]) -> dict:
-    """
-    AI_MODEL_INTERFACE.md 섹션 2 규격 함수.
-
-    현재: stroke 개수 비교만 수행 (문서화된 placeholder 동작).
-    교체 목표: 각 stroke의 방향 벡터 시퀀스 → LSTM → 획 레이블 분류
-              (실 사용자 필기 stroke 학습 데이터 확보 전까지는 학습 불가능).
-    """
-    actual_count = len(strokes)
-    expected_count = len(expected_sequence)
-
-    # 실제 stroke 순서를 알 수 없으므로(LSTM 미도입) 현재는 stroke_id 순서를
-    # 그대로 "actual_sequence"로 표기 — 정밀 레이블 분류는 LSTM 도입 후 교체.
-    actual_sequence = [s.get("stroke_id", f"s{i}") for i, s in enumerate(strokes)]
-
-    error_count = abs(actual_count - expected_count)
-    corrections: List[str] = []
-    if actual_count < expected_count:
-        corrections.append(f"획이 {expected_count - actual_count}개 부족합니다.")
-    elif actual_count > expected_count:
-        corrections.append(f"획이 {actual_count - expected_count}개 더 많습니다.")
-
-    return {
-        "expected_sequence": expected_sequence,
-        "actual_sequence":   actual_sequence,
-        "error_count":       error_count,
-        "corrections":       corrections,
-    }
