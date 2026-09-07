@@ -3,8 +3,180 @@
 두 세션 기록을 하나로 합쳤다(`FRONTEND_CHANGES.md` + `frontend_change.md` → 이 파일).
 최신 세션이 위, 예전 세션이 아래.
 
+- [2026-09-07 세션](#2026-09-07-세션)
 - [2026-08-22 ~ 08-30 세션](#2026-08-22--08-30-세션)
 - [2026-08-11 세션](#2026-08-11-세션)
+
+---
+
+## 2026-09-07 세션
+
+이 세션도 **frontend만 수정**했다. 다만 세션 중간에 원격(`origin/feature/ai-integration`)에
+`632d461`("캔버스 성분 박스 + 이미지 모드 채점 전면 개편") 커밋이 새로 올라와, 로컬에서
+작업 중이던 프론트 변경사항과 상당 부분(이미지 모드 바운딩 박스·항목별 문구) 겹치는
+일이 있었다. 그 부분은 아래 [§4](#4-git-병합-632d461-반영)에 정리했다 — **backend는
+git 그대로**, **frontend는 로컬 수정을 우선**하되, 원격이 이미 서버 판정 기반으로 더
+정확하게 구현해 둔 부분(이미지 모드 박스 색·문구)은 예외적으로 원격 버전을 채택했다.
+
+세션 후반에 발견한 채점 로직 이슈 2건(§5)은 원인이 전부 `ai/canvas/canvas_quality_analyzer.py`
+또는 `backend/app/services/stroke_grouping.py` 등 backend/AI 쪽이라, "backend/AI는 건드리지
+않는다"는 이번 세션 방침에 따라 **코드 수정 없이 원인 진단만** 하고 되돌렸다(한 번 실제로
+고쳤다가 방침을 재확인받고 revert함 — git 이력에는 남지 않음, 작업 트리에서만 되돌렸다).
+
+### 변경된 파일 요약
+
+| 영역 | 신규 파일 | 수정 파일 |
+|---|---|---|
+| 문장 쓰기 | — | `sentence_practice_screen.dart` |
+| 분석 탭 성장 그래프 | — | `score_trend_chart.dart` |
+| 이미지 모드 바운딩/문구 (§4, 원격 버전 채택) | — | `feedback_screen.dart`, `image_bbox_overlay_item.dart`, `image_bbox_overlay_view.dart`, `image_analysis_response.dart`, `image_api_service.dart` |
+| 테스트 | — | `test/models/overlay_item_test.dart` |
+
+파일 경로는 전부 `frontend/lib/features/...` 아래(테스트는 `frontend/test/...`).
+
+---
+
+### 1. 문장 쓰기 화면
+
+| 파일 | 변경 내용 |
+|---|---|
+| `frontend/lib/features/practice/screens/sentence_practice_screen.dart` | ① "캘리그라피" 탭 삭제(2탭 `짧은 문장`/`긴 문장`만 남음). ② 캔버스 위에 따로 있던 "연습할 문장" 미리보기 카드를 없애고, 그 자리를 캔버스가 차지하도록 해서 캔버스 영역이 화면에 꽉 차게 함. ③ 캔버스 안쪽 가이드 문구가 진한 줄 1개 + 옅은 줄 4개, 총 5번 반복되던 것을 **1번만** 표시하도록 변경, `FittedBox(fit: BoxFit.contain)`로 캔버스 크기에 맞춰 자동 확대(짧은 문장/긴 문장 모두 동일 로직 — 짧으면 더 크게, 길면 줄바꿈 없이 한 줄로 꽉 차게 축소). ④ 가이드 문구 상단에 mint색 안내 바("'{문장}'를 크게 따라 써보세요") 추가(자음/모음 연습 화면의 안내 바와 톤 통일). ⑤ `_computeCharPositions()`(문장 제출 시 백엔드로 보내는 글자별 좌표)를 FittedBox가 실제로 적용하는 배율·중앙정렬 오프셋과 정확히 같은 공식으로 다시 계산하도록 수정 — 그래야 화면에 그려지는 위치와 백엔드가 받는 좌표가 어긋나지 않는다. |
+
+### 2. 분석 탭 — 성장 그래프
+
+| 파일 | 변경 내용 |
+|---|---|
+| `frontend/lib/features/dashboard/widgets/score_trend_chart.dart` | ① 그래프 하단에 있던 날짜 숫자 라벨(예: `9/19`, `9/1`) 제거, 그 공간을 차지하던 `_bottomAxisHeight`도 제거해 그래프가 세로로 꽉 차게 함. ② **버그 수정**: `CustomPaint`를 감싼 `SizedBox`가 `height`만 지정하고 `width`는 지정하지 않아서, 부모(`Column`)가 주는 느슨한 가로 제약 아래 `CustomPaint`(자식 없음, `size` 미지정)가 기본값인 `Size.zero`로 레이아웃돼 **실제 가로폭이 0으로 붕괴**하는 문제가 있었다. `CustomPaint`는 자기 크기를 벗어난 그리기를 클리핑하지 않아 화면엔 뭔가 그려지긴 했지만, `size.width`가 0이라 모든 데이터 포인트의 x좌표가 0으로 계산돼 그래프가 좌측 끝에서 위아래로만 움직이는 세로 선처럼 보였다("위로 쭉 뻗은 형태"로 사용자가 보고한 증상과 일치). `width: double.infinity` 추가로 해결 — 연속 출석일수와는 무관한 순수 레이아웃 버그였다. |
+
+### 3. 문장 연습 캔버스 좌표 계산 검증
+
+문장 쓰기 화면의 `_computeCharPositions()` 재계산(§1-⑤)은 시각적 변경(§1)에 종속된
+부수정이라 별도 파일 변경은 없다 — 같은 파일(`sentence_practice_screen.dart`) 안에서
+`_guideStyle`/`_guidePadding`을 FittedBox 렌더링과 `TextPainter` 계산 양쪽이 공유하도록
+맞췄다.
+
+### 4. git 병합(632d461) 반영
+
+세션 도중 사용자가 "git에서 수정된 점을 가져와줘. 내가 수정한거 말고"라고 요청해
+`origin/feature/ai-integration`의 새 커밋(`632d461`)을 fast-forward로 병합했다. 이후
+"backend는 git을 따르고, frontend는 로컬의 수정 내용을 가져갈 것"으로 방침을 확정:
+
+- **backend 전부**: git 버전 그대로(로컬에 있던 획 그룹핑 수정 1건을 되돌리고 병합 — §5-2 참고).
+- **frontend**: 이번 세션에서 로컬로 고친 `sentence_practice_screen.dart`, `score_trend_chart.dart`는
+  로컬 버전을 유지.
+- **예외 — 이미지 모드 바운딩 박스/항목별 문구**: 이번 세션 초반에 로컬에서 직접 구현했던
+  이미지 모드 박스 색상(자체 크기·기울기 편차 임계값 판정)과 채점 문구 생성(자체 지오메트리
+  기반 자간/행간 방향 추정) 로직을, 원격 커밋이 **서버가 이미 정확하게 내려주는 판정**
+  (`/analyze` 응답의 `char_boxes`: `ok`/`failed_items`, `/feedback` 응답의 `feedback_items`
+  6문장)으로 대체한 것을 확인하고, 로컬 구현을 버리고 원격 버전을 채택했다. 코드 수준
+  이유: 원격 쪽 `ImageCharBox` 모델 주석에 "서버가 이미 ok로 판정해서 내려준다. 앱이
+  점수로 다시 판정하지 말 것"이라는 명시적 설계 의도가 있고, 로컬 구현은 이걸 어기고
+  있었다(자체 재판정 + `overall_tilt` 값 이름이 `leaning_right/leaning_left`에서
+  `falling/rising`으로 바뀐 걸 못 따라가 항상 기본 문구로 새는 버그도 있었음).
+  - 삭제: `frontend/lib/features/feedback/utils/image_feedback_builder.dart`(로컬에서 새로
+    만들었던 파일, 원격 버전 채택으로 불필요해짐).
+  - 원격 버전 그대로 채택: `feedback_screen.dart`, `image_bbox_overlay_item.dart`,
+    `image_bbox_overlay_view.dart`, `image_analysis_response.dart`, `image_api_service.dart`.
+  - `test/models/overlay_item_test.dart`의 `ImageBBoxOverlayItem.merge` 관련 테스트를 새
+    API(`charBoxes` 기반)에 맞게 다시 작성.
+  - **부수 효과**: `feedback_screen.dart`를 원격 버전으로 교체하면서 캔버스 모드의 바운딩
+    박스도 함께 바뀌었다 — 종전엔 음절(글자) 단위 박스였는데, 원격 버전은 **성분(초성·
+    중성·종성) 단위**로 내려간 `ComponentOverlayView`를 쓴다(신규 파일
+    `component_overlay_item.dart`/`component_overlay_view.dart`/`image_char_box.dart`는
+    frontend가 직접 작성한 게 아니라 병합으로 들어온 것 — 별도 저작 없음). 이 변경이
+    "모음/받침 연습에서 자음·모음 단위로 바운딩해야 한다"는 사용자 요청과 별개로 이미
+    해결해 주는 효과가 있어 그대로 뒀다.
+  - 병합 직후 남아있던 컴파일 에러 2건(제거된 필압(`pressure`) 필드 참조)을 frontend에서
+    직접 고침: `sentence_practice_screen.dart`의 `StrokePoint(... pressure: 1.0 ...)`에서
+    `pressure` 인자 제거, `feedback_screen.dart`의 "평균 필압" 표시 줄 제거(필압 자체가
+    2026-09-01 결정으로 백엔드에서 완전히 빠졌다 — `WritingMotionProfile`에 필드 없음).
+
+### 5. 범위 밖 — 채점 로직 이슈 2건 (backend/AI 원인, 이번 세션엔 미수정)
+
+세션 막바지에 사용자가 요청한 두 가지는 조사 결과 **원인이 전부 backend/AI 코드에
+있어서**, "backend/AI는 수정하지 않는다"는 이번 세션 방침에 따라 **코드는 그대로 두고
+원인만 정리**했다. (한 항목은 실제로 `ai/canvas/canvas_quality_analyzer.py`를 고쳤다가
+방침을 다시 확인받고 `git checkout`으로 되돌렸다 — 저장소에는 흔적이 없다.)
+
+#### 5-1. 자음·모음(낱자)·한 글자 연습에서 "크기" 항목이 항상 미측정
+
+**요청**: 낱자·한 글자 연습에서도 크기를 채점하게 해달라.
+
+**원인**: `ai/canvas/canvas_quality_analyzer.py`의 크기 채점 분기가
+`if multi_char and guide_area and target_char:`로 돼 있어, 글자가 1개뿐인 세션(자음·모음·
+받침 연습)은 `guide_box`를 이미 보내고 있는데도(`canvas_input_screen.dart`가 항상
+`strokeGuideBox()`를 실어 보냄) `multi_char`(글자 2개 이상) 조건에 걸려 통째로 건너뛰어진다.
+바로 아래 있는 `size_score_from_fill()` 함수 자체의 설계 의도("한 글자만 쓰는 연습에서
+크기를 채점할 수 있는 유일한 기준")와 정면으로 모순되는 조건이다.
+
+**확인한 수정 방법**(적용은 안 함): 위 조건에서 `multi_char and`만 제거하면 된다 — 실제로
+적용해서 `analyze_canvas_writing()`을 직접 호출하는 스크립트로 검증까지 마쳤다(낱자 'ㄱ'
+1획에 대해 `size_fill_ratio`가 정상적으로 계산되고 `item_scores['크기']`가 채워짐을 확인).
+아래 줄만 바꾸면 된다:
+
+```python
+# ai/canvas/canvas_quality_analyzer.py, analyze_canvas_writing() 안
+if multi_char and guide_area and target_char:   # 수정 전
+if guide_area and target_char:                  # 수정 후 (multi_char 제거)
+```
+
+세션 내 상대편차 폴백(`size_deviation_pct`, guide_box 없을 때만 쓰는 값)은 원래대로
+`multi_char` 조건을 유지해야 한다 — 그건 "옆 글자와 비교"라 글자가 하나면 의미가 없다.
+건드릴 부분은 절대 크기(가이드 박스 대비) 분기 하나뿐이다.
+
+#### 5-2. 문장 쓰기에서 "성분비율(너무 큼)"/"자리가 벗어남"이 다수 발생
+
+**요청**: 열심히 썼는데도 여러 글자가 틀렸다고 나온다 — 확인해달라.
+
+**원인**: 사용자 필체 문제가 아니라 **획→음절 그룹핑이 실제로 틀리고 있었다.** 사용자의
+직전 문장 연습 세션("시원한선풍기", 6글자) DB 기록을 직접 조회해 확인함 —
+`backend/app/services/stroke_grouping.py`의 `_group_by_expected_count`(획 사이 간격의
+상대 순위로 글자 수만큼 경계를 정하는 로직)가 몇몇 글자 경계를 잘못 잡아서, 예를 들어
+4번째 글자("선", 기대 5획)가 실제로는 획 1개만 배정되고 나머지는 옆 글자로 새는 식으로
+어긋나 있었다. 그 결과:
+- 획순 채점이 `likely_wrong_character: true`(목표 글자와 다른 걸 쓴 것으로 오판)를 여러
+  글자에서 반환.
+- `spacing_deviation`이 `-263.9`px 같은 명백히 비정상적인 값으로 나옴(정상 범위를 크게
+  벗어남 — 그룹 경계 자체가 깨졌다는 증거).
+- 획순·획방향·성분비율이 전부 `_match_strokes()` 하나의 매칭 결과를 공유하므로, 그룹
+  경계가 잘못되면 성분비율(초성/중성/종성 면적·자리 판정)도 같이 엉뚱한 값이 나온다 —
+  사용자가 본 "성분비율(너무 큼)"/"자리가 벗어남" 다발은 이 매칭 실패의 연쇄 결과다.
+
+**결론**: 프론트가 고칠 수 있는 문제가 아니다 — 그룹핑은 전부 서버(`POST /canvas/{id}/group`)
+에서 끝나고, 프론트는 결과만 받는다. 근본 수정은 `_group_by_expected_count`(또는 그 AI
+정본 `ai/canvas/stroke_grouping.py`)의 경계 판정 정확도를 실제 손글씨(빠르게 이어 쓴 문장)
+기준으로 다시 보정하는 작업이 필요하다.
+
+**참고**: 이전 세션(같은 날 앞부분, 아직 이 git 병합 전)에 자음/모음/받침 연습이 "한
+획씩 인식"되던 별개 버그(`expected_count == 1`일 때 새 그룹핑 경로를 안 타던 문제)를
+`backend/app/services/stroke_grouping.py`에서 고쳤었으나, git 병합 시 "backend는 git을
+따른다" 방침에 따라 되돌렸다. 원격 632d461에도 이 버그는 그대로 남아있음을 병합 후 다시
+읽은 `CLAUDE.md`로 확인함("한 글자 연습은 `expected_count`가 1이라 이 경로를 안 타고
+옛 임계값 방식으로 묶입니다 — 미해결"). 필요하면 다음에 backend 쪽에서 처리.
+
+### 6. 스키마 감사 후속 조치 — frontend/문서만 처리
+
+§5 진단 이후 `DATA_FLOW.md`·`FEEDBACK_FIELDS_CONTRACT.md`·`ai/STATUS.md`·`ai/HANDOFF.md`와
+backend/AI 스키마(`schemas/canvas.py`·`schemas/image.py`·`schemas/dashboard.py`·
+`schemas/session.py`) 전체를 frontend 모델과 필드 단위로 대조했다. backend/AI 코드 수정이
+필요한 항목(§5와 동일한 두 건 + `char_positions` 스키마 누락)은 이번에도 손대지 않고,
+frontend·문서로 처리 가능한 두 건만 진행했다:
+
+| 파일 | 변경 내용 |
+|---|---|
+| `frontend/lib/features/feedback/screens/feedback_screen.dart` | ① `_buildCanvasCharDetail()`에 `direction_result`/`tilt_result`의 `corrections` 문구를 표시하는 블록 추가(주황 카드, 획순 안내와 같은 위치). 두 값 모두 `analyze-detail`이 문자별로 이미 내려주고 있었지만 화면 어디에도 안 그려지고 있었다. ② **위 ①을 붙이다가 발견한 별개 문제를 같이 고침**: 자음·모음 낱자 연습은 성분이 하나뿐이라 `component_boxes` 자체가 없고, 상세 시트는 성분 박스를 탭해야만 열리는 구조라 **낱자 연습에서는 상세 시트를 열 방법이 아예 없었다**(①을 붙여도 화면에 안 뜸). `_buildCanvasOverlay()`에 성분 박스가 0개 + 글자가 정확히 1개일 때 캔버스 전체를 탭해 그 글자의 상세를 열 수 있는 폴백 추가 — 처음엔 `GestureDetector`로 감쌌는데, `ComponentOverlayView` 내부에 이미 전체 영역을 덮는 `GestureDetector`가 있어 제스처 아레나에서 안쪽 것이 탭을 가로채 바깥쪽 `onTap`이 전혀 안 불렸다(중첩 `GestureDetector`는 버블링 안 됨). 아레나 경쟁과 무관하게 히트테스트 경로의 모든 위젯에 원시 포인터 이벤트를 전달하는 `Listener`(`onPointerUp`)로 교체해 해결. |
+| `DATA_FLOW.md` | §"화면 배선 결함 3건"을 `632d461`로 해결된 것으로 갱신(자간·행간 외 3항목 미표시 / `overall_tilt` 이름 불일치 / 이미지 모드 `feedback_items` 유실 — 셋 다 이제 정상 동작 확인). |
+| `ai/STATUS.md` | ① "세부 점수 5개 노출 — 팀 결정 대기"를 해결됨으로 갱신. ② "문장 쓰기 그룹핑 1단계(글자수 제약)"를 완료로 갱신하고, 2단계(위치 근접 매칭)가 여전히 미착수이며 `char_positions` 스키마 누락이 그 원인임을 명시(§5 진단과 교차 연결). 우선순위 목록(4·5번)도 같이 갱신. |
+
+**결론**: backend/AI 쪽 3건(`char_positions` 스키마 추가, 그룹핑 위치 매칭 구현, 낱자 크기
+채점 게이트 제거)은 여전히 미착수 — 다음에 backend/AI를 건드릴 수 있을 때 §5·§6 기록을
+그대로 작업 항목으로 쓰면 된다.
+
+### 7. 이미지 모드 — 피드백 로딩 실패 시 "다시 시도" 버튼이 촬영 화면으로 안 돌아가던 버그
+
+| 파일 | 변경 내용 |
+|---|---|
+| `frontend/lib/features/feedback/screens/feedback_screen.dart` | **버그 수정**: `_buildErrorState()`("피드백을 불러오지 못했습니다" 에러 화면)의 "다시 시도" 버튼이 모드와 무관하게 항상 `_loadFeedback()`을 그대로 재호출하고 있었다. 이미지 모드는 `/analyze`가 글자를 하나도 못 찾으면 항상 400("사진에서 글자를 찾지 못했습니다")을 던지는데, 같은 `session_id`로 다시 불러와 봤자 **같은 사진이라 매번 똑같이 실패**한다 — 사용자 입장에선 버튼을 눌러도 아무 반응이 없는 것처럼 보였다. 이미지 모드일 때는 버튼을 "다시 촬영"으로 바꾸고 `context.go('/image-capture')`로 촬영 화면으로 돌려보내도록 분기 추가. 캔버스 모드는 다시 그릴 화면이 없고 네트워크 일시 장애가 더 흔한 원인이라 기존 재요청 동작을 그대로 유지. |
 
 ---
 

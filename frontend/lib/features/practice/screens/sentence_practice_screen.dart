@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:uuid/uuid.dart';
@@ -44,32 +46,53 @@ class _SentencePracticeScreenState extends State<SentencePracticeScreen> {
   int _colorIndex = 0;
   Color get _penColor => _palette[_colorIndex];
 
-  static const _tabs = ['짧은 문장', '긴 문장', '캘리그라피'];
+  static const _tabs = ['짧은 문장', '긴 문장'];
   // "짧은 문장" 탭은 완전한 문장이 아니라 형용사+명사 두 단어가 합쳐진 구(句)를
   // 보여준다(예: '시원한 선풍기') — 짧게 따라 쓰기 좋은 단위로 시작하기 위함.
   static const _sentences = [
     '시원한 선풍기',
     '천 리 길도 한 걸음부터 시작된다는 마음으로',
-    '오늘도 좋은 하루 되세요',
   ];
   int _tabIndex = 0;
   String get _sentence => _sentences[_tabIndex];
 
   static const _uuid = Uuid();
 
-  // 배경 첫 줄(진한 안내 문구)과 반드시 같은 값이어야 좌표가 실제 렌더링 위치와 일치한다.
+  // 배경 가이드 문구(딱 한 줄, FittedBox로 캔버스에 꽉 차게 확대)와 반드시 같은
+  // 값이어야 좌표가 실제 렌더링 위치와 일치한다 — fontSize 자체는 FittedBox가
+  // 다시 스케일하므로 무관하고, 패딩/텍스트 스타일(폰트 굵기 등)만 일치하면 된다.
   static const _guidePadding = EdgeInsets.symmetric(horizontal: 16, vertical: 18);
   static const _guideStyle =
-      TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: AppTheme.ink);
+      TextStyle(fontSize: 48, fontWeight: FontWeight.w700, color: Color(0xFFC9CFD8));
 
-  /// 배경 안내 문구(첫 줄)에서 글자별 렌더링 위치를 계산한다.
-  /// TextPainter로 문장 전체를 한 번 레이아웃한 뒤, 글자 하나씩 선택 영역의
-  /// 박스를 물어봐서 커닝을 반영한 실제 위치를 얻는다(문자 너비 합산 방식보다 정확).
+  /// [_guideStyle]로 잰 문장의 "원본 크기"를 캔버스에 [FittedBox]가 실제로
+  /// 그리는 배율로 변환한다. FittedBox(fit: contain, alignment: center)와
+  /// 정확히 같은 공식(가로/세로 중 더 빡빡한 비율)을 써야 좌표가 어긋나지 않는다.
+  double _guideScale(double availableWidth, double availableHeight, Size natural) {
+    if (availableWidth <= 0 || availableHeight <= 0 ||
+        natural.width <= 0 || natural.height <= 0) {
+      return 1.0;
+    }
+    return math.min(availableWidth / natural.width, availableHeight / natural.height);
+  }
+
+  /// 배경 가이드 문구에서 글자별 렌더링 위치(캔버스 기준 실제 좌표)를 계산한다.
+  /// TextPainter로 문장 전체를 한 번(줄바꿈 없이) 레이아웃해 원본 크기를 얻은 뒤,
+  /// [_guideScale]로 구한 배율과 FittedBox의 중앙 정렬 오프셋을 적용한다.
   List<Map<String, dynamic>> _computeCharPositions() {
     final painter = TextPainter(
       text: TextSpan(text: _sentence, style: _guideStyle),
       textDirection: TextDirection.ltr,
     )..layout();
+
+    final availableWidth = _canvasSize.width - _guidePadding.horizontal;
+    final availableHeight = _canvasSize.height - _guidePadding.vertical;
+    final scale = _guideScale(
+        availableWidth, availableHeight, Size(painter.width, painter.height));
+    final offsetX =
+        _guidePadding.left + (availableWidth - painter.width * scale) / 2;
+    final offsetY =
+        _guidePadding.top + (availableHeight - painter.height * scale) / 2;
 
     final positions = <Map<String, dynamic>>[];
     for (var i = 0; i < _sentence.length; i++) {
@@ -82,10 +105,10 @@ class _SentencePracticeScreenState extends State<SentencePracticeScreen> {
       positions.add({
         'char': _sentence[i],
         'index': i,
-        'x': _guidePadding.left + box.left,
-        'y': _guidePadding.top + box.top,
-        'width': box.right - box.left,
-        'height': box.bottom - box.top,
+        'x': offsetX + box.left * scale,
+        'y': offsetY + box.top * scale,
+        'width': (box.right - box.left) * scale,
+        'height': (box.bottom - box.top) * scale,
       });
     }
     return positions;
@@ -157,9 +180,6 @@ class _SentencePracticeScreenState extends State<SentencePracticeScreen> {
         metadata: metadata,
         targetText: _sentence.replaceAll(' ', ''),
         charPositions: _computeCharPositions(),
-        // 문장 연습에는 글자 한 칸짜리 획순 가이드가 없다(줄 위에 이어 쓴다).
-        // guideBox를 안 보내므로 크기는 '글자끼리 고른가'(상대 편차)로 채점된다 —
-        // 글자가 여러 개라 그 비교가 성립한다. 한 글자 연습과는 기준이 다르다.
       );
       if (mounted) {
         context.go('/feedback', extra: {
@@ -201,27 +221,21 @@ class _SentencePracticeScreenState extends State<SentencePracticeScreen> {
             _SentenceTabBar(
                 tabs: _tabs, index: _tabIndex, onSelect: _selectTab),
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
               child: Container(
                 width: double.infinity,
-                padding: const EdgeInsets.all(14),
+                padding: const EdgeInsets.symmetric(vertical: 12),
                 decoration: BoxDecoration(
                   color: AppTheme.mintSurface,
                   borderRadius: BorderRadius.circular(AppTheme.radiusSm),
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('연습할 문장',
-                        style: TextStyle(
-                            fontSize: 11, color: AppTheme.inkMuted)),
-                    const SizedBox(height: 4),
-                    Text(_sentence,
-                        style: const TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700,
-                            color: AppTheme.ink)),
-                  ],
+                child: Text(
+                  "'$_sentence'를 크게 따라 써보세요",
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.primaryDark),
                 ),
               ),
             ),
@@ -248,26 +262,15 @@ class _SentencePracticeScreenState extends State<SentencePracticeScreen> {
                           Size(constraints.maxWidth, constraints.maxHeight);
                       return Stack(
                         children: [
-                          // 뒤: 따라쓰기 가이드 문장 (첫 줄 진하게, 이후 옅게)
+                          // 뒤: 따라쓰기 가이드 문장 — 한 번만, 캔버스 크기에 맞게
+                          // FittedBox로 확대(짧은 문장/긴 문장 모두 화면을 꽉 채운다).
                           Positioned.fill(
                             child: IgnorePointer(
                               child: Padding(
                                 padding: _guidePadding,
-                                child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.start,
-                                  children: [
-                                    Text(_sentence, style: _guideStyle),
-                                    const SizedBox(height: 20),
-                                    for (var i = 0; i < 4; i++) ...[
-                                      Text(_sentence,
-                                          style: const TextStyle(
-                                              fontSize: 20,
-                                              fontWeight: FontWeight.w500,
-                                              color: Color(0xFFD8DDE3))),
-                                      const SizedBox(height: 20),
-                                    ],
-                                  ],
+                                child: FittedBox(
+                                  fit: BoxFit.contain,
+                                  child: Text(_sentence, style: _guideStyle),
                                 ),
                               ),
                             ),

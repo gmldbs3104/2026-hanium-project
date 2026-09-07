@@ -1167,7 +1167,7 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
     // 잘 쓴 곳은 비우고 고칠 곳만 빨강으로 — 한 글자 연습은 최대 3개라 초록도 그린다.
     final redOnly = analyses.length > 1;
 
-    return ComponentOverlayView(
+    final overlay = ComponentOverlayView(
       // ⚠️ 오버레이 박스는 CanvasCoordinateMapper가 원본 크기를 BoxFit.contain으로
       // 화면에 맞게 스케일링해서 그린다. 배경(StrokePainter)도 똑같은 스케일 기준을
       // 쓰지 않으면 획이 잘리거나 오버레이와 위치가 안 맞는다 — 그래서 원본 크기의
@@ -1197,6 +1197,29 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
         canvasAnalysis: _canvasAnalysisByChar[item.charId],
       ),
     );
+
+    // 자음·모음 낱자 연습은 성분이 하나뿐이라 성분 박스 자체가 없다 — 탭할 대상이
+    // 없어서 상세 시트(획순/획방향/기울기 교정 문구, §5 추가분 포함)를 열 방법이
+    // 아예 없었다. 글자가 정확히 하나뿐일 때는 캔버스 전체를 눌러 그 글자의 상세를
+    // 열 수 있게 한다.
+    if (componentItems.isEmpty && analyses.length == 1) {
+      final only = analyses.first;
+      // ⚠️ GestureDetector가 아니라 Listener를 쓴다 — ComponentOverlayView 내부에도
+      // 이미 전체 영역을 덮는 GestureDetector가 있어서(항목이 없어도 존재), 바깥쪽에
+      // GestureDetector를 하나 더 씌우면 제스처 아레나에서 안쪽(자식) 것이 탭을 먼저
+      // 가로채 바깥쪽 onTap이 아예 안 불린다. Listener는 제스처 인식 경쟁과 무관하게
+      // 히트테스트 경로에 있는 모든 위젯에 원시 포인터 이벤트를 그대로 전달한다.
+      return Listener(
+        behavior: HitTestBehavior.translucent,
+        onPointerUp: (_) => _showFeedbackSheet(
+          charId: only.charId,
+          message: '이 글자의 상세 분석을 확인하세요.',
+          canvasAnalysis: only,
+        ),
+        child: overlay,
+      );
+    }
+    return overlay;
   }
 
   /// 성분 박스를 눌렀을 때 보여줄 문구.
@@ -1259,14 +1282,22 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
             Text(_errorMessage!, style: TextStyle(color: Colors.red.shade700)),
             const SizedBox(height: 16),
             OutlinedButton(
-              onPressed: () {
-                setState(() {
-                  _isLoading = true;
-                  _errorMessage = null;
-                });
-                _loadFeedback();
-              },
-              child: const Text('다시 시도'),
+              // ⚠️ 이미지 모드의 피드백 로딩 실패는 대부분 "사진에서 글자를 찾지
+              // 못했습니다"류의 결정적 실패다(/analyze가 탐지 0개면 항상 400) — 같은
+              // session_id로 다시 불러와 봤자 같은 사진이라 똑같이 실패한다. 재시도가
+              // 아니라 재촬영이 맞는 복구 동작이라 촬영 화면으로 돌려보낸다. 캔버스
+              // 모드는 다시 그릴 화면이 없고 네트워크 일시 장애가 더 흔한 원인이라
+              // 기존처럼 같은 요청을 다시 시도한다.
+              onPressed: _isCanvas
+                  ? () {
+                      setState(() {
+                        _isLoading = true;
+                        _errorMessage = null;
+                      });
+                      _loadFeedback();
+                    }
+                  : () => context.go('/image-capture'),
+              child: Text(_isCanvas ? '다시 시도' : '다시 촬영'),
             ),
           ],
         ),
@@ -1361,6 +1392,39 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
               .map((n) => Text(n,
                   style: const TextStyle(
                       fontSize: 12, height: 1.4, color: AppTheme.primaryDark)))
+              .toList(),
+        ),
+      ));
+      widgets.add(const SizedBox(height: 12));
+    }
+
+    // 획방향(역방향)·기울기(15도 초과) 교정 문구 — analyze-detail이 문자별로 내려주지만
+    // 화면 어디에도 안 그려지던 값이다(component_boxes.failed_items로 성분 박스를 탭했을
+    // 때는 우회 전달되지만, 성분이 하나뿐인 자음·모음 낱자 연습은 애초에 성분 박스가
+    // 없어 이 채널 자체가 없다 — 지금까지는 낱자 연습에서 정보가 그대로 사라졌다).
+    final directionCorrections =
+        (analysis.directionResult?['corrections'] as List?)?.cast<String>() ??
+            const [];
+    final tiltCorrections =
+        (analysis.tiltResult?['corrections'] as List?)?.cast<String>() ??
+            const [];
+    final extraCorrections = [...directionCorrections, ...tiltCorrections];
+    if (extraCorrections.isNotEmpty) {
+      widgets.add(Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: AppTheme.amberBg,
+          borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: extraCorrections
+              .map((n) => Padding(
+                    padding: const EdgeInsets.only(bottom: 2),
+                    child: Text(n,
+                        style: const TextStyle(
+                            fontSize: 12, height: 1.4, color: AppTheme.amberText)),
+                  ))
               .toList(),
         ),
       ));

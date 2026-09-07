@@ -28,6 +28,12 @@ class ScoreTrendChart extends StatelessWidget {
     }
 
     return SizedBox(
+      // CustomPaint에 child·size가 없으면 기본 크기(Size.zero)로 레이아웃되고
+      // Column의 가로 제약은 loose라서 실제 폭이 0으로 줄어든다 — 클리핑은 안 되니
+      // 그려지긴 하지만 xFor()의 size.width가 0이 되어 모든 점이 x=0으로 겹쳐
+      // 세로 한 줄(위아래로만 움직이는 모양)로 보였다. width: double.infinity로
+      // 폭을 강제해야 CustomPaint가 실제 가용 너비를 받는다.
+      width: double.infinity,
       height: 160,
       child: CustomPaint(
         painter: _ScoreTrendPainter(
@@ -53,11 +59,10 @@ class _ScoreTrendPainter extends CustomPainter {
 
   static const double _minScore = 0;
   static const double _maxScore = 100;
-  static const double _bottomAxisHeight = 20;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final chartHeight = size.height - _bottomAxisHeight;
+    final chartHeight = size.height;
 
     // 배경 가이드라인 (0, 50, 100점)
     final gridPaint = Paint()
@@ -89,9 +94,6 @@ class _ScoreTrendPainter extends CustomPainter {
 
     _drawSeries(canvas, canvasSeries, canvasColor, chartHeight, xFor, yFor);
     _drawSeries(canvas, imageSeries, imageColor, chartHeight, xFor, yFor);
-
-    _drawDateLabel(canvas, minDate, Offset(0, chartHeight + 4), TextAlign.left);
-    _drawDateLabel(canvas, maxDate, Offset(size.width, chartHeight + 4), TextAlign.right);
   }
 
   void _drawSeries(
@@ -137,17 +139,6 @@ class _ScoreTrendPainter extends CustomPainter {
     for (final p in series) {
       canvas.drawCircle(Offset(xFor(p.date), yFor(p.avgScore)), 2.5, Paint()..color = color);
     }
-  }
-
-  void _drawDateLabel(Canvas canvas, DateTime date, Offset anchor, TextAlign align) {
-    final text = '${date.month}/${date.day}';
-    final textPainter = TextPainter(
-      text: TextSpan(text: text, style: TextStyle(fontSize: 10, color: Colors.grey.shade600)),
-      textDirection: TextDirection.ltr,
-    )..layout();
-
-    final dx = align == TextAlign.left ? anchor.dx : anchor.dx - textPainter.width;
-    textPainter.paint(canvas, Offset(dx, anchor.dy));
   }
 
   @override

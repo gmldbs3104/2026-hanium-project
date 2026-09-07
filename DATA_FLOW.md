@@ -30,10 +30,12 @@
 > ⚠️ **`mean_char_slant`는 DB에 저장되지 않는다**(컬럼 없음). 세션과 응답에만 실린다.
 >
 > **화면 배선 결함 3건이 이때 드러났다** — 서버는 맞게 내려주는데 앱이 버리거나 못 읽던
-> 것들이라, 이 문서가 추적하려는 바로 그 유형이다.
-> ① `/analyze`의 자간·행간 외 3항목이 점수 카드에 안 그려짐,
-> ② `overall_tilt` 값 이름 불일치(`falling`/`rising` vs `leaning_*`)로 방향 표시가 늘 "반듯함",
-> ③ `/feedback`의 `feedback_items`를 이미지 모드가 **통째로 버림** → 6문장 중 1문장만 화면에 도달.
+> 것들이라, 이 문서가 추적하려는 바로 그 유형이다. **✅ 셋 다 `632d461`로 해결 확인
+> (2026-09-07)**:
+> ① `/analyze`의 자간·행간 외 3항목 → `feedback_screen.dart`의 `_buildImageSubScores()`가
+> 5항목 전부(측정 불가면 "미측정") 표시,
+> ② `overall_tilt` 값 이름 불일치 → `_buildTiltRow()`가 `falling`/`rising`으로 수정됨,
+> ③ 이미지 모드가 `feedback_items`를 버리던 문제 → `_itemMessages`로 양쪽 모드 다 연결됨.
 
 ---
 

@@ -3,6 +3,7 @@ import 'package:frontend/features/canvas_mode/models/char_group.dart';
 import 'package:frontend/features/feedback/models/canvas_correction_overlay_item.dart';
 import 'package:frontend/features/feedback/models/image_bbox_overlay_item.dart';
 import 'package:frontend/features/image_mode/models/detected_char.dart';
+import 'package:frontend/features/image_mode/models/image_char_box.dart';
 import 'package:frontend/shared/models/bounding_box.dart';
 import 'package:frontend/shared/models/feedback_item.dart';
 
@@ -53,34 +54,45 @@ void main() {
   });
 
   group('ImageBBoxOverlayItem.merge', () {
-    test('target_id 불일치 시 severity는 null, confidence는 그대로 전달된다', () {
+    test('서버가 ok:true로 판정한 글자는 초록(ok)으로 표시한다', () {
       final items = ImageBBoxOverlayItem.merge(
         detectedChars: const [
           DetectedChar(charId: 'd1', boundingBox: box, confidence: 0.42),
         ],
-        // 현재 백엔드는 문자 단위가 아니라 target_id="global"만 내려줌 → d1과 매칭 안 됨
-        feedbackItems: const [
-          FeedbackItem(
-              targetId: 'global', feedbackMessage: 'm', severity: 'good'),
+        charBoxes: const [
+          ImageCharBox(charId: 'd1', boundingBox: box, ok: true, failedItems: []),
         ],
       );
 
-      expect(items.single.severity, isNull);
+      expect(items.single.ok, isTrue);
       expect(items.single.confidence, 0.42);
     });
 
-    test('char_id가 일치하면 severity가 매핑된다', () {
+    test('서버가 ok:false로 판정한 글자는 failedItems와 함께 빨강으로 표시한다', () {
       final items = ImageBBoxOverlayItem.merge(
         detectedChars: const [
           DetectedChar(charId: 'd1', boundingBox: box),
         ],
-        feedbackItems: const [
-          FeedbackItem(
-              targetId: 'd1', feedbackMessage: 'm', severity: 'warning'),
+        charBoxes: const [
+          ImageCharBox(
+              charId: 'd1', boundingBox: box, ok: false, failedItems: ['크기(너무 큼)']),
         ],
       );
 
-      expect(items.single.severity, FeedbackSeverity.warning);
+      expect(items.single.ok, isFalse);
+      expect(items.single.failedItems, ['크기(너무 큼)']);
+      expect(items.single.message, contains('크기(너무 큼)'));
+    });
+
+    test('서버 판정이 없는 글자(구버전 응답 등)는 안 잰 것을 감점하지 않고 통과로 둔다', () {
+      final items = ImageBBoxOverlayItem.merge(
+        detectedChars: const [
+          DetectedChar(charId: 'd1', boundingBox: box),
+        ],
+        charBoxes: const [],
+      );
+
+      expect(items.single.ok, isTrue);
     });
   });
 }
