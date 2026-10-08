@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     grouping_confidence_threshold: float = 0.5
 
     # ⚠️ 채점 계수·가중치는 여기 두지 않는다 — 채점은 AI가 소유한다(DATA_FLOW.md §5-11·§8-G).
-    #   · 캔버스(REQ-005C-6) → ai/canvas/canvas_quality_analyzer.py의 canvas_item_scores()
+    #   · 캔버스(REQ-005C-6) → ai/canvas/canvas_quality_analyzer.py의 build_axes()
     #   · 이미지(REQ-005I-5) → ai/analysis/handwriting_analyzer.py의 WEIGHTS (3:3:3:2:2)
     # 2026-08-12에 여기 있던 8개(canvas_* 5 + image_*_weight 3)를 지웠다.
     # image_* 3개는 아무 데서도 읽히지 않는 죽은 설정이었고(백엔드가 자체 채점하던 시절의

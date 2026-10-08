@@ -5,7 +5,9 @@ import '../../../shared/models/weak_habit.dart';
 class CanvasFeedbackResponse {
   final String canvasSessionId;
   final String mode; // 항상 "canvas"
-  final int overallScore;
+  /// ⚠️ **채점 불가면 null**이다(0점 아님). 목표 글자와 달라 점수를 매기지 않은 경우로,
+  /// 화면은 숫자 대신 "채점 불가"를 보여줘야 한다(2026-09-17).
+  final int? overallScore;
   final String achievementMessage;
   final List<FeedbackItem> feedbackItems;
 
@@ -21,7 +23,7 @@ class CanvasFeedbackResponse {
   const CanvasFeedbackResponse({
     required this.canvasSessionId,
     required this.mode,
-    required this.overallScore,
+    this.overallScore,
     required this.achievementMessage,
     required this.feedbackItems,
     this.weakHabits = const [],
@@ -33,7 +35,7 @@ class CanvasFeedbackResponse {
     return CanvasFeedbackResponse(
       canvasSessionId: json['canvas_session_id'] as String,
       mode: json['mode'] as String? ?? 'canvas',
-      overallScore: json['overall_score'] as int,
+      overallScore: (json['overall_score'] as num?)?.toInt(),
       achievementMessage: json['achievement_message'] as String,
       feedbackItems: (json['feedback_items'] as List)
           .map((e) => FeedbackItem.fromJson(e as Map<String, dynamic>))

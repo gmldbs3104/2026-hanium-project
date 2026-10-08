@@ -15,6 +15,7 @@ import '../../../shared/models/weak_habit.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../../dashboard/providers/dashboard_refresh_provider.dart';
 import '../utils/canvas_feedback_parser.dart';
+import '../utils/canvas_habit_lines.dart';
 import '../utils/image_download.dart';
 import '../utils/severity_style.dart';
 import '../../canvas_mode/models/stroke.dart';
@@ -605,6 +606,9 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
 
   /// 우측 상단: 현재 점수 카드 (목표 대비 진행바 + 추세 배지).
   Widget _buildScoreCard(BuildContext context) {
+    // ⚠️ 점수가 없을 수 있다 — 목표 글자와 달라 **채점하지 않은** 경우다(2026-09-17).
+    // `?? 0`으로 채우면 "채점 안 함"이 "0점"으로 뒤바뀐다.
+    final unscored = _overallScore == null;
     final score = _overallScore ?? 0;
     // 목표 점수는 사용자 설정값(설정 화면에서 변경) — 백엔드 응답이 아님.
     final target = ref.watch(targetScoreProvider);
@@ -634,32 +638,43 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
           Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Text('$score',
-                  style: const TextStyle(
-                      fontSize: 40,
-                      height: 1.0,
-                      fontWeight: FontWeight.bold,
-                      color: AppTheme.primaryDark)),
-              const Padding(
-                padding: EdgeInsets.only(bottom: 6, left: 4),
-                child: Text('점',
-                    style: TextStyle(fontSize: 14, color: AppTheme.inkMuted)),
-              ),
+              if (unscored)
+                const Text('채점 불가',
+                    style: TextStyle(
+                        fontSize: 28,
+                        height: 1.0,
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.inkMuted))
+              else ...[
+                Text('$score',
+                    style: const TextStyle(
+                        fontSize: 40,
+                        height: 1.0,
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.primaryDark)),
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 6, left: 4),
+                  child: Text('점',
+                      style: TextStyle(fontSize: 14, color: AppTheme.inkMuted)),
+                ),
+              ],
             ],
           ),
-          const SizedBox(height: 12),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(4),
-            child: LinearProgressIndicator(
-              value: ratio,
-              minHeight: 8,
-              backgroundColor: AppTheme.line,
-              valueColor: const AlwaysStoppedAnimation(AppTheme.primaryColor),
+          if (!unscored) ...[
+            const SizedBox(height: 12),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: ratio,
+                minHeight: 8,
+                backgroundColor: AppTheme.line,
+                valueColor: const AlwaysStoppedAnimation(AppTheme.primaryColor),
+              ),
             ),
-          ),
-          const SizedBox(height: 6),
-          Text('목표: $safeTarget점',
-              style: const TextStyle(fontSize: 12, color: AppTheme.inkFaint)),
+            const SizedBox(height: 6),
+            Text('목표: $safeTarget점',
+                style: const TextStyle(fontSize: 12, color: AppTheme.inkFaint)),
+          ],
           if (_achievementMessage != null && _achievementMessage!.isNotEmpty) ...[
             const SizedBox(height: 10),
             Text(_achievementMessage!,
@@ -865,19 +880,19 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
     // (종합 점수 80/50)로 걸렀는데, 박스 색은 **항목별 OR**이라 둘이 어긋났다 —
     // 종합 82점(=good)이면 성분이 빨개도 카드가 비고 "모든 글자가 기준을 잘
     // 지켰어요"까지 떴다(2026-09-01 사용자 지적). 빨간 박스엔 반드시 이유가 따라야 한다.
-    final redComponents = _isCanvas
-        ? ComponentOverlayItem.fromAnalyses(_canvasAnalysisByChar.values.toList())
-            .where((c) => !c.ok)
-            .toList()
-        : const <ComponentOverlayItem>[];
+    // 캔버스 줄은 canvasHabitLines()가 만든다(2026-10-08 축 재설계) — 문제 글자마다
+    // **정확히 한 줄**. 문장의 거부 글자는 글자 박스 줄(`간 — 다시 써 주세요(…)`)로만
+    // 나오고, 박스가 없는 낱자·한 글자의 거부만 refused로 따로 안내한다. 박스에 실리지
+    // 않는 글자 단위 사유(낱자의 축 사유 등)는 chars로 온다.
+    final habit = _isCanvas
+        ? canvasHabitLines(_canvasAnalysisByChar.values)
+        : const CanvasHabitLines(refused: [], boxes: [], chars: []);
+    final redComponents = habit.boxes;
+    final unscorable = habit.refused;
+    final jamoFailures = habit.chars;
 
-    // 캔버스는 성분(초·중·종성) 단위, 이미지는 글자 단위지만 규칙은 같다 —
-    // **서버가 항목별로 판정한 결과**만 모은다. 종합 점수로 다시 거르지 않는다
-    // (그러면 한 항목을 크게 틀려도 다른 항목이 끌어올려 빠져나간다).
-    // 캔버스는 위 redComponents 분기가 성분 단위로 이미 처리한다. 여기는 **이미지
-    // 모드**의 글자 단위 목록이다. 규칙은 같다 — 서버가 항목별로 판정한 결과만
-    // 모으고, 종합 점수로 다시 거르지 않는다(그러면 한 항목을 크게 틀려도 다른
-    // 항목이 끌어올려 빠져나간다).
+    // 이미지 모드의 글자 단위 목록 — **서버가 항목별로 판정한 결과**만 모은다.
+    // 종합 점수로 다시 거르지 않는다(그러면 한 항목을 크게 틀려도 다른 항목이 끌어올려 빠져나간다).
     final redChars = _isCanvas
         ? const <ImageBBoxOverlayItem>[]
         : _imageItems.where((i) => !i.ok).toList();
@@ -913,7 +928,46 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
           ],
         ),
         const SizedBox(height: 14),
-        if (_weakHabits.isNotEmpty) ...[
+        if (unscorable.isNotEmpty) ...[
+          ...unscorable.map((msg) => Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.refresh_rounded,
+                        size: 16, color: Color(0xFFFF3B30)),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        msg,
+                        style: const TextStyle(
+                            fontSize: 12.5, height: 1.4, color: AppTheme.ink),
+                      ),
+                    ),
+                  ],
+                ),
+              )),
+        ] else if (jamoFailures.isNotEmpty) ...[
+          ...jamoFailures.map((f) => Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.close_rounded,
+                        size: 16, color: Color(0xFFFF3B30)),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(f,
+                          style: const TextStyle(
+                              fontSize: 12.5, height: 1.4, color: AppTheme.ink)),
+                    ),
+                  ],
+                ),
+              )),
+          const SizedBox(height: 4),
+          const Text('이 부분을 신경써서 다시 써볼까요?',
+              style: TextStyle(fontSize: 12, color: AppTheme.inkMuted)),
+        ] else if (_weakHabits.isNotEmpty) ...[
           Wrap(
             spacing: 8,
             runSpacing: 8,
@@ -928,7 +982,7 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
         if (redComponents.isNotEmpty) ...[
           // 성분마다 어느 항목이 걸렸는지 그대로 보여준다 — 빨간 박스를 일일이
           // 눌러보지 않아도 오른쪽에서 한눈에 읽히도록.
-          ...redComponents.map((c) => Padding(
+          ...redComponents.map((line) => Padding(
                 padding: const EdgeInsets.only(bottom: 8),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -938,7 +992,7 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
                     const SizedBox(width: 6),
                     Expanded(
                       child: Text(
-                        '${c.role} "${c.jamo}" — ${c.failedItems.join(', ')}',
+                        line,
                         style: const TextStyle(
                             fontSize: 12.5, height: 1.4, color: AppTheme.ink),
                       ),
@@ -1010,7 +1064,8 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
 
         // ── 다 통과했을 때만 칭찬 ──────────────────────────────────────
         // 박스도 깨끗하고 **항목별 경고도 없어야** 한다.
-        if (!hasRedBoxes && itemWarnings.isEmpty)
+        if (!hasRedBoxes && itemWarnings.isEmpty &&
+            unscorable.isEmpty && jamoFailures.isEmpty)
           if (measuredSomething)
             const Text(
               '모든 항목이 기준을 잘 지켰어요! 훌륭해요 🎉',
@@ -1227,7 +1282,7 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
   /// 어느 **항목**이 걸렸는지를 그대로 알려준다 — 서버가 항목을 따로 판정해
   /// `failedItems`에 담아 보내므로, 앱이 점수로 다시 추측하지 않는다.
   String _componentMessage(ComponentOverlayItem item) {
-    final where = '${item.role} "${item.jamo}"';
+    final where = item.role == '글자' ? item.jamo : '${item.role} "${item.jamo}"';
     if (item.ok) return '$where — 잘 썼습니다.';
     return '$where — 고칠 곳: ${item.failedItems.join(', ')}';
   }
@@ -1354,11 +1409,12 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
     ));
     widgets.add(const SizedBox(height: 10));
 
-    if (analysis.correctionFlags.isNotEmpty) {
+    final flags = analysis.displayFlags;
+    if (flags.isNotEmpty) {
       widgets.add(Wrap(
         spacing: 6,
         runSpacing: 6,
-        children: analysis.correctionFlags
+        children: flags
             .map((f) => Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                   decoration: BoxDecoration(
@@ -1398,7 +1454,7 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
       widgets.add(const SizedBox(height: 12));
     }
 
-    // 획방향(역방향)·기울기(15도 초과) 교정 문구 — analyze-detail이 문자별로 내려주지만
+    // 획방향(역방향)·기울기 교정 문구 — analyze-detail이 문자별로 내려주지만
     // 화면 어디에도 안 그려지던 값이다(component_boxes.failed_items로 성분 박스를 탭했을
     // 때는 우회 전달되지만, 성분이 하나뿐인 자음·모음 낱자 연습은 애초에 성분 박스가
     // 없어 이 채널 자체가 없다 — 지금까지는 낱자 연습에서 정보가 그대로 사라졌다).

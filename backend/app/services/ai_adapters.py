@@ -20,10 +20,11 @@ AI_MODEL_INTERFACE.md 계약 그대로이며, 내부 구현만 `ai/` 패키지�
   - analyze_size_angle      — SFR-005I 크기/기울기/기준선 분석 (AI_MODEL_INTERFACE.md 4절)
   - analyze_canvas_writing  — SFR-005C 캔버스 채점 (DATA_FLOW.md §8-A).
                               획순/획방향/성분비율/크기/자간을 기하 비교로 판정한다.
-  - canvas_item_scores      — 캔버스 항목별 점수. 대시보드 집계가 이걸 쓴다.
-                              채점 기준을 AI가 소유하므로 백엔드에 감점 계수를 따로 두지
-                              않는다 — 종전에 config.py에 다른 계수가 있어 결과 화면과
-                              분석 화면 점수가 어긋났다(DATA_FLOW.md §8-G).
+  - group_strokes_by_positions — 화면에 보여준 글자 자리로 획을 나눈다(문장 연습).
+                              채점 기준(축 점수·사유)은 AI가 소유한다. 백엔드는 응답을 그대로
+                              전달하고 축 점수를 저장·집계할 뿐 감점 계수를 따로 두지 않는다 —
+                              종전에 config.py에 다른 계수가 있어 결과 화면과 분석 화면 점수가
+                              어긋났다(DATA_FLOW.md §8-G).
 
 주의 — 전처리 좌표계:
   AI 전처리는 이진화 + 기울기 보정(deskew) + 장축 800~1280px 리사이즈를 수행하므로,
@@ -51,7 +52,9 @@ if _REPO_ROOT not in sys.path:
 from ai.analysis.handwriting_analyzer import analyze_size_angle  # noqa: E402,F401
 from ai.canvas.canvas_quality_analyzer import (  # noqa: E402,F401
     analyze_canvas_writing,
-    canvas_item_scores,
+)
+from ai.canvas.stroke_grouping import (  # noqa: E402,F401
+    group_strokes_by_positions,
 )
 from ai.preprocessing.image_preprocessor import ImagePreprocessor  # noqa: E402
 

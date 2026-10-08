@@ -11,6 +11,64 @@ import '../../canvas_mode/models/stroke.dart';
 import '../../canvas_mode/services/canvas_api_service.dart';
 import '../../canvas_mode/widgets/stroke_painter.dart';
 
+/// 배경 가이드 문장에서 글자별 렌더링 위치(캔버스 기준 실제 좌표)를 계산한다.
+///
+/// 서버가 이 자리로 획을 글자에 배정하고 위치를 채점하므로, 화면에 그려진 회색
+/// 글씨와 정확히 같아야 한다. 화면은 폭 가득·높이 [maxLineHeight]까지인 상자에
+/// FittedBox(contain, 가운데 정렬)로 그리므로 배율은 가로·세로 중 더 빡빡한
+/// 쪽이고, [style]·[textScaler]는 가이드 Text가 실제로 쓰는 값이어야 한다.
+@visibleForTesting
+List<Map<String, dynamic>> sentenceGuideCharPositions({
+  required String sentence,
+  required TextStyle style,
+  required TextScaler textScaler,
+  required Size canvasSize,
+  required EdgeInsets padding,
+  required double maxLineHeight,
+}) {
+  // 문장 전체를 한 번(줄바꿈 없이) 레이아웃해 원본 크기를 얻는다.
+  final painter = TextPainter(
+    text: TextSpan(text: sentence, style: style),
+    textDirection: TextDirection.ltr,
+    textScaler: textScaler,
+  )..layout();
+
+  final availableWidth = canvasSize.width - padding.horizontal;
+  final availableHeight = canvasSize.height - padding.vertical;
+  var scale = 1.0;
+  if (availableWidth > 0 &&
+      availableHeight > 0 &&
+      painter.width > 0 &&
+      painter.height > 0) {
+    scale = math.min(
+      availableWidth / painter.width,
+      math.min(availableHeight, maxLineHeight) / painter.height,
+    );
+  }
+  final offsetX = padding.left + (availableWidth - painter.width * scale) / 2;
+  final offsetY = padding.top + (availableHeight - painter.height * scale) / 2;
+
+  final positions = <Map<String, dynamic>>[];
+  for (var i = 0; i < sentence.length; i++) {
+    if (sentence[i] == ' ') continue;
+    final boxes = painter.getBoxesForSelection(
+      TextSelection(baseOffset: i, extentOffset: i + 1),
+    );
+    if (boxes.isEmpty) continue;
+    final box = boxes.first;
+    positions.add({
+      'char': sentence[i],
+      'index': i,
+      'x': offsetX + box.left * scale,
+      'y': offsetY + box.top * scale,
+      'width': (box.right - box.left) * scale,
+      'height': (box.bottom - box.top) * scale,
+    });
+  }
+  painter.dispose();
+  return positions;
+}
+
 /// 문장 쓰기 화면
 ///
 /// 짧은/긴/캘리그라피 탭 + 따라쓰기 가이드 문장 + 필기 캔버스.
@@ -58,61 +116,32 @@ class _SentencePracticeScreenState extends State<SentencePracticeScreen> {
 
   static const _uuid = Uuid();
 
-  // 배경 가이드 문구(딱 한 줄, FittedBox로 캔버스에 꽉 차게 확대)와 반드시 같은
-  // 값이어야 좌표가 실제 렌더링 위치와 일치한다 — fontSize 자체는 FittedBox가
-  // 다시 스케일하므로 무관하고, 패딩/텍스트 스타일(폰트 굵기 등)만 일치하면 된다.
+  // 배경 가이드 문구(딱 한 줄, FittedBox로 확대)와 반드시 같은 값이어야 좌표가
+  // 실제 렌더링 위치와 일치한다 — fontSize 자체는 FittedBox가 다시 스케일하므로
+  // 무관하고, 패딩/텍스트 스타일(폰트 굵기 등)만 일치하면 된다.
   static const _guidePadding = EdgeInsets.symmetric(horizontal: 16, vertical: 18);
   static const _guideStyle =
       TextStyle(fontSize: 48, fontWeight: FontWeight.w700, color: Color(0xFFC9CFD8));
 
-  /// [_guideStyle]로 잰 문장의 "원본 크기"를 캔버스에 [FittedBox]가 실제로
-  /// 그리는 배율로 변환한다. FittedBox(fit: contain, alignment: center)와
-  /// 정확히 같은 공식(가로/세로 중 더 빡빡한 비율)을 써야 좌표가 어긋나지 않는다.
-  double _guideScale(double availableWidth, double availableHeight, Size natural) {
-    if (availableWidth <= 0 || availableHeight <= 0 ||
-        natural.width <= 0 || natural.height <= 0) {
-      return 1.0;
-    }
-    return math.min(availableWidth / natural.width, availableHeight / natural.height);
-  }
+  /// 가이드 한 줄이 커질 수 있는 한계 (논리 픽셀). 짧은 문장이 캔버스를 가득 채우며
+  /// 지나치게 커지는 것을 막는다(사용자 요청 2026-09-17).
+  /// FittedBox는 남는 공간만큼 계속 확대하므로, 4글자짜리 예문은 글자 하나가
+  /// 캔버스 폭의 1/4을 차지할 만큼 커졌다.
+  static const _maxGuideGlyph = 150.0;
 
-  /// 배경 가이드 문구에서 글자별 렌더링 위치(캔버스 기준 실제 좌표)를 계산한다.
-  /// TextPainter로 문장 전체를 한 번(줄바꿈 없이) 레이아웃해 원본 크기를 얻은 뒤,
-  /// [_guideScale]로 구한 배율과 FittedBox의 중앙 정렬 오프셋을 적용한다.
-  List<Map<String, dynamic>> _computeCharPositions() {
-    final painter = TextPainter(
-      text: TextSpan(text: _sentence, style: _guideStyle),
-      textDirection: TextDirection.ltr,
-    )..layout();
+  // 가이드 Text가 실제로 쓰는 스타일·글자 배율 — build에서 Text와 같은 자리의
+  // context로 잡아 둔다. 테마가 얹는 줄 높이·자간을 빼고 재면 좌표가 화면과 어긋난다.
+  TextStyle _guideEffectiveStyle = _guideStyle;
+  TextScaler _guideTextScaler = TextScaler.noScaling;
 
-    final availableWidth = _canvasSize.width - _guidePadding.horizontal;
-    final availableHeight = _canvasSize.height - _guidePadding.vertical;
-    final scale = _guideScale(
-        availableWidth, availableHeight, Size(painter.width, painter.height));
-    final offsetX =
-        _guidePadding.left + (availableWidth - painter.width * scale) / 2;
-    final offsetY =
-        _guidePadding.top + (availableHeight - painter.height * scale) / 2;
-
-    final positions = <Map<String, dynamic>>[];
-    for (var i = 0; i < _sentence.length; i++) {
-      if (_sentence[i] == ' ') continue;
-      final boxes = painter.getBoxesForSelection(
-        TextSelection(baseOffset: i, extentOffset: i + 1),
+  List<Map<String, dynamic>> _computeCharPositions() => sentenceGuideCharPositions(
+        sentence: _sentence,
+        style: _guideEffectiveStyle,
+        textScaler: _guideTextScaler,
+        canvasSize: _canvasSize,
+        padding: _guidePadding,
+        maxLineHeight: _maxGuideGlyph,
       );
-      if (boxes.isEmpty) continue;
-      final box = boxes.first;
-      positions.add({
-        'char': _sentence[i],
-        'index': i,
-        'x': offsetX + box.left * scale,
-        'y': offsetY + box.top * scale,
-        'width': (box.right - box.left) * scale,
-        'height': (box.bottom - box.top) * scale,
-      });
-    }
-    return positions;
-  }
 
   @override
   void initState() {
@@ -230,7 +259,7 @@ class _SentencePracticeScreenState extends State<SentencePracticeScreen> {
                   borderRadius: BorderRadius.circular(AppTheme.radiusSm),
                 ),
                 child: Text(
-                  "'$_sentence'를 크게 따라 써보세요",
+                  "회색 글씨 위에 맞춰 따라 써보세요",
                   textAlign: TextAlign.center,
                   style: const TextStyle(
                       fontSize: 13,
@@ -260,17 +289,29 @@ class _SentencePracticeScreenState extends State<SentencePracticeScreen> {
                     builder: (context, constraints) {
                       _canvasSize =
                           Size(constraints.maxWidth, constraints.maxHeight);
+                      _guideEffectiveStyle =
+                          DefaultTextStyle.of(context).style.merge(_guideStyle);
+                      _guideTextScaler = MediaQuery.textScalerOf(context);
                       return Stack(
                         children: [
-                          // 뒤: 따라쓰기 가이드 문장 — 한 번만, 캔버스 크기에 맞게
-                          // FittedBox로 확대(짧은 문장/긴 문장 모두 화면을 꽉 채운다).
+                          // 뒤: 따라쓰기 가이드 문장 — 한 번만, 캔버스 폭에 맞게
+                          // FittedBox로 확대하되 줄 높이는 _maxGuideGlyph까지만.
+                          // ⚠️ 이 배치는 sentenceGuideCharPositions()의 공식과 짝이다.
+                          // 한쪽만 바꾸면 서버가 받는 글자 자리가 회색 글씨와 어긋난다.
                           Positioned.fill(
                             child: IgnorePointer(
                               child: Padding(
                                 padding: _guidePadding,
-                                child: FittedBox(
-                                  fit: BoxFit.contain,
-                                  child: Text(_sentence, style: _guideStyle),
+                                child: Center(
+                                  child: SizedBox(
+                                    width: double.infinity,
+                                    height: _maxGuideGlyph,
+                                    child: FittedBox(
+                                      fit: BoxFit.contain,
+                                      child:
+                                          Text(_sentence, style: _guideStyle),
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),

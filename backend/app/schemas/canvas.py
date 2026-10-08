@@ -37,6 +37,16 @@ class GuideBox(BaseModel):
     height: float
 
 
+class CharPosition(BaseModel):
+    """화면에 보여준 글자 하나의 자리 (캔버스 좌표계, 획 좌표와 같은 기준)."""
+    char: Optional[str] = None
+    index: Optional[int] = None
+    x: float
+    y: float
+    width: float
+    height: float
+
+
 class CanvasAnalyzeRequest(BaseModel):
     strokes: List[Stroke]
     metadata: CanvasMetadata
@@ -45,6 +55,11 @@ class CanvasAnalyzeRequest(BaseModel):
     target_text: Optional[str] = None
     # 획순 가이드를 그린 영역. 프론트가 그리는 값을 그대로 보낸다(2026-09-01 추가).
     guide_box: Optional[GuideBox] = None
+    # 문장 연습에서 **화면에 보여준 글자별 자리**(캔버스 좌표). 프론트는 2026-08부터
+    # 보내고 있었는데 스키마에 없어 **버려지고 있었다**(2026-09-17 발견).
+    # 이게 없으면 획을 글자로 나눌 때 간격만 보고 추측해야 해서, 빠르게 이어 쓴
+    # 문장에서 글자 경계가 어긋난다 — 그러면 획순·성분비율이 줄줄이 오판된다.
+    char_positions: Optional[List[CharPosition]] = None
 
 
 class CanvasAnalyzeResponse(BaseModel):
@@ -71,17 +86,24 @@ class CanvasCharAnalysis(BaseModel):
     ⚠️ 대부분의 필드가 Optional인 것은 의도다 — **잴 수 없으면 None**이고 그건
     0점이 아니라 '미측정'이다(종합 점수의 분모에서도 빠진다). 연습 종류마다
     실제로 채점되는 항목이 다르다:
-      · 자음·모음(낱자)  획순 · 획방향 · 크기
-      · 한 글자          + 성분비율
-      · 단어·문장        + 자간
+      · 자모음(낱자)  획순 · 모양
+      · 한 글자       + 짜임새
+      · 문장          + 배치
+    (2026-10-08 축 재설계 — docs/superpowers/specs/2026-10-08-canvas-scoring-axes-design.md)
     소비자는 None을 만점으로 채워 쓰지 말 것(DATA_FLOW.md §4-1의 재발 방지).
     """
     char_id: str
     # 아래 셋은 목표 글자(target_text)를 알 때만 잴 수 있다.
     stroke_order_result: Optional[dict] = None
     direction_result: Optional[dict] = None     # 획을 올바른 방향으로 그었는가(역방향)
-    tilt_result: Optional[dict] = None          # 곧게 그어야 할 획의 기울기(15도 기준)
+    tilt_result: Optional[dict] = None          # 곧게 그어야 할 획의 기울기
+    # 낱자에서만 — 글자를 통째로 몇 도 기울여 썼나(양수=오른쪽으로 기움).
+    # ㅁ·ㅇ처럼 곧고 긴 획이 없는 자모는 tilt_result로는 잴 게 없어 이 값이 유일한 단서다.
+    char_rotation_deg: Optional[float] = None
     balance_result: Optional[dict] = None       # 초·중·종성의 크기·자리 균형
+    # 각지게 꺾어야 할 모서리(ㄷ·ㄹ·ㅁ의 직각)를 둥글게 돌리지 않았나.
+    # ⚠️ DB 컬럼이 없어 저장되지 않는다 — 응답·피드백에만 실린다.
+    corner_result: Optional[dict] = None
     # 화면에 그릴 **성분(초·중·종성) 단위 박스**. 낱자는 성분이 하나라 None이다.
     # 각 항목: {block, jamo, role, box:{x,y,width,height}, ok, failed_items[]}
     # ok=False면 빨강 — 항목을 따로 판정해 **하나라도 오류면** False다(가중 평균 아님).
@@ -89,9 +111,21 @@ class CanvasCharAnalysis(BaseModel):
     spacing_deviation: Optional[float] = None   # 글자가 2개 이상일 때만
     size_deviation: Optional[float] = None      # 세션 내 상대 편차(폴백용)
     size_fill_ratio: Optional[float] = None     # 표준 자형 대비 크기 배율(1.0=표준)
-    item_scores: dict = {}                      # {항목명: 0~100 또는 None}
+    position_result: Optional[dict] = None      # 문장에서만 — 화면 글자 자리에 맞췄나
+    # 채점 축 — {"획순": {"score": 100|70|40|None, "reasons": [...]}, "모양": ..., "짜임새": ..., "배치": ...}
+    # 단계마다 측정되는 축이 다르다(자모음: 획순·모양 / 한 글자: +짜임새 / 문장: +배치).
+    # None은 미측정이다 — 0이나 100으로 채우지 말 것.
+    axes: dict = {}
     speed_profile: dict                         # 채점 미반영, 기록만
+    # 측정된 축의 평균. 채점을 **거부**한 글자는 낱자·한 글자에서는 None(세션 채점 불가),
+    # 문장에서는 0(그 글자만 0점, 나머지는 정상 채점 — 설계 5절).
     overall_score: Optional[int] = None
+    scorable: bool = True
+    unscorable_reason: Optional[str] = None     # missing | too_many_strokes | shape_mismatch
+    # 이 글자에서 틀린 **항목** 목록. 박스가 없는 낱자 연습에서도 화면이 사유를
+    # 보여줄 수 있도록 글자 단위로도 모아 둔다. 예: ["획순(2획 순서 틀림)"]
+    failed_items: List[str] = []
+    corrections: List[str] = []                 # 채점 거부 안내문 등
     correction_flags: List[str]
 
 
@@ -108,6 +142,7 @@ class FeedbackItem(BaseModel):
 class CanvasFeedbackResponse(BaseModel):
     canvas_session_id: str
     mode: str = "canvas"
-    overall_score: int
+    # ⚠️ 채점 불가면 None이다(0점 아님). 앱은 숫자 자리에 "채점 불가"를 보여줄 것.
+    overall_score: Optional[int] = None
     achievement_message: str
     feedback_items: List[FeedbackItem]

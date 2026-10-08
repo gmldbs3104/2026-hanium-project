@@ -204,3 +204,65 @@ def test_horizontal_vowel_tick_is_on_the_right_side():
         assert actual == tick_side, (
             f"{jamo}: 짧은 획이 막대의 {actual}쪽에 있다 (표준은 {tick_side}쪽) — "
             f"{jamo}와 짝 자모의 모양이 뒤바뀐 게 아닌지 확인할 것")
+
+
+# ── **가이드대로 쓰면 통과하고, 거꾸로 쓰면 걸리는가** ─────────────────────
+#
+# 위 `test_jamo_stroke_paths_match_frontend`는 획수와 대략적인 방향(←↓/→↓)만 본다.
+# 그래서 2026-09-17에 **ㅅ이 빠져나갔다** — 획수(2)도 방향도 같았지만 AI는 두 획이
+# 꼭대기 한 점에서 갈라지고 **①이 짧고 ②가 길었다.** 프론트 가이드는 정반대(①이 긴
+# 삐침, ②는 그 중간에서 시작)라, 매칭이 획 길이로 짝을 맞추면서
+# **가이드대로 쓰면 획순 틀림(20/20), 거꾸로 쓰면 만점**이 나왔다(사용자 신고).
+#
+# 모양을 더 촘촘히 비교하는 대신 **사용자가 실제로 겪는 결과**를 직접 검사한다.
+# 좌표를 정밀 대조하면 ㄱ·ㄹ·ㅂ처럼 모양은 조금 달라도 판정은 멀쩡한 자모까지
+# 잘못 걸린다(실측: 끝점 차이 0.21~0.33인데 오판 0/20).
+
+def _trace_front_guide(paths, seed, jitter=0.01, size=600.0):
+    """프론트 가이드 경로를 사람이 따라 쓴 것처럼 — 선분 위에 점을 찍고 조금 떨린다."""
+    import random
+    rng = random.Random(seed)
+    strokes, t = [], 0
+    for path in paths:
+        pts = []
+        for (x0, y0), (x1, y1) in zip(path, path[1:]):
+            for k in range(12):
+                u = k / 11
+                t += 10
+                pts.append({"x": (x0 + (x1 - x0) * u + rng.uniform(-jitter, jitter)) * size,
+                            "y": (y0 + (y1 - y0) * u + rng.uniform(-jitter, jitter)) * size,
+                            "timestamp": t})
+        strokes.append({"stroke_id": f"s{len(strokes)}", "points": pts})
+    xs = [p["x"] for s in strokes for p in s["points"]]
+    ys = [p["y"] for s in strokes for p in s["points"]]
+    return [{"char_id": "c0", "strokes": strokes,
+             "bounding_box": {"x": min(xs), "y": min(ys),
+                              "width": max(xs) - min(xs), "height": max(ys) - min(ys)}}]
+
+
+def _order_errors(paths, jamo, seed):
+    from ai.canvas.canvas_quality_analyzer import analyze_canvas_writing
+    guide = {"x": 0.0, "y": 0.0, "width": 600.0, "height": 600.0}
+    r = analyze_canvas_writing(_trace_front_guide(paths, seed), jamo, guide_box=guide)[0]
+    return r["stroke_order_result"]["error_count"] or 0
+
+
+def test_writing_along_the_frontend_guide_is_not_marked_wrong():
+    """가이드대로 **정확한 순서로** 쓰면 획순이 틀렸다고 나오면 안 된다."""
+    _skip_if_no_frontend()
+    front = _front_jamo_paths()
+    bad = [f"{jamo}({n}/10)" for jamo, paths in front.items()
+           if (n := sum(1 for seed in range(10) if _order_errors(paths, jamo, seed) > 0))]
+    assert not bad, (
+        "프론트 가이드대로 정확히 썼는데 '획순 틀림'으로 나온다: " + ", ".join(bad) + "\n"
+        "  → synthetic_stroke_generator.py의 그 자모 획 경로가 가이드와 다를 가능성이 크다.\n"
+        "    획수·방향이 같아도 **획 길이나 시작점**이 다르면 매칭이 뒤바뀐다(2026-09-17 ㅅ).")
+
+
+def test_writing_the_guide_in_reverse_is_caught():
+    """반대편 끝 — 거꾸로 쓴 것을 만점으로 넘기면 안 된다(ㅅ은 실제로 그랬다)."""
+    _skip_if_no_frontend()
+    front = _front_jamo_paths()
+    missed = [f"{jamo}({n}/10 놓침)" for jamo, paths in front.items() if len(paths) > 1
+              if (n := sum(1 for seed in range(10) if _order_errors(paths[::-1], jamo, seed) == 0))]
+    assert not missed, "획을 거꾸로 썼는데 획순 오류로 안 잡힌다: " + ", ".join(missed)

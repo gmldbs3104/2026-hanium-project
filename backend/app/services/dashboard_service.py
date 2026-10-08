@@ -7,7 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
 from app.models.correction import CanvasAnalysisResult, ImageAnalysisResult
-from app.services.ai_adapters import canvas_item_scores
 
 DASHBOARD_CACHE_TTL = 3600  # SFR-008: 집계 결과 1시간 캐시
 SESSIONS_PER_LEVEL = 5  # 게이미피케이션: 누적 세션 5회당 1레벨
@@ -21,30 +20,32 @@ def _since(period: str) -> Optional[datetime]:
     return None
 
 
-def _canvas_item_scores(row: CanvasAnalysisResult) -> dict[str, float]:
-    """저장된 편차에서 항목 점수를 만든다 — 계산은 AI 함수 하나에 위임한다.
+def summarize_canvas_sessions(rows_by_session: dict[str, list[CanvasAnalysisResult]]) -> list[dict]:
+    """세션별 종합 점수와 축별 평균 (2026-10-08 재설계).
 
-    종전에는 여기서 백엔드 설정 계수(크기·자간 0.5 / 획순 10)로 다시 계산했는데,
-    AI가 세션 점수를 만들 때 쓰는 계수(0.8 / 0.3 / 15)와 달라서 **같은 글씨인데
-    결과 화면과 분석 화면의 점수가 어긋났다**(DATA_FLOW.md §8-G).
-
-    못 잰 항목은 None으로 오며 아래에서 걸러낸다 — 0으로 세거나 만점을 주면 안 잰
-    지표로 감점·칭찬하는 셈이다(§4-1). 연습 종류마다 잰 항목이 다르므로(낱자 3개 /
-    한 글자 4개 / 문장 5개) 집계는 **항목별 평균**이어야지 행마다 항목 수가 같다고
-    가정하면 안 된다.
-
-    2026-09-01부터 획방향·성분비율·크기배율도 DB에 남아 함께 집계된다.
+    - 종합 = 점수가 있는 글자의 평균. 문장의 거부 글자는 0점으로 저장돼 평균을 끌어내리고,
+      낱자·한 글자의 거부 세션은 전부 None이라 집계에서 빠진다.
+    - 축 = 저장된 item_scores의 축별 평균. None(미측정)은 분모에서 빠진다 — 0으로 세면
+      "안 잰 축이 최악"이 된다(§4-1). 컬럼이 없는 이전 행은 축 집계에서 빠진다(종합은 들어간다).
+    종전에는 저장된 중간 결과로 항목 점수를 다시 계산했는데, 모서리처럼 저장 안 되는
+    결과가 있어 복원이 안 됐다 — AI가 만든 축 점수를 그대로 쓴다.
     """
-    scores = canvas_item_scores(
-        size_deviation_pct=row.size_deviation,
-        spacing_deviation_px=row.spacing_deviation,
-        stroke_order_result=row.stroke_order_result,
-        direction_result=row.direction_result,
-        tilt_result=row.tilt_result,
-        balance_result=row.balance_result,
-        size_fill_ratio=row.size_fill_ratio,
-    )
-    return {name: score for name, score in scores.items() if score is not None}
+    sessions = []
+    for rows in rows_by_session.values():
+        scored = [r.overall_score for r in rows if r.overall_score is not None]
+        if not scored:
+            continue
+        item_acc: dict[str, list[float]] = defaultdict(list)
+        for r in rows:
+            for axis, score in (r.item_scores or {}).items():
+                if score is not None:
+                    item_acc[axis].append(float(score))
+        sessions.append({
+            "overall": sum(scored) / len(scored),
+            "date": rows[0].created_at.date(),
+            "items": {k: sum(v) / len(v) for k, v in item_acc.items()},
+        })
+    return sessions
 
 
 def _improvement_rate(ordered_scores: list[float]) -> float:
@@ -150,19 +151,8 @@ async def get_dashboard_data(
     for row in canvas_rows:
         canvas_by_session[row.session_id].append(row)
 
-    # 세션 수준 요약 계산 (canvas)
-    c_sessions = []
-    for rows in canvas_by_session.values():
-        overall = sum(r.overall_score or 0 for r in rows) / len(rows)
-        item_acc: dict[str, list[float]] = defaultdict(list)
-        for r in rows:
-            for item, score in _canvas_item_scores(r).items():
-                item_acc[item].append(score)
-        c_sessions.append({
-            "overall": overall,
-            "date": rows[0].created_at.date(),
-            "items": {k: sum(v) / len(v) for k, v in item_acc.items()},
-        })
+    # 세션 수준 요약 계산 (canvas) — 저장된 축 점수로
+    c_sessions = summarize_canvas_sessions(canvas_by_session)
 
     # 세션 수준 요약 계산 (image)
     # ⚠️ 측정 불가 지표는 None으로 저장된다(글자/행 수 부족). 이를 0점으로 세면 "안 잰

@@ -201,3 +201,58 @@ def group_strokes_into_chars(
             "low_confidence": confidence < LOW_CONFIDENCE_THRESH,   # REQ-004C-4
         })
     return result
+
+
+# ── 화면에 보여준 글자 자리로 나누기 (2026-09-17 신설, 사용자 결정) ──────────
+
+def group_strokes_by_positions(strokes: List[Dict],
+                               char_positions: List[Dict]) -> List[List[Dict]]:
+    """각 획을 **화면에 보여준 글자 칸** 중 가장 가까운 곳에 배정한다.
+
+    왜 필요한가 — 종전에는 획 사이 간격의 상대 순위로 경계를 정했다(`_group_by_expected_count`).
+    문장을 빠르게 이어 쓰면 글자 사이 간격이 글자 안 간격보다 좁아질 수 있어서 경계가
+    어긋난다. 실제 사용 기록에서 6글자 문장의 4번째 글자('선', 5획)에 획이 1개만
+    배정되고 나머지가 옆 글자로 샌 사례가 확인됐다(FRONTEND_CHANGE.md §5-2).
+    획순·획방향·성분비율이 **모두 같은 매칭 결과를 공유**하므로, 경계 하나가 틀리면
+    세 항목이 줄줄이 오판된다.
+
+    프론트는 화면에 그린 글자마다 자리를 보내준다 — 추측할 필요 없이 그걸 쓴다.
+
+    배정 기준은 **획의 무게중심이 어느 칸에 있나**이고, 어느 칸에도 안 들어가면
+    칸 중심까지의 거리가 가장 가까운 칸에 넣는다(칸 크기로 나눠 비교하므로 글자
+    크기가 달라도 공정하다).
+
+    반환 길이는 항상 len(char_positions)이다 — **아무 획도 안 배정된 칸은 빈 목록**으로
+    남는다. 안 쓴 글자를 "없는 글자"로 지워 버리면 뒤 글자들이 한 칸씩 당겨져
+    전부 다른 글자로 채점된다.
+    """
+    groups: List[List[Dict]] = [[] for _ in char_positions]
+    if not char_positions:
+        return groups
+
+    for stroke in strokes:
+        pts = stroke.get("points") or []
+        if not pts:
+            continue
+        cx = sum(p["x"] for p in pts) / len(pts)
+        cy = sum(p["y"] for p in pts) / len(pts)
+
+        best_i, best_d = 0, float("inf")
+        for i, pos in enumerate(char_positions):
+            px, py = float(pos["x"]), float(pos["y"])
+            pw = float(pos["width"]) or 1.0
+            ph = float(pos["height"]) or 1.0
+            if px <= cx <= px + pw and py <= cy <= py + ph:
+                best_i, best_d = i, -1.0      # 칸 안에 있으면 바로 확정
+                break
+            dx = max(px - cx, 0.0, cx - (px + pw)) / pw
+            dy = max(py - cy, 0.0, cy - (py + ph)) / ph
+            d = dx * dx + dy * dy
+            if d < best_d:
+                best_i, best_d = i, d
+        groups[best_i].append(stroke)
+
+    # 그룹 안에서는 그린 순서(시간)를 지킨다 — 획순 채점이 이 순서를 본다.
+    for g in groups:
+        g.sort(key=lambda s: (s["points"][0]["timestamp"] if s.get("points") else 0))
+    return groups

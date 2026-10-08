@@ -21,6 +21,10 @@ class CanvasAnalysisResult(Base):
     size_deviation = Column(Float, nullable=True)
     size_fill_ratio = Column(Float, nullable=True)   # 표준 자형 대비 크기 배율(1.0=표준)
     overall_score = Column(Integer, nullable=True)
+    # 축 점수 {"획순": 100, "모양": 70, "짜임새": None, "배치": None} (2026-10-08 재설계).
+    # 대시보드가 중간 결과로 다시 계산하지 않고 이 값을 그대로 집계한다 — 모서리처럼
+    # 저장 안 되는 중간 결과가 있어 복원이 안 되기 때문이다. 이전 행은 NULL이라 축 집계에서 빠진다.
+    item_scores = Column(JSON, nullable=True)
     # AI가 내주지만 응답에만 실리고 사라지던 값들 (DATA_FLOW.md §8-B·C, 2026-08-12 추가).
     # 소급이 안 되는 값이라 화면 노출 여부와 무관하게 먼저 쌓기 시작한다.
     speed_profile = Column(JSON, nullable=True)      # {mean_speed_px_per_ms: ...}

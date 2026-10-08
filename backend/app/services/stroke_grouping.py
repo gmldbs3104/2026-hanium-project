@@ -117,14 +117,28 @@ def _group_by_expected_count(
     return groups
 
 
-def build_char_groups(stroke_groups: List[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+def build_char_groups(stroke_groups: List[List[Dict[str, Any]]],
+                     char_positions: List[Dict[str, Any]] | None = None) -> List[Dict[str, Any]]:
     """
     그룹핑된 획들에 char_id를 부여하고 bounding box, 신뢰도를 산출한다.
     REQ-004C-4: 신뢰도 0.5 미만은 저신뢰 플래그 마킹
+
+    ⚠️ 화면 자리로 나눈 경우(char_positions) **획이 하나도 없는 글자**가 생길 수 있다
+    (안 쓰고 건너뛴 글자). 그 글자를 빼 버리면 뒤 글자들이 한 칸씩 당겨져 전부 다른
+    글자로 채점되므로, 자리만 빌려 빈 그룹으로 남긴다(2026-09-17).
     """
     char_groups = []
 
     for idx, group in enumerate(stroke_groups):
+        if not group:
+            pos = (char_positions or [{}])[idx] if char_positions and idx < len(char_positions) else {}
+            merged_box = {"x": float(pos.get("x", 0.0)), "y": float(pos.get("y", 0.0)),
+                          "width": float(pos.get("width", 1.0)), "height": float(pos.get("height", 1.0))}
+            char_groups.append({
+                "char_id": f"char_{idx}", "strokes": [], "bounding_box": merged_box,
+                "stroke_count": 0, "confidence": 0.0, "low_confidence": True,
+            })
+            continue
         boxes = [_stroke_bounding_box(s["points"]) for s in group]
         merged_box = _merge_bounding_boxes(boxes)
 

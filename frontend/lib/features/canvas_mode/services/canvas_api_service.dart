@@ -206,7 +206,7 @@ class CanvasApiService {
         spacingDeviation: i == 1 ? 8.0 : 0.0,
         sizeDeviation: i == 3 ? -15.0 : 0.0,
         sizeFillRatio: null,
-        itemScores: const {},
+        axes: const {},
         motion: WritingMotionProfile(
           meanSpeedPxPerMs: 0.3 + i * 0.02,
         ),

@@ -16,7 +16,7 @@ from app.core.deps import get_current_user
 from app.models.user import User
 from app.models.correction import CanvasAnalysisResult
 from app.schemas.canvas import CanvasAnalysisResponse, CanvasCharAnalysis
-from app.services.ai_adapters import analyze_canvas_writing
+from app.services.ai_adapters import analyze_canvas_writing, group_strokes_by_positions
 
 from app.schemas.canvas import CanvasFeedbackResponse, FeedbackItem
 from app.services.feedback_generator import generate_canvas_feedback
@@ -39,6 +39,10 @@ async def analyze_canvas(payload: CanvasAnalyzeRequest):
         "metadata": payload.metadata.model_dump(),
         "target_text": payload.target_text,
         "guide_box": payload.guide_box.model_dump() if payload.guide_box else None,
+        # 화면에 보여준 글자별 자리 — 문장 연습에서 획을 글자로 나눌 때와
+        # '위치' 항목 채점에 쓴다(2026-09-17). 종전에는 스키마에 없어 버려졌다.
+        "char_positions": ([cp.model_dump() for cp in payload.char_positions]
+                           if payload.char_positions else None),
     })
 
     return CanvasAnalyzeResponse(
@@ -63,8 +67,20 @@ async def group_canvas_strokes(canvas_session_id: str):
     target_text = session_data.get("target_text")
     expected_count = len("".join(target_text.split())) if target_text else None
 
-    stroke_groups = rule_based_grouping(strokes, expected_count=expected_count)
-    char_groups = build_char_groups(stroke_groups)
+    # 화면에 글자 자리를 보여준 연습(문장)이면 **그 자리로 나눈다** — 간격으로
+    # 추측할 필요가 없다. 없을 때만 종전의 간격 기반 규칙으로 돌아간다.
+    char_positions = session_data.get("char_positions")
+    # ⚠️ 자리 수가 목표 글자 수와 다르면 **쓰지 않는다.** 자리는 순서대로 목표 글자에
+    # 대응하므로 하나만 어긋나도 뒤 글자가 전부 다른 글자로 채점된다. 세션에서도 지워
+    # 채점(/analyze-detail)이 같은 판단을 따르게 한다.
+    if char_positions and expected_count and len(char_positions) != expected_count:
+        char_positions = None
+        session_data["char_positions"] = None
+    if char_positions:
+        stroke_groups = group_strokes_by_positions(strokes, char_positions)
+    else:
+        stroke_groups = rule_based_grouping(strokes, expected_count=expected_count)
+    char_groups = build_char_groups(stroke_groups, char_positions=char_positions)
 
     # SFR-005C에서 사용할 수 있도록 같은 세션에 결과 갱신 저장
     session_data["char_groups"] = char_groups
@@ -100,7 +116,9 @@ async def analyze_canvas_detail(
     # target_text가 있으면(제시형 연습) 위치+모양 기하 비교로 획순 순서 오류까지 잡는다.
     target_text = session_data.get("target_text")
     guide_box = session_data.get("guide_box")
-    analysis = analyze_canvas_writing(char_groups, target_text, guide_box=guide_box)
+    analysis = analyze_canvas_writing(
+        char_groups, target_text, guide_box=guide_box,
+        char_positions=session_data.get("char_positions"))
 
     results = []
     for item in analysis:
@@ -111,12 +129,15 @@ async def analyze_canvas_detail(
             stroke_order_result=item["stroke_order_result"],
             direction_result=item.get("direction_result"),
             tilt_result=item.get("tilt_result"),
+            # ⚠️ char_rotation_deg는 **DB 컬럼이 없어 저장되지 않는다**(응답·피드백에만
+            # 실린다). mean_char_slant와 같은 처지다 — 쌓으려면 마이그레이션이 필요하다.
             balance_result=item.get("balance_result"),
             component_boxes=item.get("component_boxes"),
             spacing_deviation=item["spacing_deviation"],
             size_deviation=item["size_deviation"],
             size_fill_ratio=item.get("size_fill_ratio"),
             overall_score=item["overall_score"],
+            item_scores={axis: a["score"] for axis, a in (item.get("axes") or {}).items()},
             # 응답에만 실리고 사라지던 값 (§8-B·C). 소급이 안 되므로 화면 노출
             # 여부와 무관하게 지금부터 쌓는다. 속도는 채점에 안 쓰지만 계속 쌓는다
             # (2026-09-01 결정). 필압은 같은 날 완전히 제거했다.
