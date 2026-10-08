@@ -450,16 +450,16 @@ SFR-004C(획 그룹핑) → SFR-005C(채점) 흐름입니다. **실사용자 필
   동작하는 획순 오류 감지기**입니다.
 - 위치(중심점)만 보면 자모 내 서로 가까운 두 획(예: ㅏ의 세로선+가로 짧은 획)을
   헷갈리므로, 모양(가로/세로 bbox 비율, `SHAPE_WEIGHT=1.5`)도 함께 비교.
-- **`likely_wrong_character` 안전장치**: 사용자가 목표와 완전히 다른 글자(또는 낙서)를
-  쓴 경우, 억지로 정답 템플릿에 끼워 맞춰 "몇 번째 획이 틀렸다"는 세부 피드백을 주면
-  오히려 혼란을 주므로, 매칭 오차(`MATCH_QUALITY_THRESHOLD=0.6`)나 획수 비율
-  (`COUNT_MISMATCH_RATIO_THRESHOLD=2.0`)이 임계값을 넘으면 세부 피드백 대신 "다시
-  확인해주세요" 안내만 반환.
-- `analyze_canvas_writing(char_groups, target_text)`: SFR-005C 최종 종합 함수. 크기
-  편차, 자간 편차, 위 획순 분석, 필압/속도 통계를 모아 `requirement.md` 스펙 그대로
-  (`stroke_order_result`, `spacing_deviation`, `size_deviation`, `pressure_profile`,
-  `speed_profile`, `overall_score`, `correction_flags`) 반환. `target_text`가 없으면
-  획순 채점은 생략하고 크기/자간만 채점.
+- **채점 거부(`assess_character_match`, 2026-10-08 기준)**: 획이 없음(`missing`) · 획 수가
+  표준의 2배 초과(`too_many_strokes`) · **획 모양이 다르고 잉크도 제자리에 없음**(`shape_mismatch`,
+  획끼리 짝지은 거리 평균 0.20/최대 0.32 **그리고** 점구름 잉크 어긋남 0.15를 둘 다 넘어야)이면
+  점수를 매기지 않고 "다시 써 주세요"만 돌려준다. 기울여 쓴 글씨는 거부하지 않는다(모양 축의 몫).
+  종전의 `likely_wrong_character`/`MATCH_QUALITY_THRESHOLD`(0.6) 경로는 2026-09-17에 이것으로 대체됐다.
+- `analyze_canvas_writing(char_groups, target_text, guide_box, char_positions)`: SFR-005C 최종 종합
+  함수(2026-10-08 축 재설계). 글자마다 `axes`(획순·모양·짜임새·배치 각 `{score: 100|70|40|None,
+  reasons}`), `overall_score`(측정된 축 평균; 문장의 거부 글자는 0, 낱자·한 글자 거부는 None),
+  `failed_items`(화면 문구), `component_boxes`(한 글자는 성분 박스, 문장은 글자 박스), 세부 결과와
+  `speed_profile`·`correction_flags`를 반환. 설계: `docs/superpowers/specs/2026-10-08-canvas-scoring-axes-design.md`.
 
 **왜 두 개의 획순 분석 함수가 공존하는가**: `lstm_analyze_stroke_order`는 백엔드와의
 공식 계약 시그니처를 지키기 위한 자리이고(문서에 이미 "현재: 개수 비교, 교체 목표: LSTM"
@@ -473,6 +473,9 @@ SFR-004C(획 그룹핑) → SFR-005C(채점) 흐름입니다. **실사용자 필
 > `lstm_analyze_stroke_order`)만 노출하고, 백엔드는 그룹핑·크기·자간·점수를 **자체 구현**했습니다.
 > 즉 **실사용 경로의 획순 판정은 지금도 "획 개수 비교"가 전부**입니다.
 > 이건 백엔드 잘못이 아니라 **계약의 구멍**입니다 — 연결하려면 계약에 함수를 추가해야 합니다.
+>
+> ✅ **재정정(2026-08-11 `ab9de5a`)** — `ai_adapters`가 `analyze_canvas_writing`을 "추가 제공" 함수로
+> 노출하고 백엔드 `routes/handwriting.py`가 직접 호출한다. 위 ⛔ 문단은 2026-08-06~11 사이에만 참이었다.
 > 상세: [DATA_FLOW.md](../DATA_FLOW.md) §8-A.
 
 > ✅ **재정정(2026-08-11, `ab9de5a`)** — 위 정정도 이제 낡았습니다. `ai_adapters.py`가
