@@ -163,7 +163,8 @@ def axis_label(axis: str, reasons: List[str]) -> str:
 def overall_from_axes(axes: Dict[str, Dict]) -> Optional[int]:
     """글자 점수 = 측정된 축의 평균(반올림). 측정된 축이 없으면 None."""
     scores = [a["score"] for a in axes.values() if a["score"] is not None]
-    return round(sum(scores) / len(scores)) if scores else None
+    # round()는 .5를 짝수로 보내 92.5가 92가 된다 — 사람이 기대하는 반올림(93)으로.
+    return int(sum(scores) / len(scores) + 0.5) if scores else None
 
 
 def build_axes(*, stroke_order_result: Optional[Dict], direction_result: Optional[Dict],
@@ -183,20 +184,18 @@ def build_axes(*, stroke_order_result: Optional[Dict], direction_result: Optiona
     n = 0
     measured = stroke_order_result is not None
     if measured:
-        swaps = -(-int(stroke_order_result.get("order_error_count") or 0) // 2)
+        drawn = stroke_order_result.get("stroke_count")
+        expected = stroke_order_result.get("expected_count")
+        count_off = drawn is not None and expected is not None and drawn != expected
+        # 획을 합치거나 나눠 쓰면 짝이 밀려 '순서 어긋남'이 따라 나온다 — 같은 사건을
+        # 두 번 세지 않도록 획 수가 다르면 순서는 세지 않는다(종전 max(순서, 부족)와 같은 뜻).
+        swaps = 0 if count_off else -(-int(stroke_order_result.get("order_error_count") or 0) // 2)
         if swaps:
             reasons.append(f"{swaps}획 순서 틀림")
         reversed_n = int((direction_result or {}).get("error_count") or 0)
         if reversed_n:
             reasons.append(f"{reversed_n}획 반대로 그음")
-        drawn = stroke_order_result.get("stroke_count")
-        expected = stroke_order_result.get("expected_count")
-        count_off = drawn is not None and expected is not None and drawn != expected
         if count_off:
-            # 획을 합치거나 나눠 쓰면 짝이 밀려 '순서 어긋남'이 따라 나온다 — 같은 사건을
-            # 두 번 세지 않도록 획 수만 센다(종전 max(순서, 부족)와 같은 뜻).
-            reasons = [r for r in reasons if not r.endswith("순서 틀림")]
-            swaps = 0
             reasons.append(f"획 수 {drawn}개 / 표준 {expected}개")
         n = swaps + reversed_n + (1 if count_off else 0)
     axes[AXIS_ORDER] = {"score": axis_score(n, measured), "reasons": reasons}
@@ -835,20 +834,47 @@ def assess_character_match(strokes: List[Dict], target_char: str) -> Dict:
         return {**base, "mean_distance": round(best, 3), "max_distance": round(best, 3),
                 "scorable": not wrong, "reason": "shape_mismatch" if wrong else None}
 
+    mean_d, max_d = _paired_shape_distances(user_paths, tmpl)
+    if mean_d > WRONG_CHAR_MEAN_DIST or max_d > WRONG_CHAR_MAX_DIST:
+        # ⚠️ 획마다 ±35°를 허용해도 **글자를 통째로** 기울이면 정규화 뒤 획 자리가 전부
+        # 밀려 30°에서 거부됐다(ㅁ). 거부 후보일 때만 글자 전체를 돌려 가며 다시 짝짓는다 —
+        # 정상 글씨는 첫 짝짓기로 끝나므로 비용이 없다.
+        pts = [p for path in user_paths for p in path]
+        cx = (min(x for x, _ in pts) + max(x for x, _ in pts)) / 2.0
+        cy = (min(y for _, y in pts) + max(y for _, y in pts)) / 2.0
+        for deg in range(-WRONG_CHAR_ROT_DEG, WRONG_CHAR_ROT_DEG + 1, 5):
+            if deg == 0:
+                continue
+            a = math.radians(deg)
+            ca, sa = math.cos(a), math.sin(a)
+            turned = [[(cx + (x - cx) * ca - (y - cy) * sa, cy + (x - cx) * sa + (y - cy) * ca)
+                       for x, y in path] for path in user_paths]
+            m, x = _paired_shape_distances(turned, tmpl)
+            if max(m / WRONG_CHAR_MEAN_DIST, x / WRONG_CHAR_MAX_DIST) < max(
+                    mean_d / WRONG_CHAR_MEAN_DIST, max_d / WRONG_CHAR_MAX_DIST):
+                mean_d, max_d = m, x
+    wrong = (mean_d > WRONG_CHAR_MEAN_DIST or max_d > WRONG_CHAR_MAX_DIST) and not ink_ok()
+    return {**base, "mean_distance": round(mean_d, 3), "max_distance": round(max_d, 3),
+            "scorable": not wrong, "reason": "shape_mismatch" if wrong else None}
+
+
+def _paired_shape_distances(user_paths: List[List[Tuple[float, float]]],
+                            tmpl: List[List[Tuple[float, float]]]) -> Tuple[float, float]:
+    """사용자 획을 정규화·재표본해 표준 획과 짝지은 (평균 거리, 최대 거리).
+
+    가장 가까운 짝부터 묶는다(그린 순서와 무관하게) — 획순이 틀린 것은 거부 사유가
+    아니므로, 순서대로 비교하면 순서 오류를 딴 글자로 오해한다.
+    ⚠️ 짝이 안 맞은 획도 세야 한다. 맞은 획만 평균 내면, 획을 하나 빠뜨린 비슷한
+    글자가 "잘 맞는다"고 나온다('ㅂ' 자리에 ㅁ = 평균 0.09). 벌점은 **평균에만** 넣는다 —
+    최댓값에 넣으면 획을 하나만 덜 그어도 무조건 거부된다(2026-09-21 '밤' 신고).
+    """
     user = [_resample_path(path) for path in _normalize_uniform(user_paths)]
-    # 가장 가까운 짝부터 묶는다(그린 순서와 무관하게) — 획순이 틀린 것은 거부 사유가
-    # 아니므로, 순서대로 비교하면 순서 오류를 딴 글자로 오해한다.
     dists: List[float] = [d for d, _, _ in _pair_strokes_by_shape(user, tmpl)]
-    # ⚠️ 짝이 안 맞은 획도 세야 한다. 맞은 획만 평균 내면, 획을 하나 빠뜨린 비슷한
-    # 글자가 "잘 맞는다"고 나온다('ㅂ' 자리에 ㅁ = 평균 0.09). 벌점은 **평균에만** 넣는다 —
-    # 최댓값에 넣으면 획을 하나만 덜 그어도 무조건 거부된다(2026-09-21 '밤' 신고).
     unmatched = (len(tmpl) - len(dists)) + (len(user) - len(dists))
     max_d = max(dists) if dists else 0.0
     dists += [UNMATCHED_STROKE_PENALTY] * unmatched
     mean_d = sum(dists) / len(dists) if dists else 0.0
-    wrong = (mean_d > WRONG_CHAR_MEAN_DIST or max_d > WRONG_CHAR_MAX_DIST) and not ink_ok()
-    return {**base, "mean_distance": round(mean_d, 3), "max_distance": round(max_d, 3),
-            "scorable": not wrong, "reason": "shape_mismatch" if wrong else None}
+    return mean_d, max_d
 
 
 def _single_stroke_shape_distance(pts: List[Tuple[float, float]],
@@ -1599,10 +1625,11 @@ def build_component_boxes(strokes: List[Dict], bbox: Dict, target_char: str,
                           direction_result: Optional[Dict],
                           tilt_result: Optional[Dict],
                           balance_result: Optional[Dict],
-                          corner_result: Optional[Dict] = None,
-                          size_failed: bool = False,
-                          position_failed: bool = False) -> Optional[List[Dict]]:
+                          corner_result: Optional[Dict] = None) -> Optional[List[Dict]]:
     """화면에 그릴 **성분(초·중·종성) 단위 박스**와 그 색 판정 (2026-09-01 신설).
+
+    한 글자 연습 전용이다 — 문장은 글자 박스를 analyze_canvas_writing이 직접 만든다
+    (설계 6절). 그래서 글자 전체 항목(크기·위치)은 여기 없다.
 
     박스 단위를 음절에서 성분으로 내린 이유: 채점 단위가 성분인데 박스가 음절이면
     빨간 박스를 봐도 **무엇이 문제인지 알 수 없다.** 성분마다 치면 박스 자체가 답이다.
@@ -1649,16 +1676,9 @@ def build_component_boxes(strokes: List[Dict], bbox: Dict, target_char: str,
             shape_reasons.append(f"모서리 {corner_per_block[b]}곳 둥글림")
         balance_reasons = (["·".join(comp.get("balance_reasons") or [])]
                            if comp["balance_failed"] else [])
-        # 크기·위치는 글자 전체 항목이라 그 글자의 **모든 성분**에 걸린다.
-        # 성분 탓으로 오해되지 않도록 "글자 전체"라고 못박는다.
-        layout_reasons: List[str] = []
-        if size_failed:
-            layout_reasons.append("크기(글자 전체)")
-        if position_failed:
-            layout_reasons.append("위치(글자 전체)")
         reasons = [axis_label(axis, rs) for axis, rs in (
             (AXIS_ORDER, order_reasons), (AXIS_SHAPE, shape_reasons),
-            (AXIS_BALANCE, balance_reasons), (AXIS_LAYOUT, layout_reasons)) if rs]
+            (AXIS_BALANCE, balance_reasons)) if rs]
         boxes.append({
             "block": b,
             "jamo": comp["jamo"],
@@ -1770,6 +1790,9 @@ def analyze_canvas_writing(
             # 나중에 봐도 왜 거부됐는지 알 길이 없었다(2026-09-21). 잉크 어긋남 값도 같이 —
             # 문턱값을 조정할 때 실제 분포를 봐야 한다.
             correction_flags += ["unscorable", f"unscorable:{reason}"]
+            if assessment.get("mean_distance") is not None:
+                correction_flags.append(
+                    f"match_dist:{assessment['mean_distance']}/{assessment['max_distance']}")
             if assessment.get("ink_gap") is not None:
                 correction_flags.append(f"ink_gap:{assessment['ink_gap']}")
             results.append({
@@ -1823,7 +1846,6 @@ def analyze_canvas_writing(
             if size_reason is None:
                 size_reason = ("너무 큼" if size_ratio > SIZE_LARGE_THRESH
                                else "너무 작음" if size_ratio < SIZE_SMALL_THRESH else "")
-        size_failed = bool(size_reason)
         if size_reason:
             correction_flags.append("size_small" if "작음" in size_reason else "size_large")
 
@@ -1938,8 +1960,7 @@ def analyze_canvas_writing(
             component_boxes = build_component_boxes(
                 group["strokes"], bb, target_char,
                 stroke_order_result, direction_result, tilt_result,
-                balance_result, corner_result=corner_result,
-                size_failed=size_failed, position_failed=bool(position_failed))
+                balance_result, corner_result=corner_result)
         else:
             component_boxes = None
 

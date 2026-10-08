@@ -202,3 +202,50 @@ def test_jamo_shape_failed_only_when_counts_match():
     squashed = [[(0.2, 0.4), (0.2, 0.6)], [(0.2, 0.4), (0.8, 0.4), (0.8, 0.6)], [(0.2, 0.6), (0.8, 0.6)]]
     assert jamo_shape_failed(_strokes(squashed), "ㅁ") is True                 # 세로로 납작한 ㅁ
     assert SHAPE_FAIL_DIST == 0.15
+
+
+# ── 2026-10-08 리뷰 보류분 처리 ─────────────────────────────────────────────
+
+def test_overall_rounds_half_up():
+    """92.5는 93이다 — 파이썬 round()는 짝수로 반올림해 92가 됐다."""
+    axes = _axes(stroke_order_result={"order_error_count": 0, "stroke_count": 2,
+                                      "expected_count": 2, "error_count": 0},
+                 tilt_result={"checked": 1, "error_count": 0},
+                 balance_result={"components": [{"role": "초성", "jamo": "ㄱ",
+                                                 "balance_failed": False, "balance_reasons": []}]},
+                 size_reason="너무 작음", spacing_reason="", position_failed=False)
+    assert [a["score"] for a in axes.values()] == [100, 100, 100, 70]
+    assert overall_from_axes(axes) == 93
+
+
+def test_refusal_records_shape_distances_as_flags():
+    """거부 시 획 모양 거리도 플래그로 남긴다 — 기준(0.20/0.32)을 실데이터로 보정할 유일한 길."""
+    from ai.canvas.canvas_quality_analyzer import analyze_canvas_writing
+    st = _strokes([[(0.2, 0.5), (0.8, 0.5)]])
+    r = analyze_canvas_writing([{"char_id": "c0", "strokes": st,
+                                 "bounding_box": {"x": 0.2, "y": 0.5, "width": 0.6, "height": 0.0}}], "ㄱ")[0]
+    assert r["scorable"] is False
+    assert any(f.startswith("match_dist:") for f in r["correction_flags"]), r["correction_flags"]
+    assert any(f.startswith("ink_gap:") for f in r["correction_flags"])
+
+
+def test_multi_stroke_jamo_rotated_30_degrees_is_scored_not_refused():
+    """ㅁ을 30° 기울인 것도 기울여 쓴 것이지 딴 글자가 아니다(±35° 허용을 다획에도)."""
+    import math
+    a = math.radians(30)
+    ca, sa = math.cos(a), math.sin(a)
+    paths = _guide("ㅁ")
+    pts = [p for path in paths for p in path]
+    cx = (min(x for x, _ in pts) + max(x for x, _ in pts)) / 2
+    cy = (min(y for _, y in pts) + max(y for _, y in pts)) / 2
+    turned = [[(cx + (x - cx) * ca - (y - cy) * sa, cy + (x - cx) * sa + (y - cy) * ca) for x, y in p]
+              for p in paths]
+    assert assess_character_match(_strokes(turned), "ㅁ")["scorable"] is True
+
+
+def test_order_axis_skips_swap_reason_without_string_matching():
+    """획 수가 다르면 순서 사유 자체를 만들지 않는다(문자열 접미사로 거르지 않는다)."""
+    so = {"order_error_count": 3, "stroke_count": 2, "expected_count": 3, "error_count": 2}
+    axes = _axes(stroke_order_result=so)
+    assert axes[AXIS_ORDER]["reasons"] == ["획 수 2개 / 표준 3개"]
+    assert axes[AXIS_ORDER]["score"] == 70

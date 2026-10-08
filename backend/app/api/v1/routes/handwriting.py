@@ -101,7 +101,7 @@ async def analyze_canvas_detail(
     current_user: User = Depends(get_current_user),
 ):
     """
-    SFR-005C: 획순 / 자간 / 크기 분석
+    SFR-005C: 캔버스 채점 — 네 축(획순 · 모양 · 짜임새 · 배치). 축 점수는 item_scores에 저장한다.
     """
     session_data = await get_session(canvas_session_id)
     if session_data is None:

@@ -19,7 +19,7 @@ def test_messages_are_the_failed_items_joined():
     assert fb["feedback_items"][0]["severity"] == "good"
     assert fb["feedback_items"][1]["feedback_message"] == ""
     assert fb["feedback_items"][1]["severity"] == "good"
-    assert fb["overall_score"] == 92
+    assert fb["overall_score"] == 93          # 92.5 → 93 (짝수 반올림이면 92)
 
 
 def test_refused_character_in_sentence_is_zero_and_counted():

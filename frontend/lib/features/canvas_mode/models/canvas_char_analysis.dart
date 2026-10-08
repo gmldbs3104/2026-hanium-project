@@ -85,8 +85,8 @@ class CanvasCharAnalysis {
   /// DATA_FLOW.md §8-C
   final List<String> correctionFlags;
 
-  /// 이 글자에서 틀린 **항목** 목록 (2026-09-17 신설).
-  /// 예: ["획순(2획 순서 틀림)", "기울기(1획 기울어짐)"]
+  /// 이 글자에서 걸린 **축** 사유 목록 — 우측 패널 문구 그대로 (2026-10-08 축 재설계).
+  /// 예: ["획순(1획 반대로 그음)", "모양(모서리 1곳 둥글림)"]. 거부 글자는 ["다시 써 주세요(…)"].
   ///
   /// 성분 박스가 없는 연습(자음·모음)에서도 화면이 "무엇이 틀렸는지" 보여줄 수 있게
   /// 글자 단위로도 내려온다. 종전에는 박스에만 있어서 낱자 연습은 오류가 있어도
@@ -94,10 +94,10 @@ class CanvasCharAnalysis {
   final List<String> failedItems;
 
   /// false면 **채점하지 않은 글자**다 — 목표 글자와 달라 다시 쓰라고 안내한다.
-  /// 이때 [overallScore]는 null이고, 0점이 아니다.
+  /// 이때 [overallScore]는 낱자·한 글자에서는 null, 문장에서는 0이다(그 글자만 0점).
   final bool scorable;
 
-  /// too_few_strokes | too_many_strokes | shape_mismatch | missing
+  /// missing | too_many_strokes | shape_mismatch
   final String? unscorableReason;
 
   /// 채점 거부 안내문 등.

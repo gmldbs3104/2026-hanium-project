@@ -14,10 +14,8 @@ import '../../../shared/models/feedback_item.dart';
 import '../../../shared/models/weak_habit.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../../dashboard/providers/dashboard_refresh_provider.dart';
-import '../utils/canvas_feedback_parser.dart';
 import '../utils/canvas_habit_lines.dart';
 import '../utils/image_download.dart';
-import '../utils/severity_style.dart';
 import '../../canvas_mode/models/stroke.dart';
 import '../../canvas_mode/models/canvas_char_analysis.dart';
 import '../../canvas_mode/services/canvas_api_service.dart';
@@ -30,7 +28,6 @@ import '../models/image_bbox_overlay_item.dart';
 import '../models/pending_session_save.dart';
 import '../services/session_save_queue.dart';
 import '../widgets/feedback_action_bar.dart';
-import '../widgets/canvas_correction_overlay_view.dart';
 import '../widgets/component_overlay_view.dart';
 import '../widgets/image_bbox_overlay_view.dart';
 import '../widgets/preservation_notice.dart';
@@ -1502,73 +1499,3 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
   }
 }
 
-/// 우측 "AI 분석" 패널의 문자 하나에 대한 피드백.
-///
-/// 캔버스 모드는 획순/자간/크기 세 문장이 공백으로 붙은 문자열 하나로 온다
-/// (feedback_generator.py) — [parseCanvasFeedbackParts]로 다시 나눠서 각 문장을
-/// 그 문장 고유의 색(적절=초록/문제=주황)으로 줄바꿈해 보여준다. 캔버스 위 박스에
-/// 표시되는 char_id 같은 내부 식별자는 사용자에게 의미가 없어 보여주지 않는다.
-/// 패턴이 안 맞으면(이미지 모드 등) 원문 메시지를 그 항목의 종합 severity 색으로
-/// 한 줄에 보여준다.
-class _FeedbackDetailRow extends StatelessWidget {
-  final FeedbackItem feedback;
-  const _FeedbackDetailRow({required this.feedback});
-
-  @override
-  Widget build(BuildContext context) {
-    final parts = parseCanvasFeedbackParts(feedback.feedbackMessage);
-
-    return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: AppTheme.scaffold,
-        borderRadius: BorderRadius.circular(AppTheme.radiusSm),
-      ),
-      child: parts.isNotEmpty
-          ? Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                for (var i = 0; i < parts.length; i++)
-                  Padding(
-                    // 문장이 끝날 때마다(각 부분 사이) 줄바꿈 + 들여쓰기로 구분한다.
-                    padding: EdgeInsets.only(top: i == 0 ? 0 : 8, left: 4),
-                    child: _SeverityLine(text: parts[i].text, severity: parts[i].severity),
-                  ),
-              ],
-            )
-          : _SeverityLine(
-              text: feedback.feedbackMessage,
-              severity: feedbackSeverityFromString(feedback.severity),
-            ),
-    );
-  }
-}
-
-/// severity 색 원형 배지 + 아이콘 + 텍스트 한 줄 (SeverityStyle 공용 규칙 사용).
-class _SeverityLine extends StatelessWidget {
-  final String text;
-  final FeedbackSeverity severity;
-  const _SeverityLine({required this.text, required this.severity});
-
-  @override
-  Widget build(BuildContext context) {
-    final color = SeverityStyle.color(severity);
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          width: 16,
-          height: 16,
-          margin: const EdgeInsets.only(top: 1),
-          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-          child: Icon(SeverityStyle.icon(severity), size: 10, color: Colors.white),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(text,
-              style: TextStyle(fontSize: 12.5, color: color, fontWeight: FontWeight.w600)),
-        ),
-      ],
-    );
-  }
-}

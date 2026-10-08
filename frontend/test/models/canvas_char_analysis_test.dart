@@ -30,33 +30,33 @@ Map<String, dynamic> _box(String role, List<String> failed) => {
 void main() {
   group('failuresNotOnBoxes', () {
     test('박스가 없는 낱자는 사유 전부가 글자 단위다', () {
-      final a = _analysis(failedItems: ['획순(2획 순서 틀림)', '기울기(1획 기울어짐)']);
-      expect(a.failuresNotOnBoxes, ['획순(2획 순서 틀림)', '기울기(1획 기울어짐)']);
+      final a = _analysis(failedItems: ['획순(1획 순서 틀림)', '모양(1획 기울어짐)']);
+      expect(a.failuresNotOnBoxes, ['획순(1획 순서 틀림)', '모양(1획 기울어짐)']);
     });
 
     test('박스에 실린 항목은 빼고, 자간처럼 박스에 없는 항목만 남긴다', () {
       final a = _analysis(
-        failedItems: ['획순(2획 순서 틀림)', '자간(너무 넓음)'],
+        failedItems: ['획순(1획 순서 틀림)', '배치(앞 글자와 너무 넓음)'],
         boxes: [
           _box('초성', ['획순(1획 순서 틀림)']),
           _box('중성', []),
         ],
       );
-      expect(a.failuresNotOnBoxes, ['자간(너무 넓음)']);
+      expect(a.failuresNotOnBoxes, ['배치(앞 글자와 너무 넓음)']);
     });
 
     test('사유가 전부 박스에 실렸으면 비어 있다', () {
       final a = _analysis(
-        failedItems: ['성분비율(초성 \'ㄱ\' 너무 큼)'],
+        failedItems: ['짜임새(초성 \'ㄱ\' 너무 큼)'],
         boxes: [
-          _box('초성', ['성분비율(너무 큼)']),
+          _box('초성', ['짜임새(너무 큼)']),
         ],
       );
       expect(a.failuresNotOnBoxes, isEmpty);
     });
 
     test('채점을 거부한 글자는 사유를 내지 않는다', () {
-      final a = _analysis(failedItems: ['자간(너무 넓음)'], scorable: false);
+      final a = _analysis(failedItems: ['다시 써 주세요(목표 글자와 다름)'], scorable: false);
       expect(a.failuresNotOnBoxes, isEmpty);
     });
   });

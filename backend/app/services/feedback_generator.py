@@ -41,7 +41,8 @@ def generate_canvas_feedback(analysis_results: List[Dict[str, Any]]) -> Dict[str
     } for r in analysis_results]
 
     scored = [r["overall_score"] for r in analysis_results if r.get("overall_score") is not None]
-    overall_score = round(sum(scored) / len(scored)) if scored else None
+    # round()는 .5를 짝수로 보내 92.5가 92가 된다 — 사람이 기대하는 반올림(93)으로.
+    overall_score = int(sum(scored) / len(scored) + 0.5) if scored else None
     refused = sum(1 for r in analysis_results if not r.get("scorable", True))
 
     if overall_score is None:
