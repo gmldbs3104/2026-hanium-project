@@ -3,9 +3,86 @@
 두 세션 기록을 하나로 합쳤다(`FRONTEND_CHANGES.md` + `frontend_change.md` → 이 파일).
 최신 세션이 위, 예전 세션이 아래.
 
+- [2026-10-28 ~ 10-29 세션 (Android 앱 빌드)](#2026-10-28--10-29-세션-android-앱-빌드)
 - [2026-09-07 세션](#2026-09-07-세션)
 - [2026-08-22 ~ 08-30 세션](#2026-08-22--08-30-세션)
 - [2026-08-11 세션](#2026-08-11-세션)
+
+---
+
+## 2026-10-28 ~ 10-29 세션 (Android 앱 빌드)
+
+웹으로만 돌던 Flutter 앱을 **Android 앱으로 빌드**해 iPad Pro 11 규격(1668×2388, 320dpi)
+태블릿 에뮬레이터에서 **가로 화면**으로 실행·검증했다. backend/AI는 건드리지 않았다.
+
+검증 결과(에뮬레이터 `iPad_Pro_11`, Android 17):
+- Google 로그인 → Firebase 인증 → `POST /api/v1/auth/login` 200 → 목표 선택 → 홈 진입 ✅
+- 캔버스 연습 'ㄱ' 제출 → `analyze → group → analyze-detail → feedback` 전부 200, 결과 화면 표시 ✅
+- 홈 / 손글씨 연습 / 분석 결과 / 나의 글씨 분석 / 마이페이지 / AI 교정(카메라 권한 창까지) 가로 레이아웃 확인 ✅
+
+### 변경된 파일 요약
+
+| 구분 | 파일 | git 추적 |
+|---|---|---|
+| 앱 코드 | `frontend/lib/core/app_config.dart` | ✅ |
+| 앱 코드 | `frontend/lib/features/auth/providers/auth_controller.dart` | ✅ |
+| 앱 코드 | `frontend/lib/main.dart` | ✅ |
+| 앱 코드 | `frontend/lib/features/analysis/screens/analysis_screen.dart` | ✅ |
+| Android 설정 | `frontend/android/` 폴더 전체 (신규 생성) | ❌ `frontend/.gitignore`가 `android/`를 무시 중 |
+
+### 1. 앱 코드 변경 (git으로 공유됨)
+
+| 파일 | 변경 내용 |
+|---|---|
+| `core/app_config.dart` | `apiBaseUrl`을 `String.fromEnvironment('API_BASE_URL', defaultValue: 'http://localhost:8000')`로 변경. 웹은 기존과 동일하고, 에뮬레이터는 `--dart-define=API_BASE_URL=http://10.0.2.2:8000`으로 실행한다(에뮬레이터 안의 `localhost`는 PC가 아니라 에뮬레이터 자신). |
+| `features/auth/providers/auth_controller.dart` | `GoogleSignIn`에 `serverClientId`(웹 OAuth 클라이언트 ID, `web/index.html`의 `google-signin-client_id`와 같은 값)를 Android에서만 넘기도록 추가. 없으면 Android에서 `idToken`이 null이라 Firebase 로그인이 실패한다. 웹은 이 인자를 받지 않으므로 `kIsWeb ? null : ...`. |
+| `main.dart` | `SystemChrome.setPreferredOrientations([landscapeLeft, landscapeRight])`로 **가로 고정**. 웹에서는 무시된다. ⚠️ Android 16+ 태블릿(600dp 이상)은 OS가 앱의 방향 고정을 무시하므로 효과가 없다(§3 참고). |
+| `features/analysis/screens/analysis_screen.dart` | **버그 수정** — "추가 연습이 필요한 글자" 목록의 40px 정사각 뱃지에 `item.item`의 첫 단어를 넣고 있었는데, 이 값은 글자가 아니라 채점 항목 이름("성분비율"/"기울기"/"크기 균일성" 등)이라 두 줄로 넘어가며 아랫줄이 잘렸다. 뱃지는 모드 아이콘(캔버스=연필, 이미지=카메라)으로 바꾸고, 항목 이름은 제목 줄(15pt bold, 1줄 말줄임)에 전체 표시, 부제는 `글씨 연습 · 현재 점수: N점`. |
+
+### 2. Android 설정 (`frontend/android/`, 현재 git 미추적)
+
+`flutter create --platforms=android .`로 생성(패키지명 `com.example.frontend`). 생성 후 바꾼 것:
+
+| 파일 | 변경 내용 |
+|---|---|
+| `android/app/build.gradle.kts` | `minSdk = maxOf(flutter.minSdkVersion, 23)` — firebase_auth·camera 플러그인이 API 23 이상 요구. |
+| `android/app/src/main/AndroidManifest.xml` | ① `INTERNET`·`CAMERA` 권한 추가. ② `android:usesCleartextTraffic="true"` — 개발 서버가 `http://`라서. ③ 앱 이름 `frontend` → **`AI 손글씨 교정`** (Google 로그인 창·권한 창에도 이 이름이 나온다). ④ `MainActivity`에 `android:screenOrientation="sensorLandscape"`. ⑤ `<property android:name="android.window.PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY" android:value="true"/>` — Android 16 태블릿의 방향 무시를 끄는 임시 opt-out. |
+
+### 3. 알려진 제약
+
+- **Android 17 태블릿에서는 가로 고정이 안 된다.** Android 16부터 큰 화면에서 앱의
+  `screenOrientation`/`setPreferredOrientations`를 OS가 무시하고, opt-out 속성도 Android 16까지만
+  통한다. 실측: Android 17 에뮬레이터를 세로로 돌리면 앱도 세로로 바뀐다. 휴대폰과 Android 16
+  이하에서는 고정된다.
+- **iOS는 아직 빌드 불가** — `frontend/ios/`가 없고, 빌드에 Mac + Xcode가 필요하다. iOS 프로젝트를
+  만들 때 `Info.plist`의 `UISupportedInterfaceOrientations~ipad`에 가로만 남겨야 iPad에서 가로로 고정된다.
+- 이미지 저장(`image_download_stub.dart`)은 모바일에서 `UnsupportedError` — 앱용 구현 없음.
+- 로그인 화면은 넘침은 없지만 세로용 배치를 늘린 형태(버튼이 화면 전체 폭). 가로 전용 재배치는 미착수.
+- 에뮬레이터에서 앱이 가끔 저절로 꺼지는 것은 Google Play 서비스 모듈 업데이트
+  (`Module config changed, forcing restart`)가 앱을 죽이는 것으로, 앱 코드 문제가 아니다.
+
+### 4. 외부 설정 (코드 밖)
+
+- **Firebase 콘솔**: Android 앱(`com.example.frontend`)에 디버그 키스토어 SHA-1·SHA-256 등록.
+  SHA는 **PC마다 다르다**(각자의 `~/.android/debug.keystore`).
+- **Google Cloud 콘솔 → API 키**: Android 키(`AIzaSyCthn2...`)의 제한이 "HTTP 리퍼러(웹사이트)"로
+  되어 있어 `Requests from referer <empty> are blocked` 오류가 났다 → "Android 앱" 제한
+  (패키지 `com.example.frontend` + SHA-1)으로 변경.
+
+### 5. 실행 방법 (에뮬레이터)
+
+```bash
+# 백엔드: 에뮬레이터에서 접근하려면 0.0.0.0으로 띄워야 한다 (Docker의 postgres·redis 먼저)
+cd backend && venv\Scripts\activate
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+# 앱
+cd frontend
+flutter run -d emulator-5554 --dart-define=API_BASE_URL=http://10.0.2.2:8000
+```
+
+에뮬레이터에 Google 계정이 없으면 로그인 시 `ApiException: 8`이 난다 → 에뮬레이터 설정에서
+Google 계정을 먼저 추가할 것.
 
 ---
 

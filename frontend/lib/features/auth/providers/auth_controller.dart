@@ -26,7 +26,17 @@ class AuthController extends Notifier<AuthState> {
   /// clientId(<meta name="google-signin-client_id">)를 요구하며, 없으면 assert로
   /// 앱 전체가 흰 화면이 된다. 아래 사용처는 모두 `!useMockApi` 가드 안에 있으므로
   /// mock 모드에서는 아예 생성되지 않도록 한다.
-  late final GoogleSignIn _googleSignIn = GoogleSignIn(scopes: ['email', 'profile']);
+  ///
+  /// Android는 serverClientId(웹 OAuth 클라이언트 ID)가 있어야 idToken을 돌려준다.
+  /// 없으면 idToken이 null이라 Firebase 로그인이 실패한다. web은 이 인자를 받지 않는다.
+  late final GoogleSignIn _googleSignIn = GoogleSignIn(
+    scopes: ['email', 'profile'],
+    serverClientId: kIsWeb ? null : _googleWebClientId,
+  );
+
+  /// web/index.html의 google-signin-client_id와 같은 값
+  static const _googleWebClientId =
+      '163844884781-h4e0umitn7bato663da4vjidq714cqsn.apps.googleusercontent.com';
 
   @override
   AuthState build() {

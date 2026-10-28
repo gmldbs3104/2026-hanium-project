@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -17,6 +18,12 @@ Future<void> main() async {
   // ⚠️ SFR-009 오프라인 재시도 큐가 shared_preferences(플러그인)를 쓰기 때문에,
   // mock 모드 여부와 무관하게 바인딩 초기화는 항상 필요하다.
   WidgetsFlutterBinding.ensureInitialized();
+
+  // 필기용 태블릿 앱이라 가로 화면 고정 (웹에서는 무시된다).
+  await SystemChrome.setPreferredOrientations([
+    DeviceOrientation.landscapeLeft,
+    DeviceOrientation.landscapeRight,
+  ]);
 
   // mock 모드에서는 Firebase 프로젝트 설정 없이도 앱이 뜨도록 초기화를 건너뜀.
   // 실제 로그인 테스트 시 AppConfig.useMockApi를 false로 바꾸기 *전에*

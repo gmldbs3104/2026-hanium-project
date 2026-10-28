@@ -315,10 +315,9 @@ class _WeakCharRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // item.item 예: "됨 받침 불균형" → 첫 글자 뱃지 + 나머지 설명 분리(가능할 때)
-    final parts = item.item.split(' ');
-    final glyph = parts.first;
-    final desc = parts.length > 1 ? parts.sublist(1).join(' ') : item.mode;
+    // item.item은 글자가 아니라 채점 항목 이름("성분비율"/"크기 균일성" 등)이라
+    // 40px 뱃지에 넣으면 줄바꿈되어 잘린다 → 뱃지는 모드 아이콘, 이름은 제목 줄로.
+    final isCanvas = item.mode == 'canvas';
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(10),
@@ -336,24 +335,27 @@ class _WeakCharRow extends StatelessWidget {
               color: Colors.white,
               borderRadius: BorderRadius.circular(8),
             ),
-            child: Text(glyph,
-                style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: AppTheme.ink)),
+            child: Icon(
+                isCanvas ? Icons.edit_rounded : Icons.photo_camera_rounded,
+                size: 20,
+                color: AppTheme.amberText),
           ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(desc,
+                Text(item.item,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
                         color: AppTheme.ink)),
                 const SizedBox(height: 2),
-                Text('현재 점수: ${item.avgScore.round()}점',
+                Text(
+                    '${isCanvas ? '글씨 연습' : '실전 연습'} · '
+                    '현재 점수: ${item.avgScore.round()}점',
                     style: const TextStyle(
                         fontSize: 12, color: AppTheme.inkMuted)),
               ],
@@ -364,7 +366,7 @@ class _WeakCharRow extends StatelessWidget {
             // dashboard_service.py: "획순"/"자간"/"크기" 또는 "크기 균일성"/
             // "기울기 일관성"/"줄 정렬") — 어떤 글자인지는 알 수 없어서, 어떤
             // 모드를 더 연습해야 하는지에 맞춰 해당 연습 화면으로 보낸다.
-            onPressed: () => item.mode == 'canvas'
+            onPressed: () => isCanvas
                 ? context.push('/character-practice')
                 : context.push('/image-capture'),
             style: ElevatedButton.styleFrom(

@@ -10,7 +10,13 @@ class AppConfig {
 
   static const bool useMockApi = false;
 
-  static const String apiBaseUrl = 'http://localhost:8000';
+  /// 빌드 시 `--dart-define=API_BASE_URL=...` 로 바꿀 수 있습니다.
+  /// 웹은 기본값 그대로, Android 에뮬레이터는 `http://10.0.2.2:8000`
+  /// (에뮬레이터 안의 localhost는 PC가 아니라 에뮬레이터 자신입니다).
+  static const String apiBaseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'http://localhost:8000',
+  );
 
   /// API 엔드포인트 모음
   /// (backend/app/api/v1/routes/*.py 실제 코드 기준, 2026-07 확인)

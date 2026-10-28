@@ -10,13 +10,14 @@ build/
 *.lock
 
 # 네이티브 프로젝트 (flutter create . 실행 시 생성됨)
-android/
 ios/
 linux/
 macos/
 windows/
 # web/은 커밋함 — index.html에 google-signin-client_id 메타 태그가 있어서
 # 팀원마다 flutter create .로 새로 생성하면 이 태그가 빠져 로그인이 깨짐
+# android/도 커밋함 — 권한·앱 이름·minSdk·가로 고정 설정을 손으로 넣어 두었다
+# (local.properties·빌드 결과물은 android/.gitignore가 제외)
 
 # IDE
 .idea/
