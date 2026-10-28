@@ -96,7 +96,8 @@ The `POST /api/v1/auth/login` endpoint creates or updates a user record in Postg
 
 ## Current Implementation Status
 
-> ⚠️ 이 절은 **2026-08-17에 실제 코드로 재검증**했습니다(최초 재검증은 2026-08-12). 이전 판은
+> ⚠️ 이 절은 **2026-08-17에 실제 코드로 재검증**했습니다(최초 재검증은 2026-08-12, 캔버스 채점 절은
+> 2026-10-29에 `canvas_quality_analyzer.py` 상수와 다시 대조). 이전 판은
 > 2026-04 시점 서술이 그대로 남아 "CRAFT는 TODO", "`get_standard()`는 항상 `DEFAULT_STANDARD`"처럼
 > **지금은 거짓인 문장**을 담고 있었습니다. 상태를 단정할 때는 근거 커밋을 같이 적어 주세요.
 
@@ -197,7 +198,12 @@ The `POST /api/v1/auth/login` endpoint creates or updates a user record in Postg
 > 2026-08-17 재검증: AI 유닛테스트 34개 통과, 서버를 띄운 상태에서 캔버스·이미지 파이프라인
 > E2E(로그인→분석→피드백) 둘 다 통과. 상세 근거는 [CHANGES_2026-08-17.md](CHANGES_2026-08-17.md).
 > 2026-10-08 재검증: AI 128 · 백엔드 7 · Flutter 51 테스트 통과, 서버 스모크(analyze→group) 통과.
-> 실기기 확인(자모음·한 글자·문장 각 1회)은 아직 안 했다.
+> 2026-10-29 재검증(`0156b3d`): AI 128 · 백엔드 7 통과. Flutter는 49 통과 · **4 실패** —
+> `widget_test.dart` 2건(테스트가 Firebase를 초기화하지 않은 채 `useMockApi = false`로 돌아
+> `[core/no-app]`)과 `session_save_queue_test.dart` 2건(네트워크 장애 시 큐가 비워짐, 기대 1 · 실제 0).
+> 두 파일 다 10-08 커밋이 건드리지 않았다. 마이그레이션 `a1f3c5e7b9d2` 적용 후 Android 에뮬레이터
+> (iPad Pro 11 규격)에서 **자모음 'ㄱ' 1회** E2E 통과 — `item_scores`에 `획순 100 · 모양 100 ·
+> 짜임새 None · 배치 None`이 저장됨. 한 글자·문장 실기기 확인은 아직 안 했다.
 
 > 값 흐름 전체 대조와 남은 불일치 목록은 **[DATA_FLOW.md](DATA_FLOW.md)** 가 단일 출처입니다.
 
